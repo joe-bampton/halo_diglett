@@ -162,9 +162,12 @@ tools/voices/ voice-line generator (Python, offline)
 
 ## Development
 
+See **[TESTING.md](TESTING.md)** for a step-by-step local test guide and checklist.
+
 ```bash
 npm install
 npm run dev          # http://localhost:5173
+npm run dev:lan      # HTTPS on your network, for testing phones/tablets
 npm test             # unit tests (Vitest)
 npm run build        # type-check + production build into dist/
 npm run e2e          # Playwright browser tests (builds must exist: run `npm run build` first)

@@ -6,6 +6,7 @@
   "description": "Halo Infinite 'Diglett' style foxhole sniper party game for the browser",
   "scripts": {
     "dev": "vite",
+    "dev:lan": "cross-env HTTPS=1 vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 4173",
     "typecheck": "tsc --noEmit",
@@ -22,6 +23,8 @@
     "@playwright/test": "1.56.1",
     "@types/node": "^26.6.3",
     "@types/three": "^0.186.0",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "cross-env": "^10.1.0",
     "tsx": "^4.23.15",
     "typescript": "~6.0.2",
     "vite": "^8.3.1",
