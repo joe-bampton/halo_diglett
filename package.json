@@ -1,0 +1,29 @@
+{
+  "name": "halo-diglett",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Halo Infinite 'Diglett' style foxhole sniper party game for the browser",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "check": "npm run typecheck && npm run test && vite build && npm run e2e"
+  },
+  "dependencies": {
+    "three": "^0.186.1",
+    "trystero": "^0.25.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "^26.6.3",
+    "@types/three": "^0.186.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  }
+}

@@ -1,0 +1,118 @@
+import { describe, expect, it } from 'vitest';
+import { ClientSession } from '../../src/net/client';
+import { HostSession } from '../../src/net/host';
+import { loopbackPair } from '../../src/net/transport';
+import { yawPitchOf } from '../../src/shared/vec';
+import { eyePos, hitboxOf } from '../../src/sim/hitbox';
+import { FakeWorld, LagHub } from './laglink';
+
+function flush() {
+  return new Promise((r) => setTimeout(r, 0));
+}
+
+describe('loopback session', () => {
+  it('runs an offline match against bots', async () => {
+    const { host: hn, client: cn } = loopbackPair();
+    let now = 0;
+    const host = new HostSession(hn, 'LOCAL', false);
+    host.clock = () => now;
+    const client = new ClientSession(cn, { name: 'Me', color: 0x3d7bff, token: 'tok' });
+    client.clock = () => now;
+    await flush();
+    expect(client.state).toBe('lobby');
+    host.addBot('heroic');
+    host.addBot('legendary');
+    host.setSettings({ ...host.lobby.settings, orbRate: 'high' });
+    host.startMatch(42);
+    expect(client.state).toBe('match');
+    let kills = 0;
+    let fires = 0;
+    for (let i = 0; i < 60 * 60; i++) {
+      now += 1000 / 60;
+      host.update(now);
+      client.update(now);
+      for (const e of client.drainEvents()) {
+        if (e.k === 'kill') kills++;
+        if (e.k === 'fire') fires++;
+      }
+    }
+    expect(fires).toBeGreaterThan(10);
+    expect(kills).toBeGreaterThan(2);
+    expect(client.players.filter(Boolean).length).toBe(3);
+    expect(client.me).not.toBeNull();
+    expect(client.renderTick).toBeGreaterThan(3000);
+  });
+});
+
+function lagMatch(oneWay: number, jitter: number, maxRewindMs: number) {
+  const w = new FakeWorld();
+  const hub = new LagHub(w);
+  const host = new HostSession(hub, 'LAG', true);
+  host.clock = () => w.now;
+  const mk = (peer: string) => {
+    const c = new ClientSession(hub.connect(peer, oneWay, jitter), { name: peer, color: 1, token: peer });
+    c.clock = () => w.now;
+    return c;
+  };
+  const A = mk('A');
+  const B = mk('B');
+  w.advance(500);
+  host.setSettings({ ...host.lobby.settings, orbRate: 'off', antiTurtleSec: 0, maxRewindMs, respawnSec: 1 });
+  // put A and B in facing holes
+  host.startMatch(7);
+  const m = host.match!;
+  const pa = m.players[A.slot]!, pb = m.players[B.slot]!;
+  const ar = host.arena;
+  outer: for (const h1 of m.activeHoles)
+    for (const h2 of m.activeHoles) {
+      const H1 = ar.holes[h1]!, H2 = ar.holes[h2]!;
+      const d = Math.hypot(H1.x - H2.x, H1.z - H2.z);
+      if (h1 !== h2 && d > 25 && ar.lineClear({ x: H1.x, y: H1.rim + 0.88, z: H1.z }, { x: H2.x, y: H2.rim + 0.95, z: H2.z })) {
+        pa.hole = h1;
+        pb.hole = h2;
+        break outer;
+      }
+    }
+  let shots = 0;
+  let hits = 0;
+  let lastPress = 0;
+  for (let i = 0; i < 60 * 40; i++) {
+    w.advance(1000 / 60);
+    host.update(w.now);
+    // B pops up for 0.5s every 1.2s
+    const phase = (w.now % 1200) / 1200;
+    B.input.stand = phase < 0.42;
+    A.input.stand = true;
+    B.update(w.now);
+    A.update(w.now);
+    // A aims at B's head as A sees it and fires the moment B looks fully up
+    const vb = A.players[B.slot];
+    const va = A.players[A.slot];
+    if (vb && va && A.me?.al && vb.alive) {
+      const hb = hitboxOf(ar.holes[vb.hole]!, vb.exposure);
+      const eye = eyePos(ar.holes[va.hole]!, A.myExposure);
+      const a = yawPitchOf({ x: hb.head.x - eye.x, y: hb.head.y - eye.y, z: hb.head.z - eye.z });
+      A.input.yaw = a.yaw;
+      A.input.pitch = a.pitch;
+      if (vb.exposure > 0.95 && A.myExposure >= 1 && (A.me.clip ?? 0) > 0 && A.renderTick > A.me.nf + 2 && w.now - lastPress > 700) {
+        A.input.presses++;
+        lastPress = w.now;
+        shots++;
+      }
+    }
+    for (const e of A.drainEvents()) if (e.k === 'dmg' && e.a === A.slot && e.v === B.slot) hits++;
+    B.drainEvents();
+  }
+  return { shots, hits, kills: m.players[A.slot]!.kills };
+}
+
+describe('lag compensation', () => {
+  it('lands shots at 60ms one-way with rewind, fewer without', () => {
+    const withR = lagMatch(60, 20, 250);
+    const without = lagMatch(60, 20, 0);
+    console.log('with rewind', withR, 'without', without);
+    expect(withR.shots).toBeGreaterThan(5);
+    expect(withR.hits / withR.shots).toBeGreaterThan(0.8);
+    expect(without.hits / Math.max(1, without.shots)).toBeLessThan(withR.hits / withR.shots);
+  });
+});
