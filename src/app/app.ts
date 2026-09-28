@@ -242,12 +242,9 @@ export class App {
   }
 
   private startHostLoop() {
-    cancelAnimationFrame(this.hostRaf);
-    const loop = (t: number) => {
-      this.hostRaf = requestAnimationFrame(loop);
-      this.host?.update(t);
-    };
-    this.hostRaf = requestAnimationFrame(loop);
+    clearInterval(this.hostRaf);
+    // timer-driven so the simulation never depends on the render frame rate
+    this.hostRaf = window.setInterval(() => this.host?.update(performance.now()), 8);
     if (!this.worker && this.host && this.host.lobby.online) {
       try {
         const src = 'setInterval(function(){postMessage(0)},16)';
@@ -287,7 +284,7 @@ export class App {
       this.host.close();
       this.host = null;
     }
-    cancelAnimationFrame(this.hostRaf);
+    clearInterval(this.hostRaf);
     this.worker?.terminate();
     this.worker = null;
     this.settingsView = null;

@@ -65,9 +65,11 @@ def T(slot, file, voice, speed, fx, text, **opts):
 #            vibrato=(hz, st, start)   vibrato from `start` (0-1) to the end
 #            stretch_last=2.5  hold the last vowel this many times longer
 #            drive=1.5         saturation for a shouted edge (1 = clean)
+#            max_len=0.8       hard cap on the length, seconds
 #
-#  In `brap` rows a low gunshot-like "thump" is layered under every syllable
-#  that starts after a gap (thump=0 turns it off).
+#  In `brap` rows a low gunshot-like thump is layered under the start of every
+#  word; thump=0.6 sets its level relative to the voice (0 = off), crack=0.3
+#  the bright transient on top.
 
 ANNOUNCER = "am_fenrir"   # clearest US male; FX_DEFAULTS["announcer"] makes it deep
 
@@ -553,9 +555,6 @@ def warp_envelope(sp, ratio):
     fr = src - i0
     lsp = np.log(sp)
     return np.exp(lsp[:, i0] * (1 - fr) + lsp[:, i1] * fr)
-
-
-WORLD_KEYS = ("pitch", "formant", "expr", "melody", "contour", "vibrato", "stretch_last")
 
 
 def needs_world(o) -> bool:

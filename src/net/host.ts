@@ -47,6 +47,7 @@ interface Conn {
   pending: SimEvent[];
   sending: boolean;
   lastSnapTick: number;
+  lastSb: number;
   lastInputAt: number;
 }
 
@@ -266,7 +267,7 @@ export class HostSession {
     }
     info.connected = true;
     this.tokens.set(token, slot);
-    const conn: Conn = { peer, slot, token, local, seq: 0, cmd: undefined, pending: [], sending: false, lastSnapTick: -1, lastInputAt: this.clock() };
+    const conn: Conn = { peer, slot, token, local, seq: 0, cmd: undefined, pending: [], sending: false, lastSnapTick: -1, lastSb: -9999, lastInputAt: this.clock() };
     this.conns.set(peer, conn);
     this.send(peer, CH_CTL, { t: 'welcome', slot, lobby: this.lobby });
     if (this.match && this.lobby.phase === 'match') {
@@ -316,6 +317,7 @@ export class HostSession {
     for (const c of this.conns.values()) {
       c.pending = [];
       c.lastSnapTick = -1;
+      c.lastSb = -9999;
       c.cmd = undefined;
     }
     this.results = null;
@@ -459,7 +461,8 @@ export class HostSession {
     if (c.pending.length) snap.e = c.pending;
     const me = m.players[c.slot];
     if (me) snap.me = privateState(m, me);
-    if (t % 30 === 0 || c.pending.some((e) => e.k === 'kill' || e.k === 'end')) {
+    if (t - c.lastSb >= 30 || c.pending.some((e) => e.k === 'kill' || e.k === 'end')) {
+      c.lastSb = t;
       snap.sb = m.players.filter((q): q is PlayerState => !!q).map((q) => [q.slot, q.kills, q.deaths, q.gunLevel]);
     }
     return snap;

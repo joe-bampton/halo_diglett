@@ -124,6 +124,7 @@ export class Game {
   private endShown = false;
   private lastSec = -1;
   frames = 0;
+  eventCounts: Record<string, number> = {};
   q: QualityPreset;
 
   constructor(
@@ -530,6 +531,7 @@ export class Game {
     const mySlot = s.slot;
     const settings = s.start?.settings;
     for (const e of events) {
+      this.eventCounts[e.k] = (this.eventCounts[e.k] ?? 0) + 1;
       switch (e.k) {
         case 'fire': {
           if (e.p === mySlot && this.predicted(e.w)) break;

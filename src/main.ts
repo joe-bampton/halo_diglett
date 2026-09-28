@@ -3,6 +3,8 @@ import { App } from './app/app';
 import type { BotDifficulty } from './sim/types';
 import type { Settings } from './sim/settings';
 import type { WeaponId } from './sim/weapons';
+import { eyePos, hitboxOf } from './sim/hitbox';
+import { yawPitchOf } from './shared/vec';
 
 const root = document.getElementById('app')!;
 
@@ -55,6 +57,19 @@ if (!webglOk()) {
           app.game.input.s.pitch = pitch;
         }
       },
+      /** aim the local player at another player's head (uses the interpolated view) */
+      aimAt(slot: number) {
+        const g = app.game, s = app.session;
+        const me = s?.players[s.slot], t = s?.players[slot];
+        if (!g || !s || !me || !t) return false;
+        const ar = g.arena;
+        const eye = eyePos(ar.holes[me.hole]!, s.myExposure);
+        const hb = hitboxOf(ar.holes[t.hole]!, t.exposure);
+        const a = yawPitchOf({ x: hb.head.x - eye.x, y: hb.head.y - eye.y, z: hb.head.z - eye.z });
+        g.input.s.yaw = a.yaw;
+        g.input.s.pitch = a.pitch;
+        return t.exposure > 0.9 && s.myExposure > 0.95;
+      },
       fire() {
         const g = app.game;
         if (!g) return;
@@ -71,6 +86,7 @@ if (!webglOk()) {
           players: s?.players.filter(Boolean).map((p) => ({ slot: p!.slot, name: p!.name, kills: p!.kills, deaths: p!.deaths, alive: p!.alive, exposure: p!.exposure })),
           me: s?.me,
           frames: app.game?.frames ?? 0,
+          events: app.game?.eventCounts ?? {},
           render: app.game?.renderInfo(),
           lobby: s?.lobby,
         };
