@@ -218,7 +218,11 @@ export class Game {
     this.onResize();
     window.addEventListener('resize', this.onResize);
     canvas.addEventListener('webglcontextlost', (e) => e.preventDefault());
-    if (quality.shadows === 'static') this.renderer.shadowMap.needsUpdate = true;
+    if (quality.shadows === 'static') {
+      // bake the static shadow map once, before any Spartans exist (their shadows would go stale)
+      this.renderer.shadowMap.needsUpdate = true;
+      this.renderer.render(this.scene, this.camera);
+    }
     const slots = Object.values(PITRE_SLOT);
     audio.preload(['ann.slay', 'ann.double', 'ann.triple', 'ann.headshot', 'ann.spree', 'ann.lead_taken', 'ann.lead_lost', 'ann.game_over', 'ann.victory', 'ann.defeat']);
     if (session.start?.settings.pitre) audio.preload(slots);
