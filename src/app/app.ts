@@ -6,6 +6,7 @@ import { HostSession, PLAYER_COLORS, cleanName } from '../net/host';
 import { bcClient, bcHost, cleanCode, makeRoomCode, trysteroClient, trysteroHosts } from '../net/p2p';
 import type { LobbyState } from '../net/protocol';
 import { MuxHostNet, loopbackPair, type ClientNet, type HostNet } from '../net/transport';
+import { Backdrop } from '../render/backdrop';
 import { Game } from '../render/game';
 import { QUALITY, detectQuality, type QualityLevel } from '../render/quality';
 import { MAX_BOTS, MAX_HUMANS } from '../sim/constants';
@@ -76,6 +77,7 @@ export class App {
   private wakeLock: { release(): Promise<void> } | null = null;
   private settingsView: { update(s: Settings): void } | null = null;
   private lastLobbyKey = '';
+  private backdrop: Backdrop | null = null;
 
   constructor(private root: HTMLElement) {
     this.gameLayer = document.createElement('div');
@@ -101,7 +103,24 @@ export class App {
     if (!this.session) this.showTitle();
   }
 
+  private ensureBackdrop() {
+    if (this.game || this.backdrop) return;
+    if (params.has('test') ? !params.has('backdrop') : params.has('nobackdrop')) return;
+    try {
+      this.backdrop = new Backdrop(this.gameLayer, QUALITY[this.quality === 'high' ? 'medium' : this.quality]);
+      this.backdrop.start();
+    } catch (e) {
+      console.warn('backdrop unavailable', e);
+    }
+  }
+
+  private killBackdrop() {
+    this.backdrop?.destroy();
+    this.backdrop = null;
+  }
+
   private setScreen(html: string, cls = ''): HTMLElement {
+    this.ensureBackdrop();
     this.screen?.remove();
     const s = document.createElement('div');
     s.className = `screen ${cls}`;
@@ -119,7 +138,8 @@ export class App {
   showTitle(error = '') {
     this.cleanup();
     if (location.hash) history.replaceState(null, '', location.pathname + location.search);
-    const s = this.setScreen(`
+    const s = this.setScreen(
+      `
       <div class="title-logo"><div class="t1">HALO</div><div class="t2">DIGLETT</div><div class="t3">Pop up. Snipe. Duck. Repeat.</div></div>
       ${error ? `<p class="err">${esc(error)}</p>` : ''}
       <div class="menu">
@@ -128,7 +148,9 @@ export class App {
         <button class="btn" data-a="join">Join game<small>Enter your friend’s room code</small></button>
         <button class="btn" data-a="options">Options<small>Controls, sensitivity, graphics, audio</small></button>
       </div>
-      <p class="note" style="margin-top:26px;text-align:center;max-width:520px">Mouse: aim · Space (hold) stand · Click shoot · Right-click zoom · R reload · Tab scores.<br>Controller and touch screens work too.</p>`);
+      <p class="note" style="margin-top:26px;text-align:center;max-width:520px">Mouse: aim · Space (hold) stand · Click shoot · Right-click zoom · R reload · Tab scores.<br>Controller and touch screens work too.</p>`,
+      'title',
+    );
     s.querySelector('[data-a=offline]')!.addEventListener('click', () => this.startOffline());
     s.querySelector('[data-a=host]')!.addEventListener('click', () => void this.hostOnline());
     s.querySelector('[data-a=join]')!.addEventListener('click', () => this.showJoin());
@@ -403,6 +425,7 @@ export class App {
     if (!s) return;
     this.stopGame();
     this.clearScreen();
+    this.killBackdrop();
     const q = QUALITY[this.quality];
     this.game = new Game(this.gameLayer, s, q, { onMenu: () => this.toggleMenu(), isMenuOpen: () => !!this.menuEl });
     this.game.input.opts = { ...this.game.input.opts };
@@ -464,6 +487,8 @@ export class App {
     </div>`;
     this.root.appendChild(m);
     this.menuEl = m;
+    // single player: freeze the world while the menu is open
+    if (this.host && !this.host.lobby.online) this.host.paused = true;
     m.querySelector('[data-a=resume]')!.addEventListener('click', () => {
       this.closeMenu();
       this.game?.input.lock();
@@ -486,6 +511,7 @@ export class App {
   private closeMenu() {
     this.menuEl?.remove();
     this.menuEl = null;
+    if (this.host) this.host.paused = false;
   }
 
   private showResults() {

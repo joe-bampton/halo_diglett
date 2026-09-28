@@ -38,6 +38,7 @@ interface SpartanView {
   tag: THREE.Sprite | null;
   tagFor: string;
   beamSound: SoundHandle | null;
+  voice: SoundHandle | null;
   headScale: number;
 }
 
@@ -385,6 +386,10 @@ export class Game {
       inp.stand = false;
       inp.trigger = false;
     }
+    if (inp.stand !== this.lastStand) {
+      this.lastStand = inp.stand;
+      if (s.me?.al) audio.play('rustle', { gain: 0.35, rate: inp.stand ? 1.2 : 0.9 });
+    }
     Object.assign(s.input, { yaw: inp.yaw, pitch: inp.pitch, stand: inp.stand, trigger: inp.trigger, presses: inp.presses, reloads: inp.reloads, zoom: inp.zoom });
     if (this.pred.pending) s.flushInput();
     s.update(now);
@@ -698,15 +703,17 @@ export class Game {
     if (!this.pitre.admit(cue, performance.now(), dur, weapon)) return;
     const mine = cue.speaker === this.session.slot;
     const pos = mine ? null : this.posOf(cue.speaker);
-    const prev = this.spartans.get(cue.speaker);
     // stop whatever this speaker was saying (channel interrupt)
-    (prev as unknown as { voice?: SoundHandle })?.voice?.stop(0.03);
+    const sv = this.spartans.get(cue.speaker);
+    const prevVoice = mine ? this.myVoice : sv?.voice;
     const h = audio.playVoice(slot, { pos, delay: cue.delayMs / 1000, gain: mine ? 0.8 : 1.3 });
-    if (prev && h) (prev as unknown as { voice?: SoundHandle }).voice = h;
-    if (mine && h) this.myVoice?.stop(0.03);
-    if (mine && h) this.myVoice = h;
+    if (!h) return;
+    prevVoice?.stop(0.03);
+    if (mine) this.myVoice = h;
+    else if (sv) sv.voice = h;
   }
   private myVoice: SoundHandle | null = null;
+  private lastStand = false;
 
   private playFireSound(slot: number, w: WeaponId, pos: THREE.Vector3 | null) {
     const st = this.session.start?.settings;
@@ -878,7 +885,7 @@ export class Game {
     if (!sv) {
       const parts = buildSpartan(p.color);
       this.scene.add(parts.root);
-      sv = { slot: p.slot, parts, color: p.color, weapon: '', weaponModel: null, alive: p.alive, deathT: 0, deathDir: 1, flare: 0, flareColor: 0x6ad8ff, estShield: SHIELD_MAX, lastHitAt: -99, name: '', tag: null, tagFor: '', beamSound: null, headScale: 1 };
+      sv = { slot: p.slot, parts, color: p.color, weapon: '', weaponModel: null, alive: p.alive, deathT: 0, deathDir: 1, flare: 0, flareColor: 0x6ad8ff, estShield: SHIELD_MAX, lastHitAt: -99, name: '', tag: null, tagFor: '', beamSound: null, voice: null, headScale: 1 };
       this.spartans.set(p.slot, sv);
     }
     return sv;

@@ -48,6 +48,7 @@ export class AudioEngine {
   private voiceBufs = new Map<string, AudioBuffer[]>();
   private voicePending = new Map<string, Promise<AudioBuffer[]>>();
   private annQueue: { slot: string; gain: number }[] = [];
+  private wanted = new Set<string>();
   private annBusyUntil = 0;
   hrtf = true;
   volumes: Volumes = { master: 0.8, sfx: 0.8, voice: 0.9, announcer: 0.9 };
@@ -96,6 +97,7 @@ export class AudioEngine {
       this.buffers.set(id, b);
     }
     void this.loadManifest();
+    for (const slot of this.wanted) void this.voice(slot);
   }
 
   setVolumes(v: Partial<Volumes>) {
@@ -243,10 +245,14 @@ export class AudioEngine {
 
   /** Decode all takes of the given slots ahead of time. */
   preload(slots: string[]) {
-    for (const s of slots) void this.voice(s);
+    for (const s of slots) {
+      this.wanted.add(s);
+      if (this.ctx) void this.voice(s);
+    }
   }
 
   private voice(slot: string): Promise<AudioBuffer[]> {
+    if (!this.ctx) return Promise.resolve([]);
     const ready = this.voiceBufs.get(slot);
     if (ready) return Promise.resolve(ready);
     const pending = this.voicePending.get(slot);
@@ -254,7 +260,10 @@ export class AudioEngine {
     const p = (async () => {
       await this.loadManifest();
       const entry = this.manifest?.slots[slot];
-      if (!entry || !this.ctx) return [];
+      if (!entry || !this.ctx) {
+        this.voicePending.delete(slot);
+        return [];
+      }
       const out: AudioBuffer[] = [];
       for (const f of entry.files) {
         try {

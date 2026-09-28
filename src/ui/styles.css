@@ -48,6 +48,9 @@ button { font-family: var(--font); }
   user-select: none;
 }
 .screen.clear { background: transparent; }
+.screen.title { background: radial-gradient(ellipse at 50% 30%, rgba(7, 16, 28, 0.25), rgba(7, 16, 28, 0.78) 75%); }
+.screen.title .note { color: #d6e6f3; text-shadow: 0 1px 3px #000; }
+canvas.backdrop { filter: saturate(1.05); }
 .title-logo {
   margin-top: min(9vh, 70px);
   text-align: center;

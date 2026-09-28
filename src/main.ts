@@ -1,5 +1,6 @@
 import './ui/styles.css';
 import { App } from './app/app';
+import { audio } from './audio/audio';
 import type { BotDifficulty } from './sim/types';
 import type { Settings } from './sim/settings';
 import type { WeaponId } from './sim/weapons';
@@ -48,6 +49,7 @@ if (!webglOk()) {
       get game() {
         return app.game;
       },
+      audio,
       stand(on = true) {
         if (app.game) app.game.input.testStand = on;
       },
