@@ -57,23 +57,24 @@ def T(slot, file, voice, speed, fx, text, **opts):
 #            formant=1.1       spectral-envelope warp (>1 smaller/younger, <1 bigger)
 #            expr=1.4          exaggerate the spoken intonation (1 = as spoken)
 #            melody=[...]      sing it: one note per syllable (voiced segment), in
-#                              semitones from the take's median pitch; a (from, to)
-#                              pair glides. keep=0.3 keeps some natural wobble
+#                              semitones from the take's median pitch; a tuple such as
+#                              (from, to) or (a, b, c) glides through its points.
+#                              keep=0.3 keeps some natural wobble. The script prints
+#                              a note when the note count and syllable count differ.
 #            contour=[(t, st)] pitch bend over the voiced part, t from 0 to 1
 #            vibrato=(hz, st, start)   vibrato from `start` (0-1) to the end
 #            stretch_last=2.5  hold the last vowel this many times longer
-#            pause=0.1         pause at commas / sentence ends, seconds
 #            drive=1.5         saturation for a shouted edge (1 = clean)
 #
-#  In `brap` rows the text is split on "|" and every piece is said separately
-#  and placed on a rhythmic grid with a low "thump" layered under each hit.
+#  In `brap` rows a low gunshot-like "thump" is layered under every syllable
+#  that starts after a gap (thump=0 turns it off).
 
-ANNOUNCER = "am_onyx*0.55+am_fenrir*0.45"   # deep US male, blended for weight
+ANNOUNCER = "am_fenrir"   # clearest US male; FX_DEFAULTS["announcer"] makes it deep
 
 TAKES = [
     # --- Pitre mode ----------------------------------------------------------
     # slot              file                               voice        speed fx       text                          opts
-    T("pitre.prank",    "pitre/prank_em_john_1.mp3",       "am_puck",   1.00, "pitre", "/pɹˈæŋk əm, dʒˈɑːn!/",
+    T("pitre.prank",    "pitre/prank_em_john_1.mp3",       "am_michael",1.00, "pitre", "/pɹˈæŋk əm, dʒˈɑːn!/",
       melody=[4, 0, (7, 2)], keep=0.3, pitch=1),
     T("pitre.prank",    "pitre/prank_em_john_2.mp3",       "bm_fable",  1.10, "pitre", "/pɹˈæŋk əm, dʒˈɑːn!/",
       expr=1.5, pitch=1),
@@ -81,28 +82,28 @@ TAKES = [
       expr=1.35),
 
     T("pitre.byebye",   "pitre/bye_bye_1.mp3",             "am_puck",   1.00, "pitre", "Bye, bye!",
-      melody=[4, (0, -1)], keep=0.25, stretch_last=2.6, vibrato=(5.5, 0.35, 0.55), pause=0.04),
+      melody=[4, (0, -1)], keep=0.25, stretch_last=2.6, vibrato=(5.5, 0.35, 0.55)),
     T("pitre.byebye",   "pitre/bye_bye_2.mp3",             "am_michael",1.00, "pitre", "Bye, bye!",
-      melody=[5, (2, 0)], keep=0.25, stretch_last=2.3, vibrato=(5.0, 0.3, 0.6), pause=0.04, pitch=1),
+      melody=[5, (2, 0)], keep=0.25, stretch_last=2.3, vibrato=(5.0, 0.3, 0.6), pitch=1),
     T("pitre.byebye",   "pitre/bye_bye_3.mp3",             "bm_fable",  1.00, "pitre", "Bye, bye!",
-      melody=[3, (0, 4)], keep=0.3, stretch_last=2.2, pause=0.04),
+      melody=[3, (0, 4), 4], keep=0.3, stretch_last=2.2),
 
     T("pitre.pussy",    "pitre/oh_look_a_pussy_1.mp3",     "am_fenrir", 1.05, "pitre", "Oh, look! A pussy!",
-      expr=1.6, pause=0.08),
+      expr=1.6),
     T("pitre.pussy",    "pitre/oh_look_a_pussy_2.mp3",     "am_michael",1.00, "pitre", "Ooh, look, a pussy!",
-      expr=1.7, pitch=1, pause=0.06),
-    T("pitre.pussy",    "pitre/oh_look_a_pussy_3.mp3",     "bm_george", 1.05, "pitre", "Oh, look! A pussy!",
-      expr=1.5, pause=0.08),
+      expr=1.7, pitch=1),
+    T("pitre.pussy",    "pitre/oh_look_a_pussy_3.mp3",     "am_echo",   1.10, "pitre", "Ooh, look, a pussy!",
+      melody=[(3, 7), 4, 9, (7, 3)], keep=0.35),         # "nyah-nyah" playground taunt
 
-    T("pitre.mama",     "pitre/mama_1.mp3",                "af_bella",  1.05, "baby",  "Mama!"),
-    T("pitre.mama",     "pitre/mama_2.mp3",                "af_heart",  1.00, "baby",  "/mɐmˈɑː!/",
-      stretch_last=1.5, pitch=9),
-    T("pitre.mama",     "pitre/mama_3.mp3",                "af_aoede",  1.10, "baby",  "Mama!",
-      pitch=10, contour=[(0, 1), (0.4, 0), (0.7, 3), (1, 5)]),
+    T("pitre.mama",     "pitre/mama_1.mp3",                "af_bella",  1.00, "baby",  "Mama!"),
+    T("pitre.mama",     "pitre/mama_2.mp3",                "af_nicole", 1.05, "baby",  "Mama?",
+      pitch=11, contour=[(0, 0), (0.4, -0.5), (0.7, 2.5), (1, 5)]),
+    T("pitre.mama",     "pitre/mama_3.mp3",                "af_heart",  1.00, "baby",  "/mˈɑːmɑː!/",
+      pitch=9.5, stretch_last=1.4, contour=[(0, 0.5), (0.35, 0), (0.6, 3), (0.85, 4), (1, 1)]),
 
-    T("pitre.brap",     "pitre/brap_1.mp3",                "am_michael",1.15, "brap",  "Brap! | Brap! | /bɹˈæːp!/"),
-    T("pitre.brap",     "pitre/brap_2.mp3",                "am_puck",   1.15, "brap",  "Brap! | Brap! | /bɹˈæːp!/"),
-    T("pitre.brap",     "pitre/brap_3.mp3",                "am_fenrir", 1.15, "brap",  "Brap! | Brap! | /bɹˈæːp!/"),
+    T("pitre.brap",     "pitre/brap_1.mp3",                "am_michael",1.10, "brap",  "Brap brap brappp!"),
+    T("pitre.brap",     "pitre/brap_2.mp3",                "bm_fable",  1.30, "brap",  "Brap brap brappp!"),
+    T("pitre.brap",     "pitre/brap_3.mp3",                "am_echo",   1.20, "brap",  "Brap! Brap! Brap!"),
 
     T("pitre.pufferfish", "pitre/pufferfish.mp3",          "-",         1.00, "pufferfish", "(procedural placeholder)"),
 
@@ -143,7 +144,7 @@ TAKES = [
     T("ann.quickhands", "announcer/quick_hands.mp3",       ANNOUNCER, 0.90, "announcer", "Quick hands!"),
     T("ann.gungame_level","announcer/weapon_upgraded.mp3", ANNOUNCER, 0.95, "announcer", "Weapon upgraded!"),
     T("ann.cat_hat",    "announcer/cat_in_the_hat.mp3",    ANNOUNCER, 0.95, "announcer", "Cat in the hat!",
-      melody=[4, 0, 2, (7, 4)], keep=0.35),
+      melody=[5, (1, 1, 8, 4)], keep=0.35),       # "CAT in the HAT": playful sing-song
 ]
 
 # Per-slot playback gain written to the manifest (0-1.5). Every file is already
@@ -172,32 +173,31 @@ FX_DEFAULTS = {
     "pitre": dict(
         pitch=0.0, formant=1.0, expr=1.0, keep=0.3,
         eq=[("hp", 90), ("peak", 250, 1.0, -2.0), ("peak", 3200, 0.9, 3.0), ("highshelf", 7500, 0.7, 2.0)],
-        comp=(-24.0, 3.0, 2.0, 70.0), drive=1.6, hp=80, tail=0.05,
+        comp=(-18.0, 2.5, 3.0, 80.0), drive=1.25, hp=80, tail=0.05, tail_db=38,
     ),
     # Female voice -> small child: pitch up, formants up, whiny rise at the end.
     "baby": dict(
-        pitch=8.0, formant=1.28, expr=1.0,
-        contour=[(0.0, 0.0), (0.45, 0.5), (0.75, 3.5), (1.0, 2.0)],
-        vibrato=(7.0, 0.45, 0.5), f0_range=(80, 900),
+        pitch=8.0, formant=1.28, expr=0.5,        # flatten the adult intonation, then:
+        contour=[(0.0, 0.0), (0.45, 0.5), (0.75, 4.5), (1.0, 3.0)],
+        vibrato=(7.0, 0.6, 0.5), f0_range=(80, 900),
         eq=[("hp", 220), ("peak", 3500, 1.0, 2.0)],
-        comp=(-24.0, 3.0, 2.0, 60.0), drive=1.2, hp=150, tail=0.04, max_len=0.8,
+        comp=(-18.0, 2.5, 3.0, 60.0), drive=1.1, hp=150, tail=0.04, tail_db=38, max_len=0.8,
     ),
-    # "brap brap brappp": per-word hits on a grid + a gun-like low thump.
+    # "brap brap brappp": the voice plus a gun-like low thump under each syllable.
     "brap": dict(
-        grid=0.27, min_gap=0.015, thump=0.75, crack=0.25,
-        words=[dict(pitch=0.0), dict(pitch=0.5), dict(pitch=1.5, stretch_last=1.5)],
+        thump=0.6, crack=0.3, thump_offset=-0.010,
         eq=[("hp", 35), ("peak", 250, 1.0, -2.0), ("peak", 3000, 0.9, 3.0)],
-        comp=(-22.0, 4.0, 1.0, 50.0), drive=2.0, hp=35, tail=0.06, max_len=1.3,
+        comp=(-18.0, 3.0, 1.0, 50.0), drive=1.5, hp=35, tail=0.06, tail_db=38, max_len=1.3,
     ),
     # Deep stadium announcer.
     "announcer": dict(
-        pitch=-2.5, formant=0.93, expr=1.15, keep=0.35, f0_range=(40, 500),
+        pitch=-4.5, formant=0.9, expr=1.25, keep=0.35, f0_range=(40, 500),
         eq=[("hp", 70), ("lowshelf", 170, 0.7, 3.0), ("peak", 450, 1.0, -2.5),
             ("peak", 2800, 1.0, 3.5), ("highshelf", 7000, 0.7, 2.0)],
-        comp=(-26.0, 4.0, 3.0, 90.0), drive=1.5,
+        comp=(-20.0, 3.0, 3.0, 90.0), drive=1.3,
         space=dict(rt60=0.8, predelay=0.018, wet=0.20, hp=350, lp=7000,
                    slaps=[(0.105, 0.28), (0.215, 0.12)]),
-        hp=60, tail=0.08, tail_db=42,
+        hp=60, tail=0.08, tail_db=42, fout=0.08,
     ),
     "pufferfish": dict(hp=40, tail=0.03, seed=3),
     "file": dict(),
@@ -295,13 +295,10 @@ def phonemes(text: str) -> str:
     return t if is_ipa else kokoro().tokenizer.phonemize(t, "en-us")
 
 
-def tts(text: str, voice: str, speed: float, pause: float | None = None) -> tuple[np.ndarray, int]:
+def tts(text: str, voice: str, speed: float) -> tuple[np.ndarray, int]:
     t, is_ipa = split_ipa(text)
-    kw = {}
-    if pause is not None:
-        kw = dict(sentence_pause=pause, clause_pause=pause)
     audio, sr = kokoro().create(t, voice=voice_style(voice), speed=speed, lang="en-us",
-                                is_phonemes=is_ipa, **kw)
+                                is_phonemes=is_ipa)
     return np.asarray(audio, dtype=np.float64), sr
 
 
@@ -452,11 +449,21 @@ def trim(x, sr, pre=PREROLL, post=0.05, head_db=40.0, tail_db=45.0, fout=0.03):
     lv = db(rms)
     top = lv.max()
     on = np.flatnonzero(lv > max(top - head_db, -65.0))
-    off = np.flatnonzero(lv > max(top - tail_db, -70.0))
     if not len(on):
         return x
+    active = lv > max(top - tail_db, -70.0)
+    # the last sound is the last stretch of activity that is not just a short,
+    # faint blip (breath, click) trailing after the line
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], active.astype(int), [0]])))
+    islands = list(zip(edges[::2], edges[1::2]))
+    while len(islands) > 1:
+        i0, i1 = islands[-1]
+        if (i1 - i0) < 0.04 * sr and lv[i0:i1].max() < top - 20:
+            islands.pop()
+        else:
+            break
     a = max(0, on[0] - int(pre * sr))
-    b = min(len(x), off[-1] + int(post * sr))
+    b = min(len(x), islands[-1][1] + int(post * sr))
     return fade(x[a:b], sr, 0.003, min(fout, (b - a) / sr / 4))
 
 
@@ -481,7 +488,7 @@ def world_synth(f0, sp, ap, sr):
     return pw.synthesize(c(f0), c(sp), c(ap), sr, FP)
 
 
-def segments(f0, sp, min_frames=8, dip_db=5.0):
+def segments(f0, sp, min_frames=8, dip_db=5.0, weak_db=15.0):
     """Syllable-like chunks: voiced runs, split where the energy dips (the
     closure of the /b/ in "bye bye", the /m/ in "mama")."""
     e = 10 * np.log10(np.maximum(sp.sum(1), 1e-20))
@@ -517,6 +524,9 @@ def segments(f0, sp, min_frames=8, dip_db=5.0):
 
     for a, b in runs:
         split(a, b)
+    if out:                                     # drop faint creaky tails and blips
+        top = max(e[a:b].max() for a, b in out)
+        out = [(a, b) for a, b in out if e[a:b].max() > top - weak_db]
     return sorted(out)
 
 
@@ -559,7 +569,7 @@ def world_fx(x, sr, o, label=""):
     n = len(f0)
 
     if o.get("stretch_last"):
-        segs = segments(f0, sp)
+        segs = segments(f0, sp, weak_db=8.0)      # last clearly voiced syllable
         if segs:
             a, b = segs[-1]
             r0, r1 = a + 0.3 * (b - a), a + 0.92 * (b - a)
@@ -586,16 +596,17 @@ def world_fx(x, sr, o, label=""):
             target = np.full(n, np.nan)
             for i, (a, b) in enumerate(segs):
                 note = notes[min(i, len(notes) - 1)]
-                lo, hi = (note, note) if np.isscalar(note) else note
-                target[a:b] = np.linspace(lo, hi, b - a)
+                pts = [note] if np.isscalar(note) else list(note)
+                target[a:b] = np.interp(np.linspace(0, 1, b - a), np.linspace(0, 1, len(pts)), pts)
             ok = ~np.isnan(target)
             target = np.interp(np.arange(n), np.flatnonzero(ok), target[ok])
             g = max(1, int(o.get("glide_ms", 35) / FP))
             target = np.convolve(np.pad(target, g, mode="edge"), np.ones(2 * g + 1) / (2 * g + 1), "valid")
             keep = o.get("keep", 0.3)
-            lf = med + target[v] / 12 + keep * (lf - med)
+            # natural wobble, minus creaky drops at phrase ends
+            lf = med + target[v] / 12 + keep * np.clip(lf - med, -5 / 12, 5 / 12)
         else:
-            lf = med + o.get("expr", 1.0) * (lf - med)
+            lf = med + o.get("expr", 1.0) * np.clip(lf - med, -8 / 12, 8 / 12)
 
         if o.get("contour"):
             ct, cs = zip(*o["contour"])
@@ -642,7 +653,7 @@ def add_space(x, sr, rt60, predelay, wet, hp, lp, slaps):
 
 # ----------------------------------------------------------------- chains
 def chain_pitre(take, o):
-    x, sr = tts(take.text, take.voice, take.speed, o.get("pause"))
+    x, sr = tts(take.text, take.voice, take.speed)
     if needs_world(o):
         x = world_fx(x, sr, o, take.file)
     x = eq(x, sr, o["eq"])
@@ -669,37 +680,64 @@ def thump(sr, rng, crack=0.25):
     return y / np.abs(y).max()
 
 
+def word_onsets(x, sr, n):
+    """Sample positions where each of `n` words said in a row starts: the first
+    sound, then the rise into the vowel after each of the n-1 deepest energy
+    valleys (the closure before every /b/ of "brap brap brap"). Valleys followed
+    only by a short burst (the final /p/ release) don't count."""
+    hop = max(1, int(sr * 0.0025))
+    win = max(1, int(sr * 0.012))
+    env = db(np.sqrt(np.convolve(x ** 2, np.ones(win) / win, mode="same")))[::hop]
+    top = env.max()
+    first = int(np.argmax(env > top - 30))
+    W = int(0.15 * sr / hop)
+    cands = []
+    for i in range(first + 1, len(env) - 1):
+        if env[i] <= env[i - 1] and env[i] <= env[i + 1]:
+            right = env[i:i + W].max()
+            if right < top - 12:                  # no vowel follows: a release burst
+                continue
+            cands.append((min(env[max(first, i - W):i].max(), right) - env[i], i))
+    picked = []
+    for depth, i in sorted(cands, reverse=True):
+        if len(picked) == n - 1 or depth < 4:
+            break
+        if all(abs(i - j) >= 0.12 * sr / hop for j in picked):
+            picked.append(i)
+    onsets = [first]
+    for i in sorted(picked):
+        seg = env[i:i + W]
+        pk = int(np.argmax(seg))
+        level = min(seg[pk] - 18, env[i] + 0.5 * (seg[pk] - env[i]))    # where the /b/ bursts
+        below = np.flatnonzero(seg[:pk] < level)
+        onsets.append(i + (int(below[-1]) + 1 if len(below) else 0))
+    return [k * hop for k in onsets]
+
+
 def chain_brap(take, o):
-    words = [w.strip() for w in take.text.split("|") if w.strip()]
+    x, sr = tts(take.text, take.voice, take.speed)
+    if needs_world(o):
+        x = world_fx(x, sr, o, take.file)
+    x = trim(x, sr, pre=0.0, post=0.05, tail_db=40)
+    n = len(split_ipa(take.text)[0].split())
+    onsets = word_onsets(x, sr, n)
+    print(f"    {take.file}: thumps at {', '.join(f'{k / sr * 1000:.0f}' for k in onsets)} ms", flush=True)
     rng = np.random.default_rng(7)
-    hits = []
-    sr = 24000
-    for i, w in enumerate(words):
-        y, sr = tts(w, take.voice, take.speed)
-        wo = dict(o["words"][min(i, len(o["words"]) - 1)]) if o.get("words") else {}
-        if needs_world(wo):
-            y = world_fx(y, sr, wo, f"{take.file}#{i}")
-        hits.append(trim(y, sr, pre=0.002, post=0.02, tail_db=40))
-    peak = max(np.abs(h).max() for h in hits)
-    total = int(sr * (o["grid"] * len(hits) + 1.0))
-    out = np.zeros(total)
-    pos = 0
-    th_len = 0
-    for h in hits:
-        out[pos:pos + len(h)] += h
+    peak = np.abs(x).max()
+    lead = int(0.01 * sr)
+    out = np.concatenate([np.zeros(lead), x, np.zeros(int(0.2 * sr))])
+    for k in onsets:
+        p = max(0, lead + k + int(o["thump_offset"] * sr))
         th = thump(sr, rng, o["crack"]) * o["thump"] * peak
-        out[pos:pos + len(th)] += th
-        th_len = max(th_len, pos + len(th))
-        end = pos + len(h)
-        pos = max(pos + int(o["grid"] * sr), end + int(o["min_gap"] * sr))
-    out = out[:max(end, th_len)]
+        m = min(len(th), len(out) - p)
+        out[p:p + m] += th[:m]
     out = eq(out, sr, o["eq"])
     out = compress(out, sr, *o["comp"])
     return saturate(out, o["drive"]), sr
 
 
 def chain_announcer(take, o):
-    x, sr = tts(take.text, take.voice, take.speed, o.get("pause"))
+    x, sr = tts(take.text, take.voice, take.speed)
     x = world_fx(x, sr, o, take.file)
     x = eq(x, sr, o["eq"])
     x = compress(x, sr, *o["comp"])
@@ -754,27 +792,33 @@ def chain_pufferfish(take, o):
     T4 = 0.52
     t4 = tl(T4)
     u4 = t4 / T4
-    fr = 105 - 45 * u4
+    fr = 125 - 55 * u4
     saw = 2 * ((np.cumsum(fr) / sr) % 1.0) - 1
     flap_rate = 30 - 8 * u4 + 3 * biquad(rng.standard_normal(len(t4)), sr, "lp", 8) * 20
     flap = 0.5 + 0.5 * np.tanh(4 * np.sin(2 * np.pi * np.cumsum(flap_rate) / sr))
     rasp = saw * flap
-    rasp = biquad(rasp, sr, "lp", 1600)
-    rasp = biquad(rasp, sr, "peak", 700, 1.2, 6.0)
-    rasp = rasp + 0.15 * biquad(rng.standard_normal(len(t4)), sr, "bp", 1500, 0.8) * flap
-    env = np.clip(t4 / 0.012, 0, 1) * (1 - u4) ** 1.3
-    sputter = np.where((u4 > 0.55) & (np.sin(2 * np.pi * 9 * t4) > 0.6), 0.25, 1.0)
-    rasp = rasp / np.abs(rasp).max() * env * sputter
+    rasp = biquad(rasp, sr, "lp", 2800)
+    rasp = biquad(rasp, sr, "peak", 800, 1.2, 7.0)
+    rasp = biquad(rasp, sr, "peak", 1900, 1.5, 5.0)
+    rasp = rasp / np.abs(rasp).max()
+    spit = biquad(rng.standard_normal(len(t4)), sr, "bp", 2200, 0.7)
+    rasp = rasp + 0.35 * spit / np.abs(spit).max() * flap
+    rasp = np.tanh(3.0 * rasp / np.abs(rasp).max())               # dense, buzzy
+    env = np.clip(t4 / 0.012, 0, 1) * (1 - u4 ** 2.2)
+    sputter = np.where((u4 > 0.6) & (np.sin(2 * np.pi * 9 * t4) > 0.5), 0.3, 1.0)
+    rasp = rasp * env * sputter
+    rms = lambda v: np.sqrt(np.mean(v ** 2))                       # noqa: E731
+    rasp *= 0.9 * rms(inflate[len(inflate) // 2:]) / rms(rasp[: len(rasp) // 2])
 
     out = np.zeros(len(t) + len(t2) + len(t4) + int(0.2 * sr))
     i = 0
-    out[i:i + len(inflate)] += inflate * 0.55
+    out[i:i + len(inflate)] += inflate
     i += len(inflate)
-    out[i:i + len(hold)] += hold * 0.55 * amp[-1]
+    out[i:i + len(hold)] += hold * amp[-1]
     i += len(hold)
-    out[i:i + len(pop)] += pop / np.abs(pop).max()
+    out[i:i + len(pop)] += pop / np.abs(pop).max() * 1.2
     i += int(0.035 * sr)
-    out[i:i + len(rasp)] += rasp * 0.7
+    out[i:i + len(rasp)] += rasp
     out = compress(out, sr, -18, 3.0, 1.0, 60.0)
     return out[: i + len(rasp)], sr
 
@@ -853,6 +897,15 @@ def encode_mp3(x: np.ndarray, sr: int, kbps: int = MP3_KBPS) -> bytes:
     info[q + 32:q + 34] = _crc16(audio).to_bytes(2, "big")
     info[q + 34:q + 36] = _crc16(bytes(info[:q + 34])).to_bytes(2, "big")
     return bytes(info) + audio
+
+
+def decode_mp3(data: bytes) -> np.ndarray:
+    import io
+
+    import soundfile as sf
+
+    y, _ = sf.read(io.BytesIO(data), dtype="float64")
+    return y
 
 
 # ----------------------------------------------------------------- driver
@@ -939,6 +992,12 @@ def main() -> None:
     for i, t in enumerate(todo, 1):
         y, info = render(t)
         data = encode_mp3(y, SR_OUT)
+        for _ in range(3):                  # the codec shifts loudness a little: re-check
+            err = TARGET_LUFS - lufs(decode_mp3(data), SR_OUT)
+            if abs(err) <= 0.1:
+                break
+            y, info["gr"] = limit(y * undb(err), SR_OUT)
+            data = encode_mp3(y, SR_OUT)
         (AUDIO_DIR / t.file).write_bytes(data)
         if args.wav:
             import soundfile as sf
