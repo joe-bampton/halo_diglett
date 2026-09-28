@@ -40,10 +40,12 @@ export function turnConfig(): TurnServer[] | undefined {
   return undefined;
 }
 
+type Strategy = 'nostr' | 'torrent';
 type Room = Awaited<ReturnType<typeof openRoom>>['room'];
 
-async function openRoom(code: string, onError: (msg: string) => void) {
-  const { joinRoom, selfId } = await import('trystero');
+async function openRoom(code: string, strategy: Strategy, onError: (msg: string) => void) {
+  const mod = strategy === 'nostr' ? await import('trystero') : await import('@trystero-p2p/torrent');
+  const joinRoom = mod.joinRoom as typeof import('trystero').joinRoom;
   const cfg: Parameters<typeof joinRoom>[0] = { appId: APP_ID, password: `hd-${code}` };
   const turn = turnConfig();
   if (turn) cfg.turnConfig = turn;
@@ -55,14 +57,30 @@ async function openRoom(code: string, onError: (msg: string) => void) {
     [CH_IN]: room.makeAction(CH_IN),
     [CH_SNAP]: room.makeAction(CH_SNAP),
   };
-  return { room, actions, selfId };
+  return { room, actions };
 }
 
-/** WebRTC host (Trystero over public Nostr relays — no server of our own). */
-export async function trysteroHost(code: string, onError: (msg: string) => void): Promise<HostNet> {
-  const { room, actions } = await openRoom(code, onError);
+/**
+ * WebRTC host (Trystero, no server of our own). Listens for friends via public Nostr relays and
+ * BitTorrent trackers at the same time, so matchmaking still works if one network is down.
+ */
+export async function trysteroHosts(code: string, onError: (msg: string) => void): Promise<HostNet[]> {
+  const nets: HostNet[] = [];
+  for (const strategy of ['nostr', 'torrent'] as Strategy[]) {
+    try {
+      nets.push(await trysteroHost(code, strategy, onError));
+    } catch (e) {
+      console.warn(`matchmaking via ${strategy} unavailable`, e);
+    }
+  }
+  if (!nets.length) throw new Error('No matchmaking network available');
+  return nets;
+}
+
+async function trysteroHost(code: string, strategy: Strategy, onError: (msg: string) => void): Promise<HostNet> {
+  const { room, actions } = await openRoom(code, strategy, onError);
   const net: HostNet = {
-    kind: 'trystero',
+    kind: `trystero-${strategy}`,
     send(peer, ch, data) {
       return actions[ch].send(data as never, { target: peer });
     },
@@ -84,35 +102,56 @@ export async function trysteroHost(code: string, onError: (msg: string) => void)
   return net;
 }
 
-/** WebRTC client: finds the host in the room (the peer that says {t:'host'}). */
+/**
+ * WebRTC client: finds the host in the room (the peer that says {t:'host'}). Tries Nostr first
+ * and falls back to BitTorrent trackers if no host answers within a few seconds.
+ */
 export async function trysteroClient(code: string, onError: (msg: string) => void): Promise<ClientNet> {
-  const { room, actions } = await openRoom(code, onError);
   let host: string | null = null;
+  let current: Awaited<ReturnType<typeof openRoom>> | null = null;
+  let closed = false;
   const net: ClientNet = {
     kind: 'trystero',
     send(ch, data) {
-      if (!host) return;
-      return actions[ch].send(data as never, { target: host });
+      if (!host || !current) return;
+      return current.actions[ch].send(data as never, { target: host });
     },
     onMessage: null,
     onClose: null,
     close() {
-      void room.leave();
+      closed = true;
+      void current?.room.leave();
     },
   };
-  actions[CH_CTL].onMessage = (data, { peerId }) => {
-    const msg = data as { t?: string };
-    if (msg?.t === 'host') host = peerId;
-    if (peerId !== host) return;
-    net.onMessage?.(CH_CTL, data);
+  const attach = async (strategy: Strategy) => {
+    const r = await openRoom(code, strategy, onError);
+    if (closed) {
+      void r.room.leave();
+      return;
+    }
+    current = r;
+    r.actions[CH_CTL].onMessage = (data, { peerId }) => {
+      const msg = data as { t?: string };
+      if (msg?.t === 'host' && !host) host = peerId;
+      if (peerId !== host) return;
+      net.onMessage?.(CH_CTL, data);
+    };
+    r.actions[CH_SNAP].onMessage = (data, { peerId }) => {
+      if (peerId === host) net.onMessage?.(CH_SNAP, data);
+    };
+    r.room.onPeerLeave = (p) => {
+      if (p === host) net.onClose?.('The host left the game.');
+    };
+    keep(r.room);
   };
-  actions[CH_SNAP].onMessage = (data, { peerId }) => {
-    if (peerId === host) net.onMessage?.(CH_SNAP, data);
-  };
-  room.onPeerLeave = (p) => {
-    if (p === host) net.onClose?.('The host left the game.');
-  };
-  keep(room);
+  await attach('nostr');
+  setTimeout(() => {
+    if (host || closed) return;
+    const old = current;
+    current = null;
+    void old?.room.leave();
+    attach('torrent').catch((e) => console.warn('torrent matchmaking unavailable', e));
+  }, 9000);
   return net;
 }
 

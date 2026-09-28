@@ -14,6 +14,7 @@
     "check": "npm run typecheck && npm run test && vite build && npm run e2e"
   },
   "dependencies": {
+    "@trystero-p2p/torrent": "^0.25.4",
     "three": "^0.186.1",
     "trystero": "^0.25.4"
   },

@@ -3,7 +3,7 @@ import { BOT_PROFILES } from '../bots/brain';
 import { loadOptions, saveOptions, type Options } from '../input/input';
 import { ClientSession } from '../net/client';
 import { HostSession, PLAYER_COLORS, cleanName } from '../net/host';
-import { bcClient, bcHost, cleanCode, makeRoomCode, trysteroClient, trysteroHost } from '../net/p2p';
+import { bcClient, bcHost, cleanCode, makeRoomCode, trysteroClient, trysteroHosts } from '../net/p2p';
 import type { LobbyState } from '../net/protocol';
 import { MuxHostNet, loopbackPair, type ClientNet, type HostNet } from '../net/transport';
 import { Game } from '../render/game';
@@ -11,7 +11,7 @@ import { QUALITY, detectQuality, type QualityLevel } from '../render/quality';
 import { MAX_BOTS, MAX_HUMANS } from '../sim/constants';
 import { DEFAULT_SETTINGS, sanitizeSettings, type Settings } from '../sim/settings';
 import type { BotDifficulty } from '../sim/types';
-import { LOADOUT_WEAPONS, WEAPONS, type WeaponId } from '../sim/weapons';
+import { WEAPONS, type WeaponId } from '../sim/weapons';
 import { esc, hex, toast } from '../ui/dom';
 import { MEDALS } from '../ui/hud';
 import { renderSettings } from '../ui/settingsForm';
@@ -177,16 +177,16 @@ export class App {
     const code = forceCode ?? makeRoomCode();
     this.setScreen(`<div class="title-logo" style="margin-top:30vh"><div class="t1">CREATING LOBBY…</div></div>`);
     const mux = new MuxHostNet();
-    let net: HostNet;
+    let nets: HostNet[];
     try {
-      net = params.get('net') === 'bc' ? bcHost(code) : await trysteroHost(code, (m) => console.warn('join error', m));
+      nets = params.get('net') === 'bc' ? [bcHost(code)] : await trysteroHosts(code, (m) => console.warn('join error', m));
     } catch (e) {
       this.showTitle(`Could not start online play: ${(e as Error).message}`);
       return;
     }
     const { host: hn, client: cn } = loopbackPair();
     mux.add(hn);
-    mux.add(net);
+    for (const n of nets) mux.add(n);
     this.host = new HostSession(mux, code, true, loadSettings());
     this.host.onChange = () => this.persistSettings();
     this.attachClient(cn);
@@ -613,4 +613,3 @@ export class App {
   }
 }
 
-export { LOADOUT_WEAPONS };

@@ -5,7 +5,7 @@ import type { SfxId } from '../audio/synth';
 import { InputManager, type AssistInfo } from '../input/input';
 import type { ClientSession, ViewPlayer } from '../net/client';
 import { F_BEAM, F_BURNING, F_CAMO, F_CHARGING, F_DAMAGE, F_INVINCIBLE, F_OVERSHIELD } from '../net/protocol';
-import { angleDiff, clamp, dirFromYawPitch, yawPitchOf } from '../shared/vec';
+import { angleDiff, dirFromYawPitch, yawPitchOf } from '../shared/vec';
 import { Arena } from '../sim/arena';
 import { FIRE_EXPOSURE, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
 import { drop, eyePos, hitboxOf, rayHitbox } from '../sim/hitbox';
@@ -1005,7 +1005,7 @@ export class Game {
         if (showTag) {
           const dist = head.distanceTo(eye);
           sv.tag.position.copy(head).add(new THREE.Vector3(0, 0.45 + dist * 0.012, 0));
-          const k = 0.6 + dist * 0.035;
+          const k = (0.6 + dist * 0.035) * (this.camera.fov / this.input.opts.fov);
           const aspect = sv.tag.scale.x / sv.tag.scale.y;
           sv.tag.scale.set(k * aspect * 0.5, k * 0.5, 1);
         }
@@ -1271,8 +1271,8 @@ export class Game {
     const reloadDip = reloadF > 0 ? Math.sin(Math.min(1, reloadF) * Math.PI) : 0;
     const exp = s.myExposure;
     const bob = Math.sin(this.time * 2) * 0.004;
-    this.vmHolder.scale.setScalar(0.72);
-    this.vmHolder.position.set(0.3, -0.27 - (1 - exp) * 0.25 - reloadDip * 0.18 + bob, -0.5 + this.vmKick * 0.07);
+    this.vmHolder.scale.setScalar(0.6);
+    this.vmHolder.position.set(0.3, -0.27 - (1 - exp) * 0.25 - reloadDip * 0.18 + bob, -0.46 + this.vmKick * 0.06);
     this.vmHolder.rotation.set(this.vmKick * 0.12 - reloadDip * 0.6, 0.06, reloadDip * 0.35);
   }
 
@@ -1368,4 +1368,3 @@ export class Game {
   }
 }
 
-export { clamp };

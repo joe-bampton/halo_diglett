@@ -371,8 +371,8 @@ export function buildTrees(arena: Arena, q: QualityPreset): THREE.InstancedMesh 
 
 // --- flowers & little details ----------------------------------------------------------------
 export function buildFlowers(arena: Arena): THREE.InstancedMesh {
-  const petal = new THREE.OctahedronGeometry(0.09, 0).scale(1, 0.5, 1).translate(0, 0.32, 0);
-  const stem = new THREE.CylinderGeometry(0.012, 0.012, 0.32, 3).translate(0, 0.16, 0);
+  const petal = new THREE.CylinderGeometry(0.075, 0.03, 0.1, 6).translate(0, 0.24, 0);
+  const stem = new THREE.CylinderGeometry(0.01, 0.01, 0.22, 3).translate(0, 0.11, 0);
   const g = mergeGeometries([petal.toNonIndexed(), stem.toNonIndexed()])!;
   const count = 380;
   const mesh = new THREE.InstancedMesh(g, new THREE.MeshLambertMaterial({ color: 0xffffff }), count);
