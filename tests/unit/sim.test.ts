@@ -135,3 +135,30 @@ describe('match flow', () => {
     expect(kill && kill.k === 'kill' && kill.medals).toContain('double');
   });
 });
+
+describe('review regressions', () => {
+  it('the last hyperbeam charge in a clip lasts the full beam', () => {
+    const m = makeMatch(2, { weapon: 'hyperbeam' });
+    faceOff(m);
+    const cmds = liveAndStanding(m);
+    const p = m.players[0]!;
+    p.clip = 1;
+    const a = aimAt(m, 0, 1, 'body');
+    cmds[0] = { ...cmds[0]!, yaw: a.yaw + 1, pitch: a.pitch, trigger: true };
+    run(m, 60, cmds); // charge (0.6s) and start the beam aimed away
+    expect(p.beamUntil).toBeGreaterThan(m.tick + 60);
+    run(m, 30, cmds);
+    expect(p.beamUntil).toBeGreaterThan(m.tick);
+  });
+  it('grenade splash kills count toward accuracy', () => {
+    const m = makeMatch(2, { weapon: 'rpg' });
+    faceOff(m);
+    const cmds = liveAndStanding(m);
+    const a = aimAt(m, 0, 1, 'body');
+    cmds[0] = { ...cmds[0]!, yaw: a.yaw, pitch: a.pitch, presses: 1 };
+    run(m, 120, cmds);
+    const p = m.players[0]!;
+    expect(p.shots).toBe(1);
+    expect(p.hits).toBe(1);
+  });
+});

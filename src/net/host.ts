@@ -146,6 +146,8 @@ export class HostSession {
       }
     }
     this.lobby.slots = this.lobby.slots.filter((x) => x.slot !== slot);
+    this.held = this.held.filter((h) => h.slot !== slot);
+    for (const [tok, sl] of this.tokens) if (sl === slot) this.tokens.delete(tok);
     this.bots.delete(slot);
     if (this.match) removePlayer(this.match, slot);
     this.bumpLobby();
@@ -181,6 +183,8 @@ export class HostSession {
     const c = this.conns.get(peer);
     if (!c) return;
     this.conns.delete(peer);
+    // a stale leave for a connection the player already replaced (rejoin, network switch)
+    if ([...this.conns.values()].some((o) => o.slot === c.slot)) return;
     const info = this.lobby.slots.find((s) => s.slot === c.slot);
     if (!info) return;
     if (this.lobby.phase === 'lobby') {
@@ -267,6 +271,8 @@ export class HostSession {
     }
     info.connected = true;
     this.tokens.set(token, slot);
+    // replace any older connection that still claims this slot (same token rejoining)
+    for (const [p, o] of this.conns) if (o.slot === slot) this.conns.delete(p);
     const conn: Conn = { peer, slot, token, local, seq: 0, cmd: undefined, pending: [], sending: false, lastSnapTick: -1, lastSb: -9999, lastInputAt: this.clock() };
     this.conns.set(peer, conn);
     this.send(peer, CH_CTL, { t: 'welcome', slot, lobby: this.lobby });
@@ -348,8 +354,10 @@ export class HostSession {
     this.match = null;
     this.results = null;
     this.lobby.phase = 'lobby';
-    // drop players who never came back
+    // drop players who never came back (and forget their rejoin tokens)
+    const gone = new Set(this.lobby.slots.filter((s) => !s.connected).map((s) => s.slot));
     this.lobby.slots = this.lobby.slots.filter((s) => s.connected);
+    for (const [tok, slot] of this.tokens) if (gone.has(slot)) this.tokens.delete(tok);
     this.held = [];
     for (const c of this.conns.values()) this.send(c.peer, CH_CTL, { t: 'toLobby' });
     this.bumpLobby();

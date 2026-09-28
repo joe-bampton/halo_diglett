@@ -118,6 +118,11 @@ export class ClientSession {
     if (this.state === 'closed') return;
     this.state = 'closed';
     this.closeReason = reason;
+    try {
+      this.net.close();
+    } catch {
+      /* already closed */
+    }
     this.onClosed?.();
   }
 
@@ -127,7 +132,6 @@ export class ClientSession {
     } catch {
       /* ignore */
     }
-    this.net.close();
     this.close('left');
   }
 

@@ -209,15 +209,20 @@ export function bcHost(code: string): HostNet {
 export function bcClient(code: string): ClientNet {
   const bc = new BroadcastChannel(`hd-${code}`);
   const id = `c-${Math.random().toString(36).slice(2, 10)}`;
+  let closed = false;
+  const post = (m: BcMsg) => {
+    if (!closed) bc.postMessage(m);
+  };
   const net: ClientNet = {
     kind: 'broadcast',
     send(ch, data) {
-      bc.postMessage({ from: id, to: 'host', kind: 'data', ch, data } satisfies BcMsg);
+      post({ from: id, to: 'host', kind: 'data', ch, data });
     },
     onMessage: null,
     onClose: null,
     close() {
-      bc.postMessage({ from: id, kind: 'leave' } satisfies BcMsg);
+      post({ from: id, kind: 'leave' });
+      closed = true;
       bc.close();
     },
   };
@@ -228,12 +233,12 @@ export function bcClient(code: string): ClientNet {
     if (m.kind !== 'data' || (m.to && m.to !== id) || !m.ch) return;
     net.onMessage?.(m.ch, m.data);
   };
-  window.addEventListener('pagehide', () => bc.postMessage({ from: id, kind: 'leave' } satisfies BcMsg));
+  window.addEventListener('pagehide', () => post({ from: id, kind: 'leave' }));
   // announce (repeat a few times in case the host tab is still loading)
   let n = 0;
   const hello = () => {
-    bc.postMessage({ from: id, kind: 'join' } satisfies BcMsg);
-    if (++n < 3) setTimeout(hello, 400);
+    post({ from: id, kind: 'join' });
+    if (++n < 3 && !closed) setTimeout(hello, 400);
   };
   hello();
   return net;

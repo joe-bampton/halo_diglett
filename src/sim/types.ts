@@ -69,6 +69,7 @@ export interface PlayerState {
   needRelease: boolean;
   beamUntil: number;
   beamLen: number;
+  beamHit: boolean;
   burstLeft: number;
   nextBurstAt: number;
   spin: number;

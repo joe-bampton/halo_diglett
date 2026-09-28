@@ -67,6 +67,49 @@ const WEAPON_SFX: Record<WeaponId, SfxId> = {
   sniper: 'sniper', br: 'rifle', crossbow: 'crossbow', rpg: 'rocket', grenade: 'bloop', railgun: 'rail', hyperbeam: 'charge', needler: 'needle', flamethrower: 'flameLoop', minigun: 'minigun', orbital: 'beep',
 };
 
+/** Dispose geometries, materials and textures of a detached subtree. */
+function disposeTree(obj: THREE.Object3D) {
+  obj.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.geometry && !SHARED.has(m.geometry)) m.geometry.dispose();
+    const mats = m.material ? (Array.isArray(m.material) ? m.material : [m.material]) : [];
+    for (const mat of mats) {
+      if (SHARED.has(mat)) continue;
+      (mat as THREE.MeshBasicMaterial).map?.dispose();
+      mat.dispose();
+    }
+  });
+}
+
+const SHARED = new Set<unknown>();
+const projCache = new Map<string, () => THREE.Object3D>();
+/** Projectile visuals share geometry & materials (cheap to spawn dozens per second). */
+function projMesh(kind: string): THREE.Object3D | null {
+  if (!projCache.size) {
+    const keep = <T>(x: T) => (SHARED.add(x), x);
+    const rocketBody = keep(new THREE.CylinderGeometry(0.07, 0.07, 0.5, 8).rotateX(Math.PI / 2));
+    const rocketMat = keep(new THREE.MeshLambertMaterial({ color: 0x5f6b3a }));
+    const flameGeo = keep(new THREE.SphereGeometry(0.12, 8, 6));
+    const flameMat = keep(new THREE.MeshBasicMaterial({ color: 0xffb040 }));
+    projCache.set('rocket', () => {
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(rocketBody, rocketMat));
+      const f = new THREE.Mesh(flameGeo, flameMat);
+      f.position.z = 0.3;
+      g.add(f);
+      return g;
+    });
+    const simple = (name: string, geo: THREE.BufferGeometry, color: number) => {
+      const gg = keep(geo), mm = keep(new THREE.MeshBasicMaterial({ color }));
+      projCache.set(name, () => new THREE.Mesh(gg, mm));
+    };
+    simple('bolt', new THREE.CylinderGeometry(0.02, 0.02, 0.8, 5).rotateX(Math.PI / 2), 0x9fe8ff);
+    simple('grenade', new THREE.SphereGeometry(0.1, 8, 6), 0x7cff6b);
+    simple('needle', new THREE.ConeGeometry(0.03, 0.3, 4).rotateX(-Math.PI / 2), 0xff5fd2);
+  }
+  return projCache.get(kind)?.() ?? null;
+}
+
 const tmpV = new THREE.Vector3();
 const tmpV2 = new THREE.Vector3();
 
@@ -111,7 +154,7 @@ export class Game {
   private wasAlive = false;
   private killer = -1;
   private diedAt = 0;
-  private pred = { lastShot: -1e9, pending: false, burst: 0, nextBurst: 0, localId: 0 };
+  private pred = { lastShot: -1e9, pending: false, pendingAt: -1e9, fresh: false, burst: 0, nextBurst: 0, localId: 0 };
   private chargeSound: SoundHandle | null = null;
   private lowShieldAt = 0;
   private prevShield = 70;
@@ -197,7 +240,11 @@ export class Game {
     container.appendChild(this.touchEl);
     this.input = new InputManager(canvas, {
       zoomLevels: () => this.myWeaponDef()?.zoom.length ?? 0,
-      onFirePress: () => (this.pred.pending = true),
+      onFirePress: () => {
+        this.pred.pending = true;
+        this.pred.fresh = true;
+        this.pred.pendingAt = performance.now();
+      },
       onMenu: () => this.hooks.onMenu(),
       onScoreboard: (show) => (this.showScores = show),
       onDevice: () => this.applyDevice(),
@@ -263,8 +310,13 @@ export class Game {
     window.removeEventListener('resize', this.onResize);
     this.input.unlock();
     this.input.destroy();
-    for (const s of this.spartans.values()) s.beamSound?.stop();
+    for (const s of this.spartans.values()) {
+      s.beamSound?.stop();
+      s.voice?.stop();
+    }
     this.chargeSound?.stop();
+    this.beamSound?.stop();
+    this.myVoice?.stop();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
     this.container.innerHTML = '';
@@ -313,10 +365,16 @@ export class Game {
     return !!me && me.pu.some(([pid, until]) => pid === id && until > this.session.hostTick);
   }
 
+  /** Own hole: private state is authoritative and arrives before interpolation catches up. */
+  private myHole() {
+    const id = this.session.me?.hole ?? this.me?.hole ?? 0;
+    return this.arena.holes[id] ?? this.arena.holes[0]!;
+  }
+
   private eye(): THREE.Vector3 {
     const me = this.me;
     if (!me) return new THREE.Vector3(0, 5, 0);
-    const e = eyePos(this.holeOf(me), this.session.myExposure);
+    const e = eyePos(this.myHole(), this.session.myExposure);
     return new THREE.Vector3(e.x, e.y, e.z);
   }
 
@@ -348,6 +406,11 @@ export class Game {
     if (this.session.isLocal) return false;
     const t = WEAPONS[w].trigger;
     return t === 'semi' || t === 'burst' || t === 'auto';
+  }
+
+  /** Was this own shot already drawn locally? (If prediction missed it, draw the host's event.) */
+  private ownShotPredicted(w: WeaponId): boolean {
+    return this.predicted(w) && performance.now() - this.pred.lastShot < 350;
   }
 
   private assistInfo(): AssistInfo | null {
@@ -468,12 +531,15 @@ export class Game {
     const s = this.session;
     const me = s.me;
     const w = this.myWeaponDef();
-    const pressed = this.pred.pending;
+    // the host buffers a press for ~12 ticks, so the prediction keeps it for 200ms too
+    const pressed = now - this.pred.pendingAt <= 200;
+    const fresh = this.pred.fresh;
     this.pred.pending = false;
+    this.pred.fresh = false;
     if (!me || !me.al) return;
     const infinite = s.start?.settings.ammoMode === 'noReload' || w.clip <= 0;
     const ready = s.phase === 'live' && s.myExposure >= FIRE_EXPOSURE && me.rl === 0 && (infinite || me.clip > 0);
-    if (pressed && !infinite && me.clip === 0 && me.rl === 0) audio.play('empty');
+    if (fresh && !infinite && me.clip === 0 && me.rl === 0) audio.play('empty');
     // charge ring & sound (railgun/hyperbeam)
     if ((w.trigger === 'charge' || w.trigger === 'beam') && this.input.s.trigger && ready && me.bu <= s.hostTick) {
       if (!this.chargeSound) this.chargeSound = audio.play('charge', { gain: 0.6 });
@@ -484,9 +550,12 @@ export class Game {
     if (!this.predicted(w.id)) return;
     const intervalMs = w.interval * 1000 * (this.hasPu('quickhands') ? 1 / 1.5 : 1);
     const cooled = now - this.pred.lastShot >= intervalMs * 0.92;
-    if (w.trigger === 'semi' && pressed && ready && cooled) this.localShot(now);
-    else if (w.trigger === 'burst') {
+    if (w.trigger === 'semi' && pressed && ready && cooled) {
+      this.pred.pendingAt = -1e9;
+      this.localShot(now);
+    } else if (w.trigger === 'burst') {
       if (pressed && ready && cooled) {
+        this.pred.pendingAt = -1e9;
         this.localShot(now);
         this.pred.burst = (w.burst?.count ?? 3) - 1;
         this.pred.nextBurst = now + (w.burst?.gap ?? 0.05) * 1000;
@@ -543,7 +612,7 @@ export class Game {
       this.eventCounts[e.k] = (this.eventCounts[e.k] ?? 0) + 1;
       switch (e.k) {
         case 'fire': {
-          if (e.p === mySlot && this.predicted(e.w)) break;
+          if (e.p === mySlot && this.ownShotPredicted(e.w)) break;
           const w = WEAPONS[e.w];
           const from = this.muzzleOf(e.p);
           const to = new THREE.Vector3(...e.e);
@@ -562,7 +631,7 @@ export class Game {
           break;
         }
         case 'proj': {
-          if (e.p === mySlot && this.predicted(e.w)) break;
+          if (e.p === mySlot && this.ownShotPredicted(e.w)) break;
           const pr: Projectile = { id: e.id, owner: e.p, weapon: e.w, x: e.pos[0], y: e.pos[1], z: e.pos[2], vx: e.vel[0], vy: e.vel[1], vz: e.vel[2], born: e.t, bounces: 0, target: e.tgt, fuseAt: 0 };
           this.addProjectile(String(e.id), pr, false);
           break;
@@ -689,7 +758,7 @@ export class Game {
         // own predicted shots already triggered their brap
         if (cue.line === 'brap' && cue.speaker === mySlot) {
           const fe = events.find((x) => x.k === 'fire' && x.p === mySlot);
-          if (fe && fe.k === 'fire' && this.predicted(fe.w)) continue;
+          if (fe && fe.k === 'fire' && this.ownShotPredicted(fe.w)) continue;
         }
         const fw = events.find((x) => x.k === 'fire' && x.p === cue.speaker);
         this.pitreLocalCue(cue, fw && fw.k === 'fire' ? fw.w : undefined);
@@ -719,16 +788,19 @@ export class Game {
   private myVoice: SoundHandle | null = null;
   private lastStand = false;
 
+  private brapMode(): boolean {
+    const st = this.session.start?.settings;
+    return !!st?.pitre && st.pitreBrap;
+  }
+
   private playFireSound(slot: number, w: WeaponId, pos: THREE.Vector3 | null) {
     const st = this.session.start?.settings;
     if (st?.pitre && st.pitreBrap) return; // "brap brap brappp" replaces gunfire
     const id = WEAPON_SFX[w];
     const def = WEAPONS[w];
     if (def.trigger === 'beam') {
-      const sv = this.spartans.get(slot);
+      // the continuous hum is driven by the beam flag in updateSpartans
       audio.play('rail', { pos, gain: 0.6, rate: 0.6 });
-      if (sv && !sv.beamSound) sv.beamSound = audio.play('beamLoop', { pos, loop: true, gain: 0.8 });
-      if (slot === this.session.slot && !this.beamSound) this.beamSound = audio.play('beamLoop', { loop: true, gain: 0.7 });
       return;
     }
     if (w === 'flamethrower') {
@@ -882,6 +954,7 @@ export class Game {
     let sv = this.spartans.get(p.slot);
     if (sv && sv.color !== p.color) {
       this.scene.remove(sv.parts.root);
+      disposeTree(sv.parts.root);
       sv.beamSound?.stop();
       this.spartans.delete(p.slot);
       sv = undefined;
@@ -942,7 +1015,10 @@ export class Game {
       }
       // weapon
       if (sv.weapon !== p.weapon) {
-        if (sv.weaponModel) sv.parts.weaponHolder.remove(sv.weaponModel);
+        if (sv.weaponModel) {
+          sv.parts.weaponHolder.remove(sv.weaponModel);
+          disposeTree(sv.weaponModel);
+        }
         sv.weaponModel = buildWeaponModel(p.weapon);
         sv.parts.weaponHolder.add(sv.weaponModel);
         sv.weapon = p.weapon;
@@ -994,8 +1070,10 @@ export class Game {
         const mz = this.muzzleOf(p.slot);
         this.fxAdd.emit({ pos: mz, count: 1, speed: [0.2, 1], life: [0.1, 0.25], size: [0.3, 0.05], color: 0xffffff, color1: WEAPONS[p.weapon].fx.color, jitter: 0.3 });
       }
-      if (p.flags & F_BEAM && p.beamLen > 0) this.drawBeam(this.muzzleOf(p.slot), p.yaw, p.pitch, p.beamLen, sv.beamSound, p.slot);
-      else if (sv.beamSound) {
+      if (p.flags & F_BEAM && p.beamLen > 0) {
+        if (!sv.beamSound && !this.brapMode()) sv.beamSound = audio.play('beamLoop', { pos: this.muzzleOf(p.slot), loop: true, gain: 0.8 });
+        this.drawBeam(this.muzzleOf(p.slot), p.yaw, p.pitch, p.beamLen, sv.beamSound, p.slot);
+      } else if (sv.beamSound) {
         sv.beamSound.stop();
         sv.beamSound = null;
       }
@@ -1006,7 +1084,10 @@ export class Game {
       const showTag = off < 0.05 && !camo && p.exposure > 0.3;
       const tagText = `${s.leader === p.slot ? '👑 ' : ''}${p.name}`;
       if (showTag && sv.tagFor !== tagText) {
-        if (sv.tag) this.scene.remove(sv.tag);
+        if (sv.tag) {
+          this.scene.remove(sv.tag);
+          disposeTree(sv.tag);
+        }
         sv.tag = textSprite(tagText, s.leader === p.slot ? '#ffd35a' : '#ffffff', 40);
         sv.tagFor = tagText;
         this.scene.add(sv.tag);
@@ -1025,7 +1106,11 @@ export class Game {
     for (const [slot, sv] of this.spartans) {
       if (!seen.has(slot)) {
         this.scene.remove(sv.parts.root);
-        if (sv.tag) this.scene.remove(sv.tag);
+        disposeTree(sv.parts.root);
+        if (sv.tag) {
+          this.scene.remove(sv.tag);
+          disposeTree(sv.tag);
+        }
         sv.beamSound?.stop();
         this.spartans.delete(slot);
       }
@@ -1033,6 +1118,7 @@ export class Game {
     // own beam
     const me = s.me;
     if (me && me.bu > s.hostTick && me.al) {
+      if (!this.beamSound && !this.brapMode()) this.beamSound = audio.play('beamLoop', { loop: true, gain: 0.7 });
       const mine = this.me;
       if (mine && mine.beamLen > 0) this.drawBeam(this.muzzleOf(s.slot), this.input.s.yaw, this.input.s.pitch, mine.beamLen, null, s.slot);
     } else if (this.beamSound) {
@@ -1079,6 +1165,7 @@ export class Game {
     for (const [id, v] of this.orbs) {
       if (!s.orbs.has(id)) {
         this.scene.remove(v.group);
+        disposeTree(v.group);
         this.orbs.delete(id);
       }
     }
@@ -1086,30 +1173,7 @@ export class Game {
 
   private addProjectile(id: string, pr: Projectile, local: boolean) {
     const w = pr.weapon;
-    let obj: THREE.Object3D | null = null;
-    const def = WEAPONS[w];
-    switch (def.fx.tracer) {
-      case 'rocket': {
-        const g = new THREE.Group();
-        g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.5, 8).rotateX(Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0x5f6b3a })));
-        const flame = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffb040 }));
-        flame.position.z = 0.3;
-        g.add(flame);
-        obj = g;
-        break;
-      }
-      case 'bolt':
-        obj = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.8, 5).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x9fe8ff }));
-        break;
-      case 'grenade':
-        obj = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), new THREE.MeshBasicMaterial({ color: 0x7cff6b }));
-        break;
-      case 'needle':
-        obj = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.3, 4).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xff5fd2 }));
-        break;
-      default:
-        obj = null;
-    }
+    const obj = projMesh(WEAPONS[w].fx.tracer);
     if (obj) this.scene.add(obj);
     this.projs.set(id, { pr, obj, weapon: w, local, trailAcc: 0 });
     if (w === 'rpg') audio.play('rocket', { pos: local ? null : { x: pr.x, y: pr.y, z: pr.z }, gain: 0.5, rate: 1.3 });
@@ -1118,7 +1182,7 @@ export class Game {
   private removeProjectile(id: string) {
     const pv = this.projs.get(id);
     if (!pv) return;
-    if (pv.obj) this.scene.remove(pv.obj);
+    if (pv.obj) this.scene.remove(pv.obj); // geometry/materials are shared (projMesh)
     this.projs.delete(id);
   }
 
@@ -1149,9 +1213,11 @@ export class Game {
             pr.z = prev.z + d.z * hit;
             pr.vx = pr.vy = pr.vz = 0;
           } else if (hit < L && def.bounce) {
-            pr.vx *= -0.3;
+            pr.bounces++;
+            if (pv.local && pr.bounces > def.bounce.max) dead = true;
+            pr.vx *= 0.5;
             pr.vy = Math.abs(pr.vy) * def.bounce.restitution;
-            pr.vz *= -0.3;
+            pr.vz *= 0.5;
             pr.x = prev.x;
             pr.y = prev.y + 0.05;
             pr.z = prev.z;
@@ -1167,6 +1233,7 @@ export class Game {
       }
       const age = (s.hostTick - pr.born) / TICK_RATE;
       if (pv.local && age > def.life + 0.2) dead = true;
+      if (pv.local && pr.fuseAt && s.hostTick >= pr.fuseAt) dead = true;
       if (!pv.local && age > def.life + 1.5) dead = true;
       if (dead) {
         this.removeProjectile(id);
@@ -1222,10 +1289,10 @@ export class Game {
     const inp = this.input.s;
     const settings = this.input.opts;
     const alive = !!s.me?.al;
-    if (me && me.hole !== this.lastHole) {
-      this.lastHole = me.hole;
-      const h = this.holeOf(me);
-      this.grass.layout(h.x, h.z);
+    const holeNow = this.myHole();
+    if (me && holeNow.id !== this.lastHole) {
+      this.lastHole = holeNow.id;
+      this.grass.layout(holeNow.x, holeNow.z);
     }
     this.shake = Math.max(0, this.shake - dt * 2.5);
     this.camKick = Math.max(0, this.camKick - dt * 0.12);
@@ -1240,7 +1307,7 @@ export class Game {
       this.wasAlive = true;
     } else {
       // death cam: rise above the hole and look at the killer
-      const h = this.holeOf(me);
+      const h = this.myHole();
       const t = Math.min(1, (this.time - this.diedAt) / 1.2);
       const target = this.killer >= 0 && this.killer !== s.slot ? this.posOf(this.killer) : new THREE.Vector3(0, 2, 0);
       const base = new THREE.Vector3(h.x, h.rim + 0.9, h.z);
@@ -1268,7 +1335,10 @@ export class Game {
     const scoped = this.input.s.zoom > 0 && (WEAPONS[w].zoom[this.input.s.zoom - 1] ?? 1) >= 2.4;
     this.vmHolder.visible = alive && !scoped && s.phase !== 'ended';
     if (w !== this.vmWeapon) {
-      if (this.vmModel) this.vmHolder.remove(this.vmModel);
+      if (this.vmModel) {
+        this.vmHolder.remove(this.vmModel);
+        disposeTree(this.vmModel);
+      }
       this.vmModel = buildWeaponModel(w);
       // gloved hand
       const glove = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.13, 0.14), new THREE.MeshLambertMaterial({ color: this.me?.color ?? 0x3d7bff }));

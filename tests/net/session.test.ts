@@ -116,3 +116,48 @@ describe('lag compensation', () => {
     expect(without.hits / Math.max(1, without.shots)).toBeLessThan(withR.hits / withR.shots);
   });
 });
+
+describe('rejoin robustness', () => {
+  it('a late leave for the old connection does not disconnect a rejoined player', () => {
+    const w = new FakeWorld();
+    const hub = new LagHub(w);
+    const host = new HostSession(hub, 'RJ', true);
+    host.clock = () => w.now;
+    const a1 = new ClientSession(hub.connect('A1', 20), { name: 'A', color: 1, token: 'tokA' });
+    a1.clock = () => w.now;
+    w.advance(300);
+    host.startMatch(3);
+    w.advance(300);
+    const slot = a1.slot;
+    // same player comes back on a new connection (e.g. phone switched networks)…
+    const a2 = new ClientSession(hub.connect('A2', 20), { name: 'A', color: 1, token: 'tokA' });
+    a2.clock = () => w.now;
+    w.advance(300);
+    expect(a2.slot).toBe(slot);
+    // …and only then does the old connection's leave arrive
+    hub.onLeave?.('A1');
+    expect(host.match!.players[slot]!.connected).toBe(true);
+    expect(host.lobby.slots.find((s) => s.slot === slot)!.connected).toBe(true);
+  });
+
+  it('forgets rejoin tokens of players dropped when returning to the lobby', () => {
+    const w = new FakeWorld();
+    const hub = new LagHub(w);
+    const host = new HostSession(hub, 'RJ2', true);
+    host.clock = () => w.now;
+    const a = new ClientSession(hub.connect('A', 10), { name: 'A', color: 1, token: 'tokA' });
+    a.clock = () => w.now;
+    w.advance(200);
+    host.startMatch(3);
+    w.advance(200);
+    hub.onLeave?.('A');
+    host.backToLobby();
+    const c = new ClientSession(hub.connect('C', 10), { name: 'C', color: 2, token: 'tokC' });
+    c.clock = () => w.now;
+    w.advance(200);
+    const a2 = new ClientSession(hub.connect('A2', 10), { name: 'A', color: 1, token: 'tokA' });
+    a2.clock = () => w.now;
+    w.advance(200);
+    expect(a2.slot).not.toBe(c.slot);
+  });
+});

@@ -125,6 +125,7 @@ function newPlayer(m: MatchState, r: RosterEntry, hole: number): PlayerState {
     needRelease: false,
     beamUntil: 0,
     beamLen: 0,
+    beamHit: false,
     burstLeft: 0,
     nextBurstAt: 0,
     spin: 0,
@@ -461,7 +462,7 @@ function updateWeapon(m: MatchState, p: PlayerState, c: PlayerCommand | undefine
   const reloading = p.reloadUntil > t;
   const infinite = m.settings.ammoMode === 'noReload' || w.clip <= 0;
   const hasAmmo = infinite || p.clip > 0;
-  if (!hasAmmo && !reloading) requestReload(m, p);
+  if (!hasAmmo && !reloading && p.beamUntil <= t) requestReload(m, p);
   const up = p.exposure >= FIRE_EXPOSURE;
   const canShoot = live && up && !reloading && hasAmmo;
   const trigger = !!c?.trigger || p.trigger;
@@ -531,6 +532,7 @@ function updateWeapon(m: MatchState, p: PlayerState, c: PlayerCommand | undefine
           if (t - p.chargeStart >= secToTicks(w.chargeTime ?? 0)) {
             p.chargeStart = -1;
             p.beamUntil = t + secToTicks(w.beamTime ?? 1);
+            p.beamHit = false;
             consumeAmmo(m, p, w);
             p.shots++;
             p.revealUntil = t + TICK_RATE;
@@ -705,7 +707,8 @@ function beamTick(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext,
     return;
   }
   const q = m.players[first.slot!]!;
-  p.hits++;
+  if (!p.beamHit) p.hits++;
+  p.beamHit = true;
   damagePlayer(m, ctx, p.slot, q, w.damage * sec, { head: !!first.head, weapon: w.id, kind: 'direct', headMult: w.headMult });
 }
 
@@ -815,7 +818,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
         }
       }
       if (def.burn && q.alive) q.burn = { by: pr.owner, until: t + secToTicks(def.burn.time), dps: def.burn.dps, next: t + 15 };
-      endProjectile(m, ctx, pr, at, w, -1);
+      endProjectile(m, ctx, pr, at, w, -1, w.damage > 0);
       continue;
     }
     if (inMouth && def.bounce) {
@@ -852,9 +855,12 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
   m.projectiles = keep;
 }
 
-function endProjectile(m: MatchState, ctx: StepContext, pr: Projectile, at: V3, w: WeaponDef, inHole: number) {
+function endProjectile(m: MatchState, ctx: StepContext, pr: Projectile, at: V3, w: WeaponDef, inHole: number, counted = false) {
   ctx.events.push({ k: 'pend', t: m.tick, id: pr.id, pos: V(at) });
-  if (w.splash) explode(m, ctx, pr.owner, w.id, at, w.splash, inHole);
+  if (w.splash && explode(m, ctx, pr.owner, w.id, at, w.splash, inHole) && !counted) {
+    const owner = m.players[pr.owner];
+    if (owner) owner.hits++;
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -869,8 +875,10 @@ interface DamageOpts {
   headMult?: number;
 }
 
-function explode(m: MatchState, ctx: StepContext, owner: number, weapon: WeaponId, pos: V3, sp: NonNullable<WeaponDef['splash']>, inHole: number, kind: DamageOpts['kind'] = 'splash') {
+/** Returns true if the blast damaged anyone other than its owner. */
+function explode(m: MatchState, ctx: StepContext, owner: number, weapon: WeaponId, pos: V3, sp: NonNullable<WeaponDef['splash']>, inHole: number, kind: DamageOpts['kind'] = 'splash'): boolean {
   const { arena } = ctx;
+  let hitEnemy = false;
   ctx.events.push({ k: 'boom', t: m.tick, p: owner, w: weapon, pos: V(pos), r: sp.radius });
   for (const q of m.players) {
     if (!q || !q.alive) continue;
@@ -888,12 +896,16 @@ function explode(m: MatchState, ctx: StepContext, owner: number, weapon: WeaponI
     const fall = d <= sp.inner ? 1 : 1 - (d - sp.inner) / (sp.radius - sp.inner);
     if (q.slot === owner) factor *= sp.selfMult;
     const amt = sp.damage * fall * factor;
-    if (amt > 0.5) damagePlayer(m, ctx, owner, q, amt, { head: false, weapon, kind });
+    if (amt > 0.5) {
+      damagePlayer(m, ctx, owner, q, amt, { head: false, weapon, kind });
+      if (q.slot !== owner) hitEnemy = true;
+    }
   }
   const shooter = m.players[owner];
   for (const orb of [...m.orbs]) {
     if (shooter && dist(orbPos(orb, m.tick, arena), pos) < sp.radius + ORB_R) claimOrb(m, ctx, orb.id, shooter);
   }
+  return hitEnemy;
 }
 
 export function damagePlayer(m: MatchState, ctx: StepContext, attacker: number, v: PlayerState, amount: number, o: DamageOpts) {
@@ -989,6 +1001,7 @@ function killPlayer(m: MatchState, ctx: StepContext, attacker: number, v: Player
     if (s.weaponMode === 'gunGame') {
       a.gunLevel++;
       if (a.gunLevel < s.gunGameOrder.length && a.alive) {
+        a.powerups = a.powerups.filter((x) => !POWERUPS[x.id].weapon);
         equip(m, a, s.gunGameOrder[a.gunLevel]!);
         ctx.events.push({ k: 'ann', t, key: 'ann.gungame_level', p: a.slot });
       }

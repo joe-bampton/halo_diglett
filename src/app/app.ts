@@ -78,6 +78,7 @@ export class App {
   private settingsView: { update(s: Settings): void } | null = null;
   private lastLobbyKey = '';
   private backdrop: Backdrop | null = null;
+  private attempt = 0;
 
   constructor(private root: HTMLElement) {
     this.gameLayer = document.createElement('div');
@@ -200,10 +201,15 @@ export class App {
     this.setScreen(`<div class="title-logo" style="margin-top:30vh"><div class="t1">CREATING LOBBY…</div></div>`);
     const mux = new MuxHostNet();
     let nets: HostNet[];
+    const attempt = this.attempt;
     try {
       nets = params.get('net') === 'bc' ? [bcHost(code)] : await trysteroHosts(code, (m) => console.warn('join error', m));
     } catch (e) {
-      this.showTitle(`Could not start online play: ${(e as Error).message}`);
+      if (attempt === this.attempt) this.showTitle(`Could not start online play: ${(e as Error).message}`);
+      return;
+    }
+    if (attempt !== this.attempt) {
+      for (const n of nets) n.close();
       return;
     }
     const { host: hn, client: cn } = loopbackPair();
@@ -222,10 +228,16 @@ export class App {
       <div class="menu" style="width:min(300px,100%)"><button class="btn small back">Cancel</button></div>`).querySelector('.back')!.addEventListener('click', () => this.showTitle());
     let net: ClientNet;
     let joinErr = '';
+    const attempt = this.attempt;
     try {
       net = params.get('net') === 'bc' ? bcClient(code) : await trysteroClient(code, (m) => (joinErr = m));
     } catch (e) {
-      this.showTitle(`Could not connect: ${(e as Error).message}`);
+      if (attempt === this.attempt) this.showTitle(`Could not connect: ${(e as Error).message}`);
+      return;
+    }
+    if (attempt !== this.attempt) {
+      // the player cancelled while we were connecting
+      net.close();
       return;
     }
     history.replaceState(null, '', `${location.pathname}${location.search}#/join/${code}`);
@@ -294,6 +306,7 @@ export class App {
   }
 
   cleanup() {
+    this.attempt++;
     this.stopGame();
     this.closeMenu();
     if (this.session && this.session.state !== 'closed') {
@@ -494,9 +507,10 @@ export class App {
       this.game?.input.lock();
     });
     m.querySelector('[data-a=options]')!.addEventListener('click', () => {
-      this.closeMenu();
+      this.closeMenu(true);
       this.showOptions(() => {
         this.clearScreen();
+        if (this.host) this.host.paused = false;
         this.game?.input.lock();
       });
     });
@@ -508,10 +522,10 @@ export class App {
     m.querySelector('[data-a=leave]')!.addEventListener('click', () => this.showTitle());
   }
 
-  private closeMenu() {
+  private closeMenu(keepPaused = false) {
     this.menuEl?.remove();
     this.menuEl = null;
-    if (this.host) this.host.paused = false;
+    if (this.host && !keepPaused) this.host.paused = false;
   }
 
   private showResults() {

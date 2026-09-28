@@ -73,6 +73,8 @@ export class MuxHostNet implements HostNet {
       this.onJoin?.(peer);
     };
     net.onLeave = (peer) => {
+      // the same peer id can exist on several networks; only the current owner's leave counts
+      if (this.owner.get(peer) !== net) return;
       this.onLeave?.(peer);
       this.owner.delete(peer);
     };
