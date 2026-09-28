@@ -26,6 +26,7 @@ Play with up to **6 friends online** (7 players), or on your own against up to *
 | Zoom (scope) | Right click (cycles zoom levels) | LT | ZOOM |
 | Reload | R | X | RELOAD |
 | Scoreboard / menu | Tab / Esc | View / Menu | ≡ / ☰ |
+| Voice chat (online) | **M** mutes your mic, hold **V** for push-to-talk | — | 🎙️ button: tap = mute/unmute, hold = talk (push-to-talk) |
 
 - **Ducking** makes you safe from bullets. Explosions only reach you if a grenade drops into your hole, or if the host turns on *Explosions reach ducked players*.
 - **Stay ducked too long** and the *anti-turtle* timer pops you up for 2 seconds.
@@ -49,6 +50,34 @@ How it works:
 2. Give it to the game in one of two ways:
    - Paste it into **Options → Network** as JSON: `{"urls":"turn:host:3478","username":"u","credential":"p"}`.
    - Or set the Vercel environment variables `VITE_TURN_URLS` (comma-separated), `VITE_TURN_USERNAME` and `VITE_TURN_CREDENTIAL`, then redeploy.
+
+### Voice chat
+Online games have party-style voice chat. Everyone in the room hears everyone at the same volume, in the lobby, in the match and on the results screen.
+
+- **Turn your mic on** with the 🎤 button next to your name in the lobby, or in **Options → Voice chat**. The browser asks for permission the first time. After that, the mic comes back on by itself in your next online game.
+- **Mute yourself** with **M**, the button next to your name, or the 🎙️ icon on the in-match HUD.
+- **Push-to-talk:** switch *Mic mode* in Options, then hold **V** (or hold the 🎙️ icon on touch screens) to talk.
+- **Mute someone** with the 🔊 button next to their name in the lobby, or in **Options → Voice chat → Players**. That list also has a volume slider for each player. Mutes and volumes are remembered by player name.
+- A green dot in the lobby, and the name list on the HUD, show who is talking.
+
+How it works:
+- Voice goes straight from each player to every other player over WebRTC. The host doesn't relay it, and there's no server.
+- Echo cancellation, noise suppression and auto gain are on, but **headphones** still sound best.
+- It needs a secure page. Vercel, `localhost` and `npm run dev:lan` all qualify.
+- Two friends behind very strict networks may not hear each other even though both can reach the host. A TURN relay (see above) fixes that too.
+- Offline games and the `?net=bc` test mode have no voice chat. You can still check your mic level in Options.
+
+### Audio settings (Options → Audio)
+| Slider | Controls |
+|---|---|
+| Master | everything |
+| Guns & explosions | gunfire, charge-ups, beams, rockets, explosions |
+| Other effects | hit markers, shields, medals, power-ups, beeps |
+| Character voices | Pitre Mode voice lines |
+| Announcer | "Double Kill!", "Killing Spree!"… |
+| Voice chat (all players) | every player's mic; each player also has their own slider under *Voice chat → Players* |
+
+**Reset audio to defaults** puts every slider back, including each player's voice volume. Mutes are kept.
 
 ## Host settings
 
@@ -124,7 +153,7 @@ Toggle it in the lobby. Each part can be switched on and off separately.
 | Death | the victim | the **pufferfish** sound |
 | Shooting | the shooter | **"brap brap brappp"** instead of gunfire |
 
-- **Everyone hears everything,** positioned in 3D: loud next to the speaker's hole, quiet across the field. There's a separate *Pitre voices* volume slider in Options.
+- **Everyone hears everything,** positioned in 3D: loud next to the speaker's hole, quiet across the field. The *Character voices* slider in Options controls their volume.
 
 ### Replacing sounds
 

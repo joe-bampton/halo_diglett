@@ -542,7 +542,7 @@ export class Game {
     if (fresh && !infinite && me.clip === 0 && me.rl === 0) audio.play('empty');
     // charge ring & sound (railgun/hyperbeam)
     if ((w.trigger === 'charge' || w.trigger === 'beam') && this.input.s.trigger && ready && me.bu <= s.hostTick) {
-      if (!this.chargeSound) this.chargeSound = audio.play('charge', { gain: 0.6 });
+      if (!this.chargeSound) this.chargeSound = audio.play('charge', { gain: 0.6, bus: 'guns' });
     } else if (this.chargeSound) {
       this.chargeSound.stop();
       this.chargeSound = null;
@@ -800,14 +800,14 @@ export class Game {
     const def = WEAPONS[w];
     if (def.trigger === 'beam') {
       // the continuous hum is driven by the beam flag in updateSpartans
-      audio.play('rail', { pos, gain: 0.6, rate: 0.6 });
+      audio.play('rail', { pos, gain: 0.6, rate: 0.6, bus: 'guns' });
       return;
     }
     if (w === 'flamethrower') {
-      audio.play('rustle', { pos, gain: 0.4, rate: 0.5 });
+      audio.play('rustle', { pos, gain: 0.4, rate: 0.5, bus: 'guns' });
       return;
     }
-    audio.play(id, { pos, gain: slot === this.session.slot ? 0.8 : 1, reverb: w === 'sniper' || w === 'railgun' || w === 'rpg' ? 0.5 : 0.25 });
+    audio.play(id, { pos, gain: slot === this.session.slot ? 0.8 : 1, reverb: w === 'sniper' || w === 'railgun' || w === 'rpg' ? 0.5 : 0.25, bus: 'guns' });
   }
   private beamSound: SoundHandle | null = null;
 
@@ -943,7 +943,7 @@ export class Game {
     this.lights.flash(p.clone().add(new THREE.Vector3(0, 1, 0)), needle ? 0xff60d0 : 0xffa040, big ? 60 : 30, r * 5, 0.35);
     const d = p.distanceTo(this.camera.position);
     this.shake = Math.min(1.2, this.shake + Math.max(0, 1 - d / (r * 6)) * (big ? 1.2 : 0.7));
-    audio.play('explosion', { pos: p, gain: big ? 1.4 : needle ? 0.7 : 1, reverb: 0.6, rate: big ? 0.8 : needle ? 1.4 : 1 });
+    audio.play('explosion', { pos: p, gain: big ? 1.4 : needle ? 0.7 : 1, reverb: 0.6, rate: big ? 0.8 : needle ? 1.4 : 1, bus: 'guns' });
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1071,7 +1071,7 @@ export class Game {
         this.fxAdd.emit({ pos: mz, count: 1, speed: [0.2, 1], life: [0.1, 0.25], size: [0.3, 0.05], color: 0xffffff, color1: WEAPONS[p.weapon].fx.color, jitter: 0.3 });
       }
       if (p.flags & F_BEAM && p.beamLen > 0) {
-        if (!sv.beamSound && !this.brapMode()) sv.beamSound = audio.play('beamLoop', { pos: this.muzzleOf(p.slot), loop: true, gain: 0.8 });
+        if (!sv.beamSound && !this.brapMode()) sv.beamSound = audio.play('beamLoop', { pos: this.muzzleOf(p.slot), loop: true, gain: 0.8, bus: 'guns' });
         this.drawBeam(this.muzzleOf(p.slot), p.yaw, p.pitch, p.beamLen, sv.beamSound, p.slot);
       } else if (sv.beamSound) {
         sv.beamSound.stop();
@@ -1118,7 +1118,7 @@ export class Game {
     // own beam
     const me = s.me;
     if (me && me.bu > s.hostTick && me.al) {
-      if (!this.beamSound && !this.brapMode()) this.beamSound = audio.play('beamLoop', { loop: true, gain: 0.7 });
+      if (!this.beamSound && !this.brapMode()) this.beamSound = audio.play('beamLoop', { loop: true, gain: 0.7, bus: 'guns' });
       const mine = this.me;
       if (mine && mine.beamLen > 0) this.drawBeam(this.muzzleOf(s.slot), this.input.s.yaw, this.input.s.pitch, mine.beamLen, null, s.slot);
     } else if (this.beamSound) {
@@ -1176,7 +1176,7 @@ export class Game {
     const obj = projMesh(WEAPONS[w].fx.tracer);
     if (obj) this.scene.add(obj);
     this.projs.set(id, { pr, obj, weapon: w, local, trailAcc: 0 });
-    if (w === 'rpg') audio.play('rocket', { pos: local ? null : { x: pr.x, y: pr.y, z: pr.z }, gain: 0.5, rate: 1.3 });
+    if (w === 'rpg') audio.play('rocket', { pos: local ? null : { x: pr.x, y: pr.y, z: pr.z }, gain: 0.5, rate: 1.3, bus: 'guns' });
   }
 
   private removeProjectile(id: string) {

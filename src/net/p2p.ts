@@ -1,5 +1,5 @@
 import { CH_CTL, CH_IN, CH_SNAP, type Channel } from './protocol';
-import type { ClientNet, HostNet } from './transport';
+import type { ClientNet, HostNet, VoiceLink, VoicePeerInfo } from './transport';
 
 export const APP_ID = 'halo-diglett-v1';
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -57,7 +57,55 @@ async function openRoom(code: string, strategy: Strategy, onError: (msg: string)
     [CH_IN]: room.makeAction(CH_IN),
     [CH_SNAP]: room.makeAction(CH_SNAP),
   };
-  return { room, actions };
+  // several listeners (game session + voice chat) share the room's single peer callbacks
+  const joins = new Set<(peer: string) => void>();
+  const leaves = new Set<(peer: string) => void>();
+  room.onPeerJoin = (p) => joins.forEach((f) => f(p));
+  room.onPeerLeave = (p) => leaves.forEach((f) => f(p));
+  const voice = roomVoice(room, joins, leaves);
+  return { room, actions, joins, leaves, voice };
+}
+
+/** Voice chat over one Trystero room: every player streams their mic straight to every other player. */
+export function roomVoice(room: Awaited<ReturnType<typeof import('trystero').joinRoom>>, joins: Set<(p: string) => void>, leaves: Set<(p: string) => void>): VoiceLink {
+  const vc = room.makeAction<{ slot: number; mic: boolean }>('vc');
+  let stream: MediaStream | null = null;
+  let slot = -1;
+  const warn = (e: unknown) => console.warn('voice stream failed', e);
+  const info = () => ({ slot, mic: !!stream });
+  const v: VoiceLink = {
+    setStream(s) {
+      if (s === stream) return;
+      if (stream) {
+        try {
+          room.removeStream(stream);
+        } catch {
+          /* peer already gone */
+        }
+      }
+      stream = s;
+      if (s) for (const p of room.addStream(s)) p.catch(warn);
+      if (slot >= 0) vc.send(info()).catch(() => {});
+    },
+    announce(n) {
+      slot = n;
+      vc.send(info()).catch(() => {});
+    },
+    onStream: null,
+    onPeerInfo: null,
+    onPeerGone: null,
+  };
+  joins.add((peer) => {
+    if (stream) for (const p of room.addStream(stream, { target: peer })) p.catch(warn);
+    if (slot >= 0) vc.send(info(), { target: peer }).catch(() => {});
+  });
+  leaves.add((peer) => v.onPeerGone?.(peer));
+  room.onPeerStream = (s, peer) => v.onStream?.(peer, s);
+  vc.onMessage = (d, { peerId }) => {
+    const m = d as Partial<VoicePeerInfo> | null;
+    if (typeof m?.slot === 'number' && m.slot >= 0) v.onPeerInfo?.(peerId, { slot: m.slot, mic: !!m.mic });
+  };
+  return v;
 }
 
 /**
@@ -78,9 +126,10 @@ export async function trysteroHosts(code: string, onError: (msg: string) => void
 }
 
 async function trysteroHost(code: string, strategy: Strategy, onError: (msg: string) => void): Promise<HostNet> {
-  const { room, actions } = await openRoom(code, strategy, onError);
+  const { room, actions, joins, leaves, voice } = await openRoom(code, strategy, onError);
   const net: HostNet = {
     kind: `trystero-${strategy}`,
+    voice,
     send(peer, ch, data) {
       return actions[ch].send(data as never, { target: peer });
     },
@@ -96,8 +145,8 @@ async function trysteroHost(code: string, strategy: Strategy, onError: (msg: str
     },
   };
   for (const ch of [CH_CTL, CH_IN] as Channel[]) actions[ch].onMessage = (data, { peerId }) => net.onMessage?.(peerId, ch, data);
-  room.onPeerJoin = (p) => net.onJoin?.(p);
-  room.onPeerLeave = (p) => net.onLeave?.(p);
+  joins.add((p) => net.onJoin?.(p));
+  leaves.add((p) => net.onLeave?.(p));
   keep(room);
   return net;
 }
@@ -110,8 +159,25 @@ export async function trysteroClient(code: string, onError: (msg: string) => voi
   let host: string | null = null;
   let current: Awaited<ReturnType<typeof openRoom>> | null = null;
   let closed = false;
+  // the voice link follows the client if it falls back from Nostr to BitTorrent
+  let myStream: MediaStream | null = null;
+  let mySlot = -1;
+  const voice: VoiceLink = {
+    setStream(s) {
+      myStream = s;
+      current?.voice.setStream(s);
+    },
+    announce(slot) {
+      mySlot = slot;
+      current?.voice.announce(slot);
+    },
+    onStream: null,
+    onPeerInfo: null,
+    onPeerGone: null,
+  };
   const net: ClientNet = {
     kind: 'trystero',
+    voice,
     send(ch, data) {
       if (!host || !current) return;
       return current.actions[ch].send(data as never, { target: host });
@@ -139,9 +205,14 @@ export async function trysteroClient(code: string, onError: (msg: string) => voi
     r.actions[CH_SNAP].onMessage = (data, { peerId }) => {
       if (peerId === host) net.onMessage?.(CH_SNAP, data);
     };
-    r.room.onPeerLeave = (p) => {
+    r.leaves.add((p) => {
       if (p === host) net.onClose?.('The host left the game.');
-    };
+    });
+    r.voice.onStream = (p, s) => voice.onStream?.(p, s);
+    r.voice.onPeerInfo = (p, i) => voice.onPeerInfo?.(p, i);
+    r.voice.onPeerGone = (p) => voice.onPeerGone?.(p);
+    if (myStream) r.voice.setStream(myStream);
+    if (mySlot >= 0) r.voice.announce(mySlot);
     keep(r.room);
   };
   await attach('nostr');

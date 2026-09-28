@@ -244,3 +244,29 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
   .hud .killfeed { bottom: auto; top: calc(max(14px, env(safe-area-inset-top)) + 60px); }
   .hud .medals { left: 50%; transform: translateX(-50%); bottom: calc(max(16px, env(safe-area-inset-bottom)) + 70px); }
 }
+
+/* ---------------------------------------------------------------------------------------------
+   voice chat
+   --------------------------------------------------------------------------------------------- */
+.hud .vchat { position: absolute; left: max(16px, env(safe-area-inset-left)); top: 34%; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.hud .vchat .mic { pointer-events: auto; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--hud-dim); background: rgba(10, 40, 70, 0.45); font-size: 18px; line-height: 1; cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none; }
+.hud .vchat .mic[data-state="live"] { border-color: #58ff72; box-shadow: 0 0 10px rgba(88, 255, 114, 0.6); }
+.hud .vchat .mic[data-state="muted"] { border-color: var(--warn); opacity: 0.85; }
+.hud .vchat .mic[data-state="ptt"], .hud .vchat .mic[data-state="off"], .hud .vchat .mic[data-state="error"] { opacity: 0.6; }
+.hud .vchat .talkers { display: flex; flex-direction: column; gap: 3px; font-size: 15px; font-weight: 700; text-shadow: 0 0 3px #000, 0 0 6px #000; max-width: 40vw; }
+.hud .vchat .talkers div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.slot .vbtn { min-width: 44px; min-height: 36px; padding: 4px 8px; font-size: 16px; letter-spacing: 0; }
+.slot .vbtn.off { border-color: var(--warn); background: rgba(160, 40, 40, 0.5); }
+.slot .vdot { width: 10px; height: 10px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); flex: none; transition: background 0.1s, box-shadow 0.1s; }
+.slot.talking .vdot, .vplayer.talking .vdot { background: #58ff72; box-shadow: 0 0 8px #58ff72; }
+.vplayers { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.vplayer { display: grid; grid-template-columns: 10px minmax(0, 1fr) minmax(120px, 2fr) 56px auto; align-items: center; gap: 10px; padding: 6px 10px; background: var(--panel-2); border-radius: 4px; border-left: 4px solid var(--c, #888); }
+.vplayer .vdot { width: 10px; height: 10px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); }
+.vplayer .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vplayer input[type=range] { width: 100%; }
+.vplayer output { text-align: right; font-weight: 700; color: var(--hud); }
+.vplayer.muted .nm, .vplayer.muted output { opacity: 0.5; }
+.micmeter { height: 8px; flex: 1; min-width: 80px; background: rgba(255, 255, 255, 0.1); border-radius: 4px; overflow: hidden; }
+.micmeter > div { height: 100%; width: 100%; background: linear-gradient(90deg, #58ff72, #e8e23a 70%, #ff4a4a); transform-origin: left; transform: scaleX(0); transition: transform 0.08s linear; }
+@media (max-width: 560px) { .vplayer { grid-template-columns: 10px minmax(0, 1fr) 48px auto; } .vplayer input[type=range] { grid-column: 1 / -1; grid-row: 2; } }

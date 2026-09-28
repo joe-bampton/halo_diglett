@@ -1,8 +1,30 @@
 import type { Channel } from './protocol';
 
+/**
+ * Voice chat side-channel. Mic audio goes directly between players (WebRTC full mesh), not
+ * through the host, so it lives next to the game channels rather than in the host/client protocol.
+ */
+export interface VoicePeerInfo {
+  slot: number;
+  /** false once that player turns their microphone off */
+  mic: boolean;
+}
+
+export interface VoiceLink {
+  /** Publish my mic to every current and future peer (null stops publishing). */
+  setStream(stream: MediaStream | null): void;
+  /** Tell peers which lobby slot my peer id belongs to (re-sent to late joiners and on mic changes). */
+  announce(slot: number): void;
+  onStream: ((peer: string, stream: MediaStream) => void) | null;
+  onPeerInfo: ((peer: string, info: VoicePeerInfo) => void) | null;
+  onPeerGone: ((peer: string) => void) | null;
+}
+
 /** Host side of the network: many peers. */
 export interface HostNet {
   readonly kind: string;
+  /** Only set on transports that can carry audio (WebRTC). */
+  voice?: VoiceLink;
   send(peer: string, ch: Channel, data: unknown): Promise<void> | void;
   broadcast(ch: Channel, data: unknown): void;
   onMessage: ((peer: string, ch: Channel, data: unknown) => void) | null;
@@ -18,7 +40,31 @@ export interface ClientNet {
   send(ch: Channel, data: unknown): Promise<void> | void;
   onMessage: ((ch: Channel, data: unknown) => void) | null;
   onClose: ((reason: string) => void) | null;
+  voice?: VoiceLink;
   close(): void;
+}
+
+/** One VoiceLink over several networks (the host listens on Nostr and BitTorrent at once). */
+export function combineVoice(links: VoiceLink[]): VoiceLink | undefined {
+  if (!links.length) return undefined;
+  if (links.length === 1) return links[0];
+  const v: VoiceLink = {
+    setStream(stream) {
+      for (const l of links) l.setStream(stream);
+    },
+    announce(slot) {
+      for (const l of links) l.announce(slot);
+    },
+    onStream: null,
+    onPeerInfo: null,
+    onPeerGone: null,
+  };
+  for (const l of links) {
+    l.onStream = (peer, stream) => v.onStream?.(peer, stream);
+    l.onPeerInfo = (peer, info) => v.onPeerInfo?.(peer, info);
+    l.onPeerGone = (peer) => v.onPeerGone?.(peer);
+  }
+  return v;
 }
 
 /**
@@ -61,6 +107,13 @@ export class MuxHostNet implements HostNet {
   onLeave: HostNet['onLeave'] = null;
   private nets: HostNet[] = [];
   private owner = new Map<string, HostNet>();
+
+  /** Call after all networks were added. */
+  get voice(): VoiceLink | undefined {
+    this.voiceLink ??= combineVoice(this.nets.flatMap((n) => (n.voice ? [n.voice] : [])));
+    return this.voiceLink;
+  }
+  private voiceLink: VoiceLink | undefined;
 
   add(net: HostNet) {
     this.nets.push(net);

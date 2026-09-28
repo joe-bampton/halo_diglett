@@ -1,4 +1,8 @@
+import { DEFAULT_VOLUMES, sanitizeVolumes, type Volumes } from './levels';
 import { SFX, type SfxId } from './synth';
+
+export type { Volumes } from './levels';
+type Bus = 'guns' | 'sfx' | 'voice' | 'announcer';
 
 export interface Vec {
   x: number;
@@ -18,7 +22,7 @@ export interface PlayOpts {
   reverb?: number;
   delay?: number;
   loop?: boolean;
-  bus?: 'sfx' | 'voice' | 'announcer';
+  bus?: Bus;
 }
 
 export interface SoundHandle {
@@ -30,17 +34,10 @@ export interface SoundHandle {
 
 const NOOP: SoundHandle = { stop() {}, setPos() {}, duration: 0, ended: true };
 
-export interface Volumes {
-  master: number;
-  sfx: number;
-  voice: number;
-  announcer: number;
-}
-
 export class AudioEngine {
   ctx: AudioContext | null = null;
   private master!: GainNode;
-  private buses!: Record<'sfx' | 'voice' | 'announcer', GainNode>;
+  private buses!: Record<Bus, GainNode>;
   private reverb!: ConvolverNode;
   private reverbIn!: GainNode;
   private buffers = new Map<SfxId, AudioBuffer>();
@@ -51,12 +48,13 @@ export class AudioEngine {
   private wanted = new Set<string>();
   private annBusyUntil = 0;
   hrtf = true;
-  volumes: Volumes = { master: 0.8, sfx: 0.8, voice: 0.9, announcer: 0.9 };
+  volumes: Volumes = { ...DEFAULT_VOLUMES };
+  /** Listeners notified after any level changes (voice chat re-applies its element volumes). */
+  readonly onVolumes = new Set<(v: Volumes) => void>();
 
   constructor() {
     try {
-      const v = JSON.parse(localStorage.getItem('hd.volumes') ?? 'null');
-      if (v && typeof v === 'object') this.volumes = { ...this.volumes, ...v };
+      this.volumes = sanitizeVolumes(JSON.parse(localStorage.getItem('hd.volumes') ?? 'null'));
     } catch {
       /* ignore */
     }
@@ -82,7 +80,7 @@ export class AudioEngine {
     comp.threshold.value = -10;
     comp.ratio.value = 4;
     this.master.connect(comp).connect(ctx.destination);
-    this.buses = { sfx: ctx.createGain(), voice: ctx.createGain(), announcer: ctx.createGain() };
+    this.buses = { guns: ctx.createGain(), sfx: ctx.createGain(), voice: ctx.createGain(), announcer: ctx.createGain() };
     for (const b of Object.values(this.buses)) b.connect(this.master);
     this.reverb = ctx.createConvolver();
     this.reverb.buffer = this.impulse(1.6);
@@ -101,21 +99,24 @@ export class AudioEngine {
   }
 
   setVolumes(v: Partial<Volumes>) {
-    this.volumes = { ...this.volumes, ...v };
+    this.volumes = sanitizeVolumes({ ...this.volumes, ...v });
     try {
       localStorage.setItem('hd.volumes', JSON.stringify(this.volumes));
     } catch {
       /* ignore */
     }
     this.applyVolumes();
+    for (const f of this.onVolumes) f(this.volumes);
+  }
+
+  resetVolumes() {
+    this.setVolumes(DEFAULT_VOLUMES);
   }
 
   private applyVolumes() {
     if (!this.ctx) return;
     this.master.gain.value = this.volumes.master;
-    this.buses.sfx.gain.value = this.volumes.sfx;
-    this.buses.voice.gain.value = this.volumes.voice;
-    this.buses.announcer.gain.value = this.volumes.announcer;
+    for (const b of Object.keys(this.buses) as Bus[]) this.buses[b].gain.value = this.volumes[b];
   }
 
   private impulse(sec: number): AudioBuffer {

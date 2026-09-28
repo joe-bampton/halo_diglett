@@ -1,11 +1,13 @@
 import { audio } from '../audio/audio';
+import { VOLUME_META } from '../audio/levels';
+import { voice, type MicState } from '../audio/voice';
 import { BOT_PROFILES } from '../bots/brain';
 import { loadOptions, saveOptions, type Options } from '../input/input';
 import { ClientSession } from '../net/client';
 import { HostSession, PLAYER_COLORS, cleanName } from '../net/host';
 import { bcClient, bcHost, cleanCode, makeRoomCode, trysteroClient, trysteroHosts } from '../net/p2p';
 import type { LobbyState } from '../net/protocol';
-import { MuxHostNet, loopbackPair, type ClientNet, type HostNet } from '../net/transport';
+import { MuxHostNet, loopbackPair, type ClientNet, type HostNet, type VoiceLink } from '../net/transport';
 import { Backdrop } from '../render/backdrop';
 import { Game } from '../render/game';
 import { QUALITY, detectQuality, type QualityLevel } from '../render/quality';
@@ -63,6 +65,29 @@ function loadSettings(): Settings {
 
 const params = new URLSearchParams(location.search);
 
+/** Label for my microphone button. */
+function micLabel(st: MicState): string {
+  switch (st) {
+    case 'off':
+    case 'error':
+      return '🎤 Enable mic';
+    case 'starting':
+      return '🎤 …';
+    case 'live':
+      return '🎙️ Mic on';
+    case 'muted':
+      return '🔇 Muted';
+    case 'ptt':
+      return '🎙️ Hold V';
+  }
+}
+
+async function micToggle() {
+  if (!voice.micStream) {
+    if (!(await voice.enableMic())) toast(voice.micError, 5000);
+  } else voice.toggleSelfMute();
+}
+
 export class App {
   host: HostSession | null = null;
   session: ClientSession | null = null;
@@ -79,16 +104,43 @@ export class App {
   private lastLobbyKey = '';
   private backdrop: Backdrop | null = null;
   private attempt = 0;
+  /** voice-chat listeners for the current screen and for the in-match HUD */
+  private screenVoiceUnsub: (() => void) | null = null;
+  private hudVoiceUnsub: (() => void) | null = null;
 
   constructor(private root: HTMLElement) {
     this.gameLayer = document.createElement('div');
     this.gameLayer.style.cssText = 'position:absolute;inset:0';
     root.appendChild(this.gameLayer);
-    const unlock = () => audio.unlock();
+    const unlock = () => {
+      audio.unlock();
+      voice.resume();
+    };
     window.addEventListener('pointerdown', unlock, { capture: true });
     window.addEventListener('keydown', unlock, { capture: true });
+    window.addEventListener('keydown', (e) => this.voiceKey(e, true));
+    window.addEventListener('keyup', (e) => this.voiceKey(e, false));
+    window.addEventListener('blur', () => voice.setPtt(false));
     window.addEventListener('hashchange', () => this.route());
     document.addEventListener('visibilitychange', () => this.onVisibility());
+  }
+
+  /** M toggles self-mute, V is push-to-talk — in the lobby and in matches. */
+  private voiceKey(e: KeyboardEvent, down: boolean) {
+    if (e.code === 'KeyV' && !down) return voice.setPtt(false);
+    const tag = (e.target as HTMLElement | null)?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (e.code === 'KeyV' && voice.prefs.mode === 'ptt') voice.setPtt(true);
+    else if (e.code === 'KeyM' && down && !e.repeat && voice.micStream) {
+      voice.toggleSelfMute();
+      toast(voice.prefs.selfMuted ? 'Microphone muted' : 'Microphone on', 1200);
+    }
+  }
+
+  private watchVoice(f: (() => void) | null) {
+    this.screenVoiceUnsub?.();
+    this.screenVoiceUnsub = f ? voice.subscribe(f) : null;
+    f?.();
   }
 
   // ------------------------------------------------------------------------------------------
@@ -121,6 +173,7 @@ export class App {
   }
 
   private setScreen(html: string, cls = ''): HTMLElement {
+    this.watchVoice(null);
     this.ensureBackdrop();
     this.screen?.remove();
     const s = document.createElement('div');
@@ -132,6 +185,7 @@ export class App {
   }
 
   private clearScreen() {
+    this.watchVoice(null);
     this.screen?.remove();
     this.screen = null;
   }
@@ -217,7 +271,7 @@ export class App {
     for (const n of nets) mux.add(n);
     this.host = new HostSession(mux, code, true, loadSettings());
     this.host.onChange = () => this.persistSettings();
-    this.attachClient(cn);
+    this.attachClient(cn, mux.voice);
     history.replaceState(null, '', `${location.pathname}${location.search}#/host/${code}`);
     this.startHostLoop();
   }
@@ -241,7 +295,7 @@ export class App {
       return;
     }
     history.replaceState(null, '', `${location.pathname}${location.search}#/join/${code}`);
-    this.attachClient(net);
+    this.attachClient(net, net.voice);
     const s = this.session!;
     setTimeout(() => {
       if (this.session === s && s.state === 'connecting') {
@@ -255,10 +309,12 @@ export class App {
     }, 20000);
   }
 
-  private attachClient(net: ClientNet) {
+  private attachClient(net: ClientNet, voiceLink?: VoiceLink) {
     const s = new ClientSession(net, { name: this.profile.name, color: this.profile.color, token: token() });
     this.session = s;
+    if (voiceLink) voice.attach(voiceLink, s);
     s.onLobby = () => {
+      voice.sync();
       if (s.state === 'lobby') this.showLobby();
     };
     s.onStart = () => this.startGame();
@@ -309,6 +365,7 @@ export class App {
     this.attempt++;
     this.stopGame();
     this.closeMenu();
+    voice.detach();
     if (this.session && this.session.state !== 'closed') {
       const s = this.session;
       this.session = null;
@@ -362,7 +419,11 @@ export class App {
               : `<span class="tag">${BOT_PROFILES[x.bot ?? 'normal'].label}</span>`
             : '';
         const rm = isHost && !x.isHost ? `<button class="btn small danger" data-rm="${x.slot}" title="Remove">✕</button>` : '';
-        return `<div class="slot" style="--c:${hex(x.color)}"><span class="nm">${esc(x.name)}</span>${tags}${diff}${rm}</div>`;
+        const vc =
+          voice.available && x.kind === 'human'
+            ? `<span class="vdot"></span>${x.slot === s.slot ? '<button class="btn small vbtn" data-vme></button>' : `<button class="btn small vbtn" data-vmute="${x.slot}"></button>`}`
+            : '';
+        return `<div class="slot" data-vslot="${x.slot}" style="--c:${hex(x.color)}">${vc}<span class="nm">${esc(x.name)}</span>${tags}${diff}${rm}</div>`;
       })
       .join('');
     const empty = lobby.online ? Math.max(0, MAX_HUMANS - humans.length) : 0;
@@ -375,6 +436,7 @@ export class App {
       <div class="lobby">
         <div style="display:flex;flex-direction:column;gap:16px">
           <div class="card"><h3>Spartans (${lobby.slots.length})</h3><div class="slots">${slotHtml}${lobby.online && empty ? `<div class="slot empty"><span class="nm">${empty} open slot${empty > 1 ? 's' : ''} — waiting for friends…</span></div>` : ''}</div>
+            ${voice.available ? `<div class="note" style="margin-top:8px">🎙️ Voice chat: <b>M</b> mutes your mic${voice.prefs.mode === 'ptt' ? ', hold <b>V</b> to talk' : ''} · volumes in Options</div>` : ''}
             ${isHost ? `<div class="row" style="margin-top:10px"><select class="newdiff">${Object.entries(BOT_PROFILES).map(([k, p]) => `<option value="${k}" ${k === 'normal' ? 'selected' : ''}>${p.label}</option>`).join('')}</select><button class="btn small addbot" ${bots.length >= MAX_BOTS ? 'disabled' : ''}>+ Add bot</button><span class="note">${bots.length}/${MAX_BOTS} bots</span></div>` : ''}
           </div>
           <div class="card"><h3>Your Spartan</h3>
@@ -427,6 +489,37 @@ export class App {
       this.host.startMatch();
     });
     scr.querySelector('.leave')!.addEventListener('click', () => this.showTitle());
+    scr.querySelector('[data-vme]')?.addEventListener('click', () => void micToggle());
+    scr.querySelectorAll<HTMLButtonElement>('[data-vmute]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const name = s.lobby?.slots.find((x) => x.slot === Number(b.dataset.vmute))?.name;
+        if (name) voice.togglePeerMute(name);
+      }),
+    );
+    if (voice.available) this.watchVoice(() => this.refreshLobbyVoice(scr));
+  }
+
+  /** Update mute buttons and talking indicators in place (no re-render). */
+  private refreshLobbyVoice(scr: HTMLElement) {
+    const players = new Map(voice.players().map((p) => [p.slot, p]));
+    const talking = voice.speakingSlots();
+    scr.querySelectorAll<HTMLElement>('[data-vslot]').forEach((el) => el.classList.toggle('talking', talking.has(Number(el.dataset.vslot))));
+    scr.querySelectorAll<HTMLButtonElement>('[data-vmute]').forEach((b) => {
+      const p = players.get(Number(b.dataset.vmute));
+      const muted = !!p?.muted;
+      const txt = muted ? '🔇' : p?.mic ? '🔊' : '🔈';
+      if (b.textContent !== txt) b.textContent = txt;
+      b.classList.toggle('off', muted);
+      b.title = `${muted ? 'Unmute' : 'Mute'} ${p?.name ?? ''}${p && !p.mic ? ' (mic off)' : ''}`;
+    });
+    const me = scr.querySelector<HTMLButtonElement>('[data-vme]');
+    if (me) {
+      const st = voice.micState;
+      const txt = micLabel(st);
+      if (me.textContent !== txt) me.textContent = txt;
+      me.classList.toggle('off', st === 'muted');
+      me.title = st === 'off' || st === 'error' ? 'Turn on your microphone' : 'Mute / unmute your microphone (M)';
+    }
   }
 
   // ------------------------------------------------------------------------------------------
@@ -446,10 +539,35 @@ export class App {
     if (this.host && params.has('timescale')) this.host.timescale = Number(params.get('timescale')) || 1;
     this.game.start();
     this.game.input.lock();
+    this.watchHudVoice(this.game);
     void this.requestWakeLock();
   }
 
+  private watchHudVoice(game: Game) {
+    const hud = game.hud;
+    const upd = () => {
+      if (!voice.available) return hud.voice(null, []);
+      const slots = this.session?.lobby?.slots ?? [];
+      const talkers = [...voice.speakingSlots()].flatMap((sl) => slots.filter((x) => x.slot === sl));
+      hud.voice({ state: voice.micState, label: micLabel(voice.micState) }, talkers);
+    };
+    this.hudVoiceUnsub?.();
+    this.hudVoiceUnsub = voice.subscribe(upd);
+    upd();
+    // tap the mic icon: turn on / (un)mute; in push-to-talk mode hold it to talk
+    const btn = hud.root.querySelector<HTMLElement>('.vchat .mic')!;
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (voice.micStream && voice.prefs.mode === 'ptt' && !voice.prefs.selfMuted) voice.setPtt(true);
+      else void micToggle();
+    });
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) btn.addEventListener(ev, () => voice.setPtt(false));
+  }
+
   private stopGame() {
+    this.hudVoiceUnsub?.();
+    this.hudVoiceUnsub = null;
     if (this.game) {
       this.game.destroy();
       this.game = null;
@@ -571,8 +689,8 @@ export class App {
     } catch {
       /* ignore */
     }
-    const slider = (key: string, label: string, min: number, max: number, step: number, val: number) =>
-      `<div class="field"><label>${label}</label><div class="val"><input type="range" data-k="${key}" min="${min}" max="${max}" step="${step}" value="${val}"><output>${val}</output></div></div>`;
+    const slider = (key: string, label: string, min: number, max: number, step: number, val: number, help = '') =>
+      `<div class="field"><label>${label}</label><div class="val"><input type="range" data-k="${key}" min="${min}" max="${max}" step="${step}" value="${val}"><output>${val}</output></div>${help ? `<div class="help">${help}</div>` : ''}</div>`;
     const scr = this.setScreen(`
       <div class="lobby-head" style="width:min(720px,100%)"><h2>Options</h2><button class="btn small back">Done</button></div>
       <div class="card" style="width:min(720px,100%);margin-top:12px">
@@ -586,10 +704,10 @@ export class App {
         <div class="field"><label>Quality</label><select data-k="quality">${['auto', 'low', 'medium', 'high'].map((q) => `<option value="${q}" ${opts.quality === q ? 'selected' : ''}>${q}</option>`).join('')}</select><div class="help">Takes effect next match. Auto picks Low on phones.</div></div>
         ${slider('fov', 'Field of view', 60, 100, 1, opts.fov)}
         <h3 style="margin-top:14px">Audio</h3>
-        ${slider('v.master', 'Master', 0, 1, 0.05, v.master)}
-        ${slider('v.sfx', 'Effects', 0, 1, 0.05, v.sfx)}
-        ${slider('v.voice', 'Pitre voices', 0, 1.5, 0.05, v.voice)}
-        ${slider('v.announcer', 'Announcer', 0, 1, 0.05, v.announcer)}
+        ${VOLUME_META.map((m) => slider(`v.${m.key}`, m.label, 0, m.max, 0.05, v[m.key], m.help)).join('')}
+        <div class="row" style="margin-top:8px"><button class="btn small reset-audio">Reset audio to defaults</button></div>
+        <h3 style="margin-top:14px">Voice chat</h3>
+        <div class="voice-root"></div>
         <h3 style="margin-top:14px">Network (advanced)</h3>
         <div class="note">If a friend can’t connect, add a free TURN relay (e.g. Cloudflare or Open Relay). Paste JSON like <code>{"urls":"turn:host:3478","username":"u","credential":"p"}</code></div>
         <textarea class="turn" style="width:100%;min-height:70px;margin-top:6px;background:#0d1b2a;color:#eaf6ff;border:1px solid var(--line);border-radius:4px;font-family:monospace">${esc(turn)}</textarea>
@@ -638,9 +756,71 @@ export class App {
         toast('That is not valid JSON');
       }
     });
+    scr.querySelector('.reset-audio')!.addEventListener('click', () => {
+      audio.resetVolumes();
+      voice.resetPeerVolumes();
+      const top = scr.scrollTop;
+      this.showOptions(back);
+      if (this.screen) this.screen.scrollTop = top;
+      toast('Audio levels reset to defaults');
+    });
+    this.renderVoiceOptions(scr.querySelector<HTMLElement>('.voice-root')!);
     scr.querySelector('.back')!.addEventListener('click', () => {
       save();
+      // a mic check outside an online game shouldn't keep recording
+      if (!voice.available) voice.stopMic(true);
       back();
+    });
+  }
+
+  /** Options → Voice chat: my mic, mic mode, and per-player volume/mute. */
+  private renderVoiceOptions(root: HTMLElement) {
+    let key = '';
+    const build = (players: ReturnType<typeof voice.players>) => {
+      const st = voice.micState;
+      const on = !!voice.micStream;
+      const rows = players
+        .map(
+          (p, i) => `<div class="vplayer ${p.muted ? 'muted' : ''}" data-vslot="${p.slot}" style="--c:${hex(p.color)}">
+            <span class="vdot"></span><span class="nm">${esc(p.name)}${p.mic ? '' : ' <span class="note">(mic off)</span>'}</span>
+            <input type="range" min="0" max="1" step="0.05" value="${p.vol}" data-vi="${i}" aria-label="${esc(p.name)} volume"><output>${Math.round(p.vol * 100)}%</output>
+            <button class="btn small vbtn ${p.muted ? 'off' : ''}" data-mi="${i}" title="${p.muted ? 'Unmute' : 'Mute'} ${esc(p.name)}">${p.muted ? '🔇' : '🔊'}</button></div>`,
+        )
+        .join('');
+      root.innerHTML = `
+        <div class="field"><label>Microphone</label><div class="val"><button class="btn small mic-on">${on ? 'Turn mic off' : st === 'starting' ? 'Starting…' : 'Enable microphone'}</button><div class="micmeter" title="Mic level"><div></div></div></div>
+          ${voice.micError && !on ? `<div class="help err">${esc(voice.micError)}</div>` : ''}
+          <div class="help">Talk to the other players in online games. Your voice goes straight to them (peer-to-peer). Headphones stop echo.</div></div>
+        <div class="field"><label>Mic mode</label><select class="vmode"><option value="open" ${voice.prefs.mode === 'open' ? 'selected' : ''}>Open mic (M to mute)</option><option value="ptt" ${voice.prefs.mode === 'ptt' ? 'selected' : ''}>Push-to-talk (hold V)</option></select></div>
+        <div class="field"><label>Mute myself</label><div class="val"><input type="checkbox" class="vself" ${voice.prefs.selfMuted ? 'checked' : ''}></div></div>
+        <div class="field"><label>Players</label></div>
+        ${voice.available ? (rows ? `<div class="vplayers">${rows}</div>` : '<div class="note">No other players in the lobby yet.</div>') : '<div class="note vc-offline">Voice chat works in online games. Host or join one to hear other players (you can check your mic here).</div>'}`;
+      root.querySelector('.mic-on')!.addEventListener('click', () => {
+        if (voice.micStream) voice.stopMic();
+        else void voice.enableMic();
+      });
+      root.querySelector<HTMLSelectElement>('.vmode')!.addEventListener('change', (e) => voice.setMode((e.target as HTMLSelectElement).value === 'ptt' ? 'ptt' : 'open'));
+      root.querySelector<HTMLInputElement>('.vself')!.addEventListener('change', (e) => voice.setSelfMuted((e.target as HTMLInputElement).checked));
+      root.querySelectorAll<HTMLInputElement>('[data-vi]').forEach((inp) =>
+        inp.addEventListener('input', () => {
+          inp.nextElementSibling!.textContent = `${Math.round(Number(inp.value) * 100)}%`;
+          voice.setPeerVolume(players[Number(inp.dataset.vi)]!.name, Number(inp.value));
+        }),
+      );
+      root.querySelectorAll<HTMLButtonElement>('[data-mi]').forEach((b) => b.addEventListener('click', () => voice.togglePeerMute(players[Number(b.dataset.mi)]!.name)));
+    };
+    this.watchVoice(() => {
+      const players = voice.players();
+      // rebuild only when the structure changes, so dragging a slider is never interrupted
+      const k = JSON.stringify([voice.micState, voice.micError, voice.prefs.mode, voice.prefs.selfMuted, voice.available, players.map((p) => [p.slot, p.name, p.color, p.mic, p.muted])]);
+      if (k !== key) {
+        key = k;
+        build(players);
+      }
+      const talking = voice.speakingSlots();
+      root.querySelectorAll<HTMLElement>('[data-vslot]').forEach((el) => el.classList.toggle('talking', talking.has(Number(el.dataset.vslot))));
+      const meter = root.querySelector<HTMLElement>('.micmeter > div');
+      if (meter) meter.style.transform = `scaleX(${voice.transmitting ? Math.min(1, voice.micLevel * 5) : 0})`;
     });
   }
 

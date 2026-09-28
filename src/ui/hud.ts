@@ -66,6 +66,7 @@ export class Hud {
       <div class="cathat">🎩 YOU ARE THE CAT IN THE HAT</div>
       <div class="topleft"><div class="timer"></div><div class="mode"></div></div>
       <div class="conn"></div>
+      <div class="vchat"><button class="mic" type="button" aria-label="Microphone"></button><div class="talkers"></div></div>
       <div class="reticle"><svg viewBox="0 0 80 80"></svg></div>
       <svg class="charge" viewBox="0 0 64 64"><circle cx="32" cy="32" r="26" fill="none" stroke="rgba(159,231,255,0.9)" stroke-width="3" stroke-dasharray="163.4" stroke-dashoffset="163.4" transform="rotate(-90 32 32)"/></svg>
       <svg class="hitmark" viewBox="0 0 36 36"><path d="M6 6l8 8M30 6l-8 8M6 30l8-8M30 30l-8-8" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>
@@ -78,9 +79,24 @@ export class Hud {
       <div class="ammo"><div class="wname"></div><div class="count"></div><div class="pips"></div></div>`;
     parent.appendChild(r);
     this.root = r;
-    for (const k of ['vignette', 'flash', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'score', 'ammo', 'wname', 'count', 'pips']) {
+    for (const k of ['vignette', 'flash', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
       this.el[k] = r.querySelector(`.${k}`) as HTMLElement;
     }
+  }
+
+  /** Voice chat widget: my mic state + who is talking right now. `mic: null` hides it (offline). */
+  voice(mic: { state: string; label: string } | null, talkers: { name: string; color: number }[]) {
+    const v = this.el.vchat!;
+    v.style.display = mic ? '' : 'none';
+    if (!mic) return;
+    const btn = v.querySelector('.mic') as HTMLElement;
+    btn.dataset.state = mic.state;
+    btn.title = mic.label;
+    const icon = mic.state === 'live' ? '🎙️' : mic.state === 'off' || mic.state === 'error' ? '🎤' : '🔇';
+    if (btn.textContent !== icon) btn.textContent = icon;
+    const html = talkers.map((t) => `<div style="color:${hex(t.color)}">🔊 ${esc(t.name)}</div>`).join('');
+    const tk = v.querySelector('.talkers') as HTMLElement;
+    if (tk.innerHTML !== html) tk.innerHTML = html;
   }
 
   set visible(v: boolean) {

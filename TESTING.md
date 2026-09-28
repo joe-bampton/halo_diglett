@@ -87,7 +87,7 @@
 - [ ] Dying: pufferfish sound (placeholder until you drop in the real clip)
 - [ ] Gunfire becomes "brap brap brappp"
 - [ ] Voices are quieter from far-away holes and louder from close ones
-- [ ] The *Pitre voices* slider in Options changes their volume
+- [ ] The *Character voices* slider in Options changes their volume
 
 **Controller** (Xbox/PlayStation, plugged in or Bluetooth)
 - [ ] Right stick aims, RT fires, LT zooms
@@ -105,9 +105,24 @@
 - [ ] A friend refreshes mid-match and comes back into the same slot with the same score
 - [ ] Closing the host tab shows "The host left the game" to friends
 
+**Voice chat** (real peer-to-peer only, not `?net=bc`; wear headphones or use two machines)
+- [ ] Lobby → 🎤 *Enable mic* next to your name: the browser asks for permission, then the button reads *Mic on*
+- [ ] Both players enable the mic and hear each other; the speaker's dot turns green
+- [ ] **M** (or the button) mutes you: the other player stops hearing you
+- [ ] 🔊 next to a friend's name mutes them (🔇); click again to unmute
+- [ ] Options → Voice chat → Players: the per-player slider changes only that friend's volume
+- [ ] Mic mode *Push-to-talk*: silent until you hold **V**
+- [ ] In a match, the HUD shows your mic icon and the names of people talking; on a phone, tapping the icon mutes and holding it talks (push-to-talk)
+- [ ] Leave the game: the browser's recording indicator goes away
+
+**Audio levels** (Options → Audio)
+- [ ] *Guns & explosions* only changes gunfire and explosions; *Other effects* only changes hit markers, medals and similar
+- [ ] *Character voices*, *Announcer* and *Voice chat* each change only their own sounds
+- [ ] **Reset audio to defaults** puts every slider back (Master 0.8, Guns 0.8, Effects 0.8, Voices 0.9, Announcer 0.9, Voice chat 1) and every player's volume back to 100%
+
 ## 5. Automated tests
 ```bash
-npm test                          # unit tests: rules, bots, netcode, Pitre voice logic
+npm test                          # unit tests: rules, bots, netcode, Pitre voice logic, volumes, voice chat
 npm run build && npm run e2e      # browser tests (first run: npx playwright install chromium)
 ```
 
