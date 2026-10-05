@@ -25,13 +25,25 @@ Play with up to **6 friends online** (7 players), or on your own against up to *
 | Shoot | Left click | RT | FIRE |
 | Zoom (scope) | Right click (cycles zoom levels) | LT | ZOOM |
 | Reload | R | X | RELOAD |
+| Spring Jump (when you have one) | double-tap **Space** | double-tap **A** | double-tap **STAND**, or the ⇈ button |
 | Scoreboard / menu | Tab / Esc | View / Menu | ≡ / ☰ |
 | Voice chat (online) | **M** mutes your mic, hold **V** for push-to-talk | — | 🎙️ button: tap = mute/unmute, hold = talk (push-to-talk) |
+
+- **Dead?** You spectate until you press **Jump** (Space / Ⓐ / RESPAWN). The respawn timer is the minimum wait. While you watch:
+
+  | | Mouse + keyboard | Controller | Touch |
+  |---|---|---|---|
+  | Next / previous player | **E** / **Q**, click / right-click, → / ← | RB / LB | ◀ ▶ |
+  | 1st ↔ 3rd person | **F** | Y | 👁 |
+  | Look around (3rd person orbit) | mouse | right stick | drag |
+  | Zoom in / out | mouse wheel | RT / LT | pinch |
 
 - **Ducking** makes you safe from bullets. Explosions only reach you if a grenade drops into your hole, or if the host turns on *Explosions reach ducked players*.
 - **Stay ducked too long** and the *anti-turtle* timer pops you up for 2 seconds.
 - **Headshots** do the most damage. With the sniper and crossbow, any headshot kills.
-- **Power-up bubbles** are capture-ball-style orbs that drift over the field. Shoot one to claim what's inside: flamethrower, minigun, overshield, invincibility, active camo, damage boost, homing rounds, X-ray vision, big heads, orbital strike or quick hands.
+- **Power-up bubbles** are capture-ball-style orbs that drift over the field. Shoot one to claim what's inside: flamethrower, minigun, overshield, invincibility, active camo, damage boost, homing rounds, X-ray vision, big heads, orbital strike, quick hands, and two new ones:
+  - **Spring Jump ⇈**: kept until you use it (or die). Double-tap Jump and a giant spring catapults you **20 m** straight up. You get a great view down into everyone's holes (you can shoot down into them), but you can't duck or hide up there, and you land back in your hole.
+  - **Gerry Sauce 💦**: a one-shot **Super Soaker**. One squirt lobs light-white custard over the whole field. A second later everyone else is covered for 5 seconds: stuck standing up, visible (camo off) and slow to aim, speeding back up as the custard slides off their screen. Easy kills for whoever squirted it.
 - **Underdog camo** gives a struggling player active camo when they respawn: 5+ kills behind the leader, or 3 deaths in a row.
 
 ### Online play (peer-to-peer, no server)
@@ -87,6 +99,10 @@ Every setting is in the lobby. The **presets** are Classic Diglett, Rocket Whack
 - Score limit (0 = unlimited, up to 200)
 - Time limit
 
+**Map**
+- Number of holes: *Auto* (today's field) or 4–32
+- Distance between holes (6–40 m, at least this far apart). The field grows to fit, up to 300 m across. The lobby shows a minimap of the result.
+
 **Weapons**
 - Weapon mode: everyone gets the same weapon, players choose, random every life, or **Gun Game** (each kill upgrades your weapon)
 - Available weapons:
@@ -115,13 +131,14 @@ Every setting is in the lobby. The **presets** are Classic Diglett, Rocket Whack
 
 **Respawn**
 - Respawn time
+- Respawn: *When you press Jump* (default; spectate until then) or *Automatically*. Bots always respawn automatically.
 - Same hole or random hole
 - Anti-turtle timer
 - Underdog camo, with its kills-behind and death-streak thresholds
 
 **Power-ups**
 - Bubble rate: off, rare, normal, lots or CHAOS
-- Which power-ups can appear
+- Which power-ups can appear (with **All / None** buttons; none = no bubbles). Power-ups added in an update start switched on, even in saved settings.
 - Duration multiplier
 
 **Pitre Mode** (see below)
@@ -137,7 +154,13 @@ Every setting is in the lobby. The **presets** are Classic Diglett, Rocket Whack
 - Aim assist for controller/touch
 - Lag compensation window
 
-**Bots:** up to 6, with difficulty set per bot: Recruit, Normal, Heroic or Legendary.
+**Bots:** up to 6, with difficulty set per bot:
+
+| Tier | Plays like |
+|---|---|
+| **Jerry** | Never shoots anyone. Pops up, sprays the sky and yells *"Suppressing fire!"* |
+| Recruit, Normal, Heroic, Legendary | from slow and wobbly to sharp |
+| **Top/Over** | Hacks: knows where you are through walls, snaps on instantly, and any headshot it lands kills (overshield and invincibility still protect you). Covered in Gerry Sauce, even it slows down. |
 
 ## 🎩 Pitre Mode
 
@@ -153,7 +176,11 @@ Toggle it in the lobby. Each part can be switched on and off separately.
 | Death | the victim | the **pufferfish** sound |
 | Shooting | the shooter | **"brap brap brappp"** instead of gunfire |
 
-- **Everyone hears everything,** positioned in 3D: loud next to the speaker's hole, quiet across the field. The *Character voices* slider in Options controls their volume.
+| A bullet passes **very** close (or you duck under it just in time) | the one it missed | **"Bitch, please!"** |
+| Your 2nd hit in a row without a kill | the shooter | **"How many bullets?!"** (instead of "oh look, a pussy") |
+
+- **Power-ups come in energy drink cans** (black can, silver ends, glowing claw scratches in the power-up's colour) instead of capture balls. They burst into shards and fizz when shot.
+- **Everyone hears everything,** positioned in 3D: loud next to the speaker's hole, quiet across the field. The *Character voices* slider in Options controls their volume. (Jerry bots' *"Suppressing fire!"* is on that slider too, in any mode.)
 
 ### Replacing sounds
 
@@ -163,22 +190,37 @@ All voice lines are MP3s listed in `public/audio/manifest.json`. To swap one, re
 - Each line has several takes (`mama_1.mp3`, `mama_2.mp3`, …) and the game picks one at random. You can delete takes or add more; just update the `files` list in the manifest.
 - The spoken lines were generated with the open-source [Kokoro-82M](https://github.com/thewh1teagle/kokoro-onnx) voice model (Apache-2.0). See [`tools/voices/README.md`](tools/voices/README.md) to regenerate or tweak them.
 
+## Graphics (Options → Graphics)
+
+Changes apply right away, mid-match too (Esc → Options). If the game feels laggy, pick **Low**; it also suggests that by itself after a while under 28 fps. **Show FPS** puts a frame counter in the corner.
+
+| Preset | What you get |
+|---|---|
+| Low | phones and old laptops: fewer grass clumps, no shadows, simpler effects |
+| Medium | the default on computers: still shadows, more grass |
+| High | moving shadows, bloom and filmic colour, shiny sky-reflecting (PBR) materials, the detailed Blender-made models, richer explosions (shockwave, sparks, scorch marks) |
+| Ultra | High plus extra anti-aliasing (SMAA), sharper shadows, almost twice the grass reaching further, more trees and particles |
+
+**Advanced graphics** lets you override single parts of the preset: render scale, dynamic resolution, shadows, effects, post-processing, anti-aliasing, grass & trees, and models & materials. Each one says what the preset would pick.
+
+The detailed Spartan, energy can, Super Soaker and spring are made **from code with Blender** ([`tools/models`](tools/models/README.md)): change the script, run it, and the game picks up the new `.glb` files.
+
 ## Tech stack
 
 | Layer | Choice |
 |---|---|
 | Language / build | TypeScript + Vite |
-| 3D | Three.js: procedural low-poly world, instanced grass/rocks/trees, Lambert shading, no post-processing, so it stays fast on phones |
+| 3D | Three.js: procedural low-poly world, instanced grass/rocks/trees. Low/Medium use plain Lambert shading, so they stay fast on phones. High/Ultra add bloom + tone mapping, PBR materials with sky reflections, and Blender-made glTF models, all loaded on demand |
 | Multiplayer | Trystero (WebRTC P2P). The host's browser runs the authoritative simulation; clients get 20 Hz snapshots with interpolation and lag compensation |
 | Audio | Web Audio: 3D positional panners, procedural sound effects, MP3 voice lines |
 | UI | Plain DOM/CSS. The lobby settings form is generated from a settings schema |
-| Tests | Vitest (simulation, bots, netcode, Pitre logic) + Playwright (offline match, 2-tab multiplayer, phone touch) |
+| Tests | Vitest (simulation, bots, netcode, Pitre logic, graphics settings, model files) + Playwright (offline match, 2-tab multiplayer, phone touch, spectating, power-ups, graphics options) |
 | Hosting | Any static host; configured for **Vercel** (free Hobby plan) |
 
 ### Project layout
 ```
 src/sim/      game rules — pure TypeScript, runs in Node (weapons, stance, hitboxes, scoring, orbs)
-src/bots/     bot AI (4 difficulty profiles)
+src/bots/     bot AI (6 difficulty profiles, from Jerry to Top/Over)
 src/net/      host/client sessions, protocol, WebRTC + BroadcastChannel + loopback transports
 src/render/   Three.js world, Spartans, effects, first-person weapons, the Game loop
 src/input/    mouse/keyboard, gamepad and touch
@@ -186,7 +228,9 @@ src/audio/    audio engine, synthesized SFX, Pitre Mode voice logic
 src/ui/       HUD, settings form, styles
 src/app/      screens (title, lobby, results, options) and session wiring
 public/audio/ voice lines + manifest
+public/models/ detailed glTF models (High / Ultra)
 tools/voices/ voice-line generator (Python, offline)
+tools/models/ model builder (Blender as a Python module, offline)
 ```
 
 ## Development
@@ -204,7 +248,10 @@ npm run e2e          # Playwright browser tests (builds must exist: run `npm run
 
 Useful URL flags:
 - `?autostart=offline&bots=5&weapon=rpg&orbs=chaos&pitre=1`: jump straight into a match
-- `?quality=low|medium|high`: force a graphics preset
+- `&botdiff=jerry` or `&botdiff=jerry,topover`: bot tiers (cycled through the bots)
+- `&holes=8&spacing=20`: map size
+- `&respawn=auto`: respawn without pressing Jump
+- `?quality=low|medium|high|ultra`: force a graphics preset
 - `?perf`: FPS / draw-call overlay
 - `?net=bc`: multiplayer between tabs of one browser, no internet needed
 
