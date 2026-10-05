@@ -2,7 +2,7 @@ import { BotBrain, BOT_NAMES } from '../bots/brain';
 import { Rng } from '../shared/rng';
 import { Arena } from '../sim/arena';
 import { MAX_BOTS, MAX_HUMANS, MAX_SLOTS, TICK_RATE, secToTicks } from '../sim/constants';
-import { addPlayer, clipSize, createMatch, hasPowerup, isCamo, removePlayer, score, stepMatch } from '../sim/match';
+import { addPlayer, clipSize, createMatch, hasPowerup, isCamo, removePlayer, score, stepMatch, type StepContext } from '../sim/match';
 import { sanitizeSettings, DEFAULT_SETTINGS, type Settings } from '../sim/settings';
 import type { BotDifficulty, MatchState, PlayerCommand, PlayerState, RosterEntry, SimEvent } from '../sim/types';
 import { WEAPONS, weaponIndex } from '../sim/weapons';
@@ -422,6 +422,19 @@ export class HostSession {
       }
       this.bumpLobby();
     }
+  }
+
+  /** Test hook: change the running match between ticks and send out the events it produced. */
+  debugApply(fn: (m: MatchState, ctx: StepContext) => void) {
+    const m = this.match;
+    if (!m) return;
+    const rng = new Rng(m.rng);
+    const events: SimEvent[] = [];
+    fn(m, { arena: this.arena, rng, events });
+    m.rng = rng.state;
+    if (!events.length) return;
+    for (const b of this.bots.values()) b.onEvents(events);
+    for (const c of this.conns.values()) c.pending.push(...events);
   }
 
   private flushSnapshot(c: Conn) {

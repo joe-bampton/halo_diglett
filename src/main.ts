@@ -6,6 +6,7 @@ import type { BotDifficulty } from './sim/types';
 import type { Settings } from './sim/settings';
 import type { WeaponId } from './sim/weapons';
 import { eyePos, hitboxOf } from './sim/hitbox';
+import { damagePlayer } from './sim/match';
 import { yawPitchOf } from './shared/vec';
 
 const root = document.getElementById('app')!;
@@ -76,6 +77,14 @@ if (!webglOk()) {
         g.input.s.pitch = a.pitch;
         return t.exposure > 0.9 && s.myExposure > 0.95;
       },
+      /** kill a player (default: me) on the host — offline / host only */
+      kill(slot?: number) {
+        const target = slot ?? app.session?.slot ?? -1;
+        app.host?.debugApply((m, ctx) => {
+          const p = m.players[target];
+          if (p?.alive) damagePlayer(m, ctx, -1, p, 9999, { head: false, weapon: 'sniper', kind: 'direct' });
+        });
+      },
       /** press Jump while dead (manual respawn) */
       respawn() {
         if (app.game) app.game.input.s.respawns++;
@@ -98,6 +107,8 @@ if (!webglOk()) {
           frames: app.game?.frames ?? 0,
           events: app.game?.eventCounts ?? {},
           render: app.game?.renderInfo(),
+          spec: app.game?.specState(),
+          mode: app.game?.input.mode,
           lobby: s?.lobby,
         };
       },

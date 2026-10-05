@@ -75,11 +75,12 @@ export class Hud {
       <div class="killfeed"></div>
       <div class="medals"></div>
       <div class="powerups"></div>
+      <div class="spectate"></div>
       <div class="score"></div>
       <div class="ammo"><div class="wname"></div><div class="count"></div><div class="pips"></div></div>`;
     parent.appendChild(r);
     this.root = r;
-    for (const k of ['vignette', 'flash', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
+    for (const k of ['vignette', 'flash', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'spectate', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
       this.el[k] = r.querySelector(`.${k}`) as HTMLElement;
     }
   }
@@ -220,6 +221,24 @@ export class Hud {
       })
       .join('');
     if (this.el.powerups!.innerHTML !== html) this.el.powerups!.innerHTML = html;
+  }
+
+  /** Dead: hide vitals and ammo. */
+  dead(on: boolean) {
+    this.root.classList.toggle('dead', on);
+  }
+
+  /** Spectator panel (who you are watching), or null to hide it. */
+  spectate(info: { name: string; color: number; weapon: string; kills: number; deaths: number; view: 'first' | 'third'; tags: string[]; hint: string } | null) {
+    const el = this.el.spectate!;
+    this.root.classList.toggle('first', info?.view === 'first');
+    el.classList.toggle('on', !!info);
+    if (!info) return;
+    const html = `<div class="lbl">Spectating · ${info.view === 'first' ? '1st' : '3rd'} person</div>
+      <div class="who"><span class="arr">◀</span><span class="nm" style="color:${hex(info.color)}">${esc(info.name)}</span><span class="arr">▶</span></div>
+      <div class="info">${esc(info.weapon)} · ${info.kills} K / ${info.deaths} D${info.tags.length ? ` · ${info.tags.map(esc).join(' · ')}` : ''}</div>
+      <div class="hint">${esc(info.hint)}</div>`;
+    if (el.innerHTML !== html) el.innerHTML = html;
   }
 
   timer(text: string, mode: string) {

@@ -4,7 +4,7 @@ import { PITRE_SLOT, PitreVoiceThrottle, pitreCues, type PitreCue } from '../aud
 import type { SfxId } from '../audio/synth';
 import { InputManager, type AssistInfo } from '../input/input';
 import type { ClientSession, ViewPlayer } from '../net/client';
-import { F_BEAM, F_BURNING, F_CAMO, F_CHARGING, F_DAMAGE, F_INVINCIBLE, F_OVERSHIELD } from '../net/protocol';
+import { F_BEAM, F_BURNING, F_CAMO, F_CHARGING, F_DAMAGE, F_INVINCIBLE, F_OVERSHIELD, F_RELOAD } from '../net/protocol';
 import { angleDiff, dirFromYawPitch, yawPitchOf } from '../shared/vec';
 import { Arena } from '../sim/arena';
 import { FIRE_EXPOSURE, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
@@ -150,7 +150,10 @@ export class Game {
   private camKick = 0;
   private dynScale = 1;
   private frameTimes: number[] = [];
-  private lastHole = -1;
+  private grassAt = new THREE.Vector2(NaN, NaN);
+  /** spectating while dead: who we watch and how (the orbit angles/zoom live in input.spec) */
+  private spec = { active: false, target: -1, view: 'third' as 'first' | 'third', snap: true, pos: new THREE.Vector3(), yaw: 0, pitch: 0, reload: 0 };
+  private vmColor = -1;
   private wasAlive = false;
   private killer = -1;
   private diedAt = 0;
@@ -379,20 +382,44 @@ export class Game {
   }
 
   private muzzleOf(slot: number): THREE.Vector3 {
-    if (slot === this.session.slot) {
-      const e = this.eye();
-      const d = dirFromYawPitch(this.input.s.yaw, this.input.s.pitch);
-      const right = new THREE.Vector3(Math.cos(this.input.s.yaw), 0, -Math.sin(this.input.s.yaw));
-      return e.add(new THREE.Vector3(d.x, d.y, d.z).multiplyScalar(0.7)).addScaledVector(right, 0.22).add(new THREE.Vector3(0, -0.18, 0));
+    if (slot === this.session.slot) return this.fpMuzzle(this.eye(), this.input.s.yaw, this.input.s.pitch);
+    const p = this.session.players[slot];
+    if (p && slot === this.viewSlot()) {
+      const e = eyePos(this.holeOf(p), p.exposure);
+      return this.fpMuzzle(new THREE.Vector3(e.x, e.y, e.z), p.yaw, p.pitch);
     }
     const sv = this.spartans.get(slot);
-    const p = this.session.players[slot];
     if (sv?.weaponModel && p) {
       sv.parts.root.updateMatrixWorld(true);
       return sv.weaponModel.localToWorld((sv.weaponModel.userData.muzzle as THREE.Vector3).clone());
     }
     if (p) return this.headPos(p);
     return new THREE.Vector3();
+  }
+
+  /** Where a first-person gun's muzzle sits relative to the eye. */
+  private fpMuzzle(eye: THREE.Vector3, yaw: number, pitch: number): THREE.Vector3 {
+    const d = dirFromYawPitch(yaw, pitch);
+    const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+    return eye.add(new THREE.Vector3(d.x, d.y, d.z).multiplyScalar(0.7)).addScaledVector(right, 0.22).add(new THREE.Vector3(0, -0.18, 0));
+  }
+
+  /** Zoom factor of a remote player's scope (only while they are up). */
+  private zoomOf(p: ViewPlayer): number {
+    return p.zoom > 0 && p.exposure >= FIRE_EXPOSURE ? WEAPONS[p.weapon].zoom[p.zoom - 1] ?? 1 : 1;
+  }
+
+  /** Whose eyes the camera looks through: me while alive, the spectated player in 1st person, else -1. */
+  private viewSlot(): number {
+    const s = this.session;
+    if (s.me?.al) return s.slot;
+    if (!this.spec.active || this.spec.view !== 'first') return -1;
+    return s.players[this.spec.target]?.alive ? this.spec.target : -1;
+  }
+
+  /** Spectator state (tests / HUD). */
+  specState() {
+    return { active: this.spec.active, target: this.spec.target, view: this.spec.view, dist: this.input.spec.dist };
   }
 
   private posOf(slot: number): THREE.Vector3 | null {
@@ -447,7 +474,7 @@ export class Game {
     this.frames++;
     const s = this.session;
     // input (while dead, Jump asks for a respawn instead of standing)
-    this.input.mode = s.me && !s.me.al && s.phase !== 'ended' ? 'spectate' : 'play';
+    this.input.mode = !s.me?.al && s.phase !== 'ended' && s.state === 'match' ? 'spectate' : 'play';
     this.input.update(dt);
     const inp = this.input.s;
     if (!s.me?.al || s.phase === 'ended') {
@@ -485,9 +512,8 @@ export class Game {
       this.renderer.shadowMap.needsUpdate = this.frames % 3 === 0;
       this.renderer.shadowMap.autoUpdate = false;
     }
-    // audio listener
-    const fwd = dirFromYawPitch(inp.yaw, inp.pitch);
-    audio.setListener(this.camera.position, fwd);
+    // audio listener follows the camera (death cam and spectating included)
+    audio.setListener(this.camera.position, this.camera.getWorldDirection(tmpV2));
     // render
     this.renderer.info.reset();
     this.renderer.setClearColor(PAL.horizon);
@@ -620,14 +646,15 @@ export class Game {
           const w = WEAPONS[e.w];
           const from = this.muzzleOf(e.p);
           const to = new THREE.Vector3(...e.e);
+          const fp = e.p === this.viewSlot();
           if (w.trigger !== 'beam') {
-            this.muzzleFlash(from, to.clone().sub(from).normalize(), e.w, e.p === mySlot);
+            this.muzzleFlash(from, to.clone().sub(from).normalize(), e.w, fp);
             if (w.fireKind === 'hitscan') {
               this.tracer(from, to, e.w);
               if (e.hit === 'world') this.impact(to, e.w);
             }
           }
-          if (e.p === mySlot) {
+          if (fp) {
             this.vmKick = Math.min(1, this.vmKick + w.fx.recoil * 0.6);
             this.camKick += w.fx.recoil * 0.004;
           }
@@ -976,7 +1003,10 @@ export class Game {
   private updateSpartans(dt: number) {
     const s = this.session;
     const settings = s.start?.settings;
-    const eye = this.eye();
+    // name tags are aimed with the camera (last frame's is fine)
+    const eye = this.camera.position.clone();
+    const look = yawPitchOf(this.camera.getWorldDirection(tmpV));
+    const hidden = this.viewSlot();
     const xray = this.hasPu('xray');
     const seen = new Set<number>();
     for (const p of s.players) {
@@ -984,7 +1014,7 @@ export class Game {
       seen.add(p.slot);
       const sv = this.ensureSpartan(p);
       const root = sv.parts.root;
-      if (p.slot === s.slot) {
+      if (p.slot === s.slot || p.slot === hidden) {
         root.visible = false;
         continue;
       }
@@ -1085,7 +1115,7 @@ export class Game {
       // name tag when aimed at
       const head = this.headPos(p);
       const a = yawPitchOf({ x: head.x - eye.x, y: head.y - eye.y, z: head.z - eye.z });
-      const off = Math.hypot(angleDiff(a.yaw, this.input.s.yaw), a.pitch - this.input.s.pitch);
+      const off = Math.hypot(angleDiff(a.yaw, look.yaw), a.pitch - look.pitch);
       const showTag = off < 0.05 && !camo && p.exposure > 0.3;
       const tagText = `${s.leader === p.slot ? '👑 ' : ''}${p.name}`;
       if (showTag && sv.tagFor !== tagText) {
@@ -1294,23 +1324,22 @@ export class Game {
     const inp = this.input.s;
     const settings = this.input.opts;
     const alive = !!s.me?.al;
-    const holeNow = this.myHole();
-    if (me && holeNow.id !== this.lastHole) {
-      this.lastHole = holeNow.id;
-      this.grass.layout(holeNow.x, holeNow.z);
-    }
     this.shake = Math.max(0, this.shake - dt * 2.5);
     this.camKick = Math.max(0, this.camKick - dt * 0.12);
     const sx = (Math.random() - 0.5) * this.shake * 0.02;
     const sy = (Math.random() - 0.5) * this.shake * 0.02;
-    if (alive || !me) {
+    let fov = settings.fov;
+    if (alive) {
+      this.spec.active = false;
       const e = this.eye();
       this.camera.position.copy(e);
       this.camera.rotation.set(0, 0, 0, 'YXZ');
       this.camera.rotation.y = inp.yaw + sx;
       this.camera.rotation.x = inp.pitch + sy + this.camKick;
       this.wasAlive = true;
-    } else {
+      const w = this.myWeaponDef();
+      fov /= inp.zoom > 0 ? w.zoom[inp.zoom - 1] ?? 1 : 1;
+    } else if (me && s.me && !this.spec.active && this.time - this.diedAt < 1.2 && !this.input.specPending()) {
       // death cam: rise above the hole and look at the killer
       const h = this.myHole();
       const t = Math.min(1, (this.time - this.diedAt) / 1.2);
@@ -1318,44 +1347,130 @@ export class Game {
       const base = new THREE.Vector3(h.x, h.rim + 0.9, h.z);
       const away = base.clone().sub(target ?? new THREE.Vector3()).setY(0).normalize();
       const camPos = base.clone().add(new THREE.Vector3(0, 1 + t * 3.5, 0)).addScaledVector(away, t * 4);
-      this.camera.position.lerp(camPos, this.wasAlive ? 1 : 0.1);
+      this.camera.position.lerp(camPos, this.wasAlive ? 1 : 1 - Math.exp(-dt * 6));
       this.wasAlive = false;
       if (target) this.camera.lookAt(target);
+    } else {
+      fov = this.spectateCamera(dt);
+      this.wasAlive = false;
     }
-    // zoom
-    const w = this.myWeaponDef();
-    const zoomF = inp.zoom > 0 && alive ? w.zoom[inp.zoom - 1] ?? 1 : 1;
-    const fov = settings.fov / zoomF;
     if (Math.abs(this.camera.fov - fov) > 0.01) {
       this.camera.fov += (fov - this.camera.fov) * Math.min(1, dt * 18);
       this.camera.updateProjectionMatrix();
     }
+    // grass density follows the camera
+    const cp = this.camera.position;
+    if (!(Math.hypot(cp.x - this.grassAt.x, cp.z - this.grassAt.y) < 10)) {
+      this.grassAt.set(cp.x, cp.z);
+      this.grass.layout(cp.x, cp.z);
+    }
+  }
+
+  /** Dead (or waiting for a hole): watch the other players. Returns the field of view to use. */
+  private spectateCamera(dt: number): number {
+    const s = this.session;
+    const sp = this.spec;
+    const fov = this.input.opts.fov;
+    const others = s.players.filter((p): p is ViewPlayer => !!p && p.slot !== s.slot);
+    const act = this.input.takeSpec();
+    if (!sp.active) {
+      // start on whoever killed me, else the leader, else anyone alive
+      sp.active = true;
+      const first = [this.killer, s.leader].find((x) => x >= 0 && x !== s.slot && s.players[x]?.alive);
+      sp.target = first ?? others.find((p) => p.alive)?.slot ?? others[0]?.slot ?? -1;
+      const t = s.players[sp.target];
+      this.input.spec.yaw = t ? t.yaw : this.input.s.yaw;
+      this.input.spec.pitch = -0.35;
+      sp.snap = true;
+    }
+    if (others.length && (act.cycle !== 0 || !s.players[sp.target] || sp.target === s.slot)) {
+      const n = others.length;
+      const i = Math.max(0, others.findIndex((p) => p.slot === sp.target));
+      const next = others[(((i + act.cycle) % n) + n) % n]!;
+      if (next.slot !== sp.target) {
+        sp.target = next.slot;
+        this.input.spec.yaw = next.yaw;
+        sp.snap = true;
+      }
+    }
+    if (act.toggle) {
+      sp.view = sp.view === 'first' ? 'third' : 'first';
+      sp.snap = true;
+    }
+    const t = s.players[sp.target];
+    if (!t) {
+      // nobody to watch: look over the field
+      this.camera.position.set(0, 18, 28);
+      this.camera.lookAt(0, 2, 0);
+      return fov;
+    }
+    const hole = this.holeOf(t);
+    if (sp.view === 'first' && t.alive) {
+      // through their eyes
+      const e = eyePos(hole, t.exposure);
+      const k = sp.snap ? 1 : 1 - Math.exp(-dt * 25);
+      sp.yaw += angleDiff(t.yaw, sp.yaw) * k;
+      sp.pitch += (t.pitch - sp.pitch) * k;
+      sp.snap = false;
+      this.camera.position.set(e.x, e.y, e.z);
+      this.camera.rotation.set(0, 0, 0, 'YXZ');
+      this.camera.rotation.y = sp.yaw;
+      this.camera.rotation.x = sp.pitch + this.camKick;
+      return fov / this.zoomOf(t);
+    }
+    // third person: orbit around their head; the terrain pulls the camera in rather than block the view
+    const pivot = t.alive ? this.headPos(t) : new THREE.Vector3(hole.x, hole.rim + 1, hole.z);
+    const o = this.input.spec;
+    const d = dirFromYawPitch(o.yaw, o.pitch);
+    let dist = o.dist;
+    const hit = this.arena.raycast(pivot, { x: -d.x, y: -d.y, z: -d.z }, dist);
+    if (hit < dist) dist = Math.max(1.2, hit - 0.4);
+    const want = pivot.clone().add(new THREE.Vector3(d.x, d.y, d.z).multiplyScalar(-dist));
+    want.y = Math.max(want.y, this.arena.groundAt(want.x, want.z) + 0.4);
+    if (sp.snap || want.distanceTo(sp.pos) > 12) sp.pos.copy(want);
+    else sp.pos.lerp(want, 1 - Math.exp(-dt * 12));
+    sp.snap = false;
+    this.camera.position.copy(sp.pos);
+    this.camera.lookAt(pivot);
+    return fov;
   }
 
   private updateViewmodel(dt: number) {
     const s = this.session;
     const me = s.me;
-    const alive = !!me?.al;
-    const w = this.myWeapon();
-    const scoped = this.input.s.zoom > 0 && (WEAPONS[w].zoom[this.input.s.zoom - 1] ?? 1) >= 2.4;
-    this.vmHolder.visible = alive && !scoped && s.phase !== 'ended';
-    if (w !== this.vmWeapon) {
+    const vs = this.viewSlot();
+    // spectating someone in first person: show their gun
+    const other = vs >= 0 && vs !== s.slot ? s.players[vs]! : null;
+    const w = other ? other.weapon : this.myWeapon();
+    const zoom = other ? (this.zoomOf(other) > 1 ? other.zoom : 0) : this.input.s.zoom;
+    const scoped = zoom > 0 && (WEAPONS[w].zoom[zoom - 1] ?? 1) >= 2.4;
+    this.vmHolder.visible = vs >= 0 && !scoped && s.phase !== 'ended';
+    const color = other ? other.color : this.me?.color ?? 0x3d7bff;
+    if (w !== this.vmWeapon || color !== this.vmColor) {
       if (this.vmModel) {
         this.vmHolder.remove(this.vmModel);
         disposeTree(this.vmModel);
       }
       this.vmModel = buildWeaponModel(w);
       // gloved hand
-      const glove = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.13, 0.14), new THREE.MeshLambertMaterial({ color: this.me?.color ?? 0x3d7bff }));
+      const glove = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.13, 0.14), new THREE.MeshLambertMaterial({ color }));
       glove.position.set(0, -0.1, 0.02);
       this.vmModel.add(glove);
       this.vmHolder.add(this.vmModel);
       this.vmWeapon = w;
+      this.vmColor = color;
     }
     this.vmKick = Math.max(0, this.vmKick - dt * 5);
-    const reloadF = me && me.rl > s.hostTick && me.rs > 0 ? 1 - (me.rl - s.hostTick) / Math.max(1, me.rl - me.rs) : 0;
-    const reloadDip = reloadF > 0 ? Math.sin(Math.min(1, reloadF) * Math.PI) : 0;
-    const exp = s.myExposure;
+    let reloadDip: number;
+    if (other) {
+      // remote players only tell us that they are reloading
+      this.spec.reload += (((other.flags & F_RELOAD) !== 0 ? 0.8 : 0) - this.spec.reload) * Math.min(1, dt * 8);
+      reloadDip = this.spec.reload;
+    } else {
+      const reloadF = me && me.rl > s.hostTick && me.rs > 0 ? 1 - (me.rl - s.hostTick) / Math.max(1, me.rl - me.rs) : 0;
+      reloadDip = reloadF > 0 ? Math.sin(Math.min(1, reloadF) * Math.PI) : 0;
+    }
+    const exp = other ? other.exposure : s.myExposure;
     const bob = Math.sin(this.time * 2) * 0.004;
     this.vmHolder.scale.setScalar(0.6);
     this.vmHolder.position.set(0.3, -0.27 - (1 - exp) * 0.25 - reloadDip * 0.18 + bob, -0.46 + this.vmKick * 0.06);
@@ -1395,18 +1510,29 @@ export class Game {
       const def = WEAPONS[w];
       const clipMax = def.clip > 0 ? Math.max(1, Math.round(def.clip * settings.clipMult)) : 0;
       const infinite = settings.ammoMode === 'noReload' || def.clip <= 0;
-      hud.ammo(w, me.clip, clipMax, infinite, me.rl > s.hostTick);
-      // reticle turns red over an enemy
-      const a = this.assistInfo();
-      const red = !!a && Math.hypot(a.dYaw, a.dPitch) < a.radius * 1.2;
-      const scoped = this.input.s.zoom > 0 && (def.zoom[this.input.s.zoom - 1] ?? 1) >= 2.4;
-      hud.reticle(red, me.al && !scoped);
-      hud.scope(me.al && scoped, scoped ? `${def.zoom[this.input.s.zoom - 1]}×` : '');
-      // charge ring
-      let charge = 0;
-      if (me.cs >= 0 && def.chargeTime) charge = (s.hostTick - me.cs) / (def.chargeTime * TICK_RATE);
-      if (me.bu > s.hostTick && def.beamTime) charge = (me.bu - s.hostTick) / (def.beamTime * TICK_RATE);
-      hud.charge(me.al ? charge : 0);
+      const vs = this.viewSlot();
+      const other = vs >= 0 && vs !== s.slot ? s.players[vs]! : null;
+      if (other) {
+        // spectating in first person: their reticle and scope
+        hud.ammo(other.weapon, 0, 0, true, false);
+        const zf = this.zoomOf(other);
+        hud.reticle(false, zf < 2.4);
+        hud.scope(zf >= 2.4, zf >= 2.4 ? `${zf}×` : '');
+        hud.charge(0);
+      } else {
+        hud.ammo(w, me.clip, clipMax, infinite, me.rl > s.hostTick);
+        // reticle turns red over an enemy
+        const a = this.assistInfo();
+        const red = !!a && Math.hypot(a.dYaw, a.dPitch) < a.radius * 1.2;
+        const scoped = this.input.s.zoom > 0 && (def.zoom[this.input.s.zoom - 1] ?? 1) >= 2.4;
+        hud.reticle(red, me.al && !scoped);
+        hud.scope(me.al && scoped, scoped ? `${def.zoom[this.input.s.zoom - 1]}×` : '');
+        // charge ring
+        let charge = 0;
+        if (me.cs >= 0 && def.chargeTime) charge = (s.hostTick - me.cs) / (def.chargeTime * TICK_RATE);
+        if (me.bu > s.hostTick && def.beamTime) charge = (me.bu - s.hostTick) / (def.beamTime * TICK_RATE);
+        hud.charge(me.al ? charge : 0);
+      }
       // power-ups
       const pus = me.pu
         .filter(([, until]) => until > s.hostTick)
@@ -1425,6 +1551,7 @@ export class Game {
         hud.sub(left < 3 ? `Pop up in ${Math.max(0, left).toFixed(1)}s` : '');
       } else if (!this.endShown) hud.sub(me.al && me.rl > s.hostTick ? 'Reloading' : '');
     }
+    this.updateSpectateHud();
     // timer
     let timer = '';
     if (settings.timeLimitMin > 0 && s.start) {
@@ -1450,6 +1577,26 @@ export class Game {
       if (this.scoreboardEl.innerHTML !== html) this.scoreboardEl.innerHTML = html;
     }
     this.input.updateTouchLabels();
+  }
+
+  private updateSpectateHud() {
+    const s = this.session;
+    const hud = this.hud;
+    const dead = !s.me?.al && s.state === 'match';
+    hud.dead(dead);
+    const t = this.spec.active && dead ? s.players[this.spec.target] : null;
+    if (!t) return hud.spectate(null);
+    const tags: string[] = [];
+    if (s.leader === t.slot) tags.push('👑 Leader');
+    if (!t.alive) tags.push('☠ Dead');
+    if (t.flags & F_CAMO) tags.push('◌ Camo');
+    if (t.flags & F_OVERSHIELD) tags.push('⛨ Overshield');
+    if (t.flags & F_INVINCIBLE) tags.push('★ Invincible');
+    if (t.flags & F_DAMAGE) tags.push('✖ Damage boost');
+    const dev = this.input.device;
+    const hint =
+      dev === 'pad' ? 'RB / LB switch · Y 1st / 3rd person · triggers zoom' : dev === 'touch' ? '◀ ▶ switch · 👁 1st / 3rd person · drag to look · pinch to zoom' : 'E / Q or click: switch · F: 1st / 3rd person · mouse: look · wheel: zoom';
+    hud.spectate({ name: t.name, color: t.color, weapon: WEAPONS[t.weapon].name, kills: t.kills, deaths: t.deaths, view: this.viewSlot() === t.slot ? 'first' : 'third', tags, hint });
   }
 
   private respawnKey() {

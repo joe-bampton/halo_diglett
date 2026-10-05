@@ -237,7 +237,7 @@ export class BotBrain {
     cmd.trigger = trigger && (w.trigger === 'auto' || w.trigger === 'charge' || w.trigger === 'beam');
     cmd.presses = this.presses;
     cmd.reloads = this.reloads;
-    cmd.zoom = w.zoom.length && this.target >= 0 ? 1 : 0;
+    cmd.zoom = w.zoom.length && this.target >= 0 && this.up ? 1 : 0;
     return cmd;
   }
 
