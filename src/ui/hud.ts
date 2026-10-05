@@ -1,5 +1,6 @@
 import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import { WEAPONS, type WeaponId } from '../sim/weapons';
+import { SAUCE } from '../render/palette';
 import { esc, hex } from './dom';
 
 export const MEDALS: Record<string, { name: string; icon: string; color: string; ann?: string }> = {
@@ -33,7 +34,7 @@ const RETICLES: Record<string, string> = {
   ring: `<circle cx="40" cy="40" r="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 4"/><circle cx="40" cy="40" r="2" fill="currentColor"/>`,
 };
 const WEAPON_RETICLE: Record<WeaponId, string> = {
-  sniper: 'dot', br: 'br', crossbow: 'dot', rpg: 'bracket', grenade: 'arc', railgun: 'bracket', hyperbeam: 'ring', needler: 'needle', flamethrower: 'ring', minigun: 'br', orbital: 'bracket',
+  sniper: 'dot', br: 'br', crossbow: 'dot', rpg: 'bracket', grenade: 'arc', railgun: 'bracket', hyperbeam: 'ring', needler: 'needle', flamethrower: 'ring', minigun: 'br', orbital: 'bracket', soaker: 'ring',
 };
 
 export interface ScoreRow {
@@ -60,7 +61,7 @@ export class Hud {
     const r = document.createElement('div');
     r.className = 'hud';
     r.innerHTML = `
-      <div class="vignette"></div><div class="flash"></div>
+      <div class="vignette"></div><div class="flash"></div><div class="sauce"></div>
       <div class="scope"><div class="zl"></div></div>
       <div class="shield"><div class="bar"><div class="fill"></div><div class="os"></div></div><div class="hp"><div></div></div></div>
       <div class="cathat">🎩 YOU ARE THE CAT IN THE HAT</div>
@@ -80,7 +81,10 @@ export class Hud {
       <div class="ammo"><div class="wname"></div><div class="count"></div><div class="pips"></div></div>`;
     parent.appendChild(r);
     this.root = r;
-    for (const k of ['vignette', 'flash', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'spectate', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
+    r.style.setProperty('--sauce', hex(SAUCE.base));
+    r.style.setProperty('--sauce-shade', hex(SAUCE.shade));
+    r.style.setProperty('--sauce-gloss', hex(SAUCE.gloss));
+    for (const k of ['vignette', 'flash', 'sauce', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'spectate', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
       this.el[k] = r.querySelector(`.${k}`) as HTMLElement;
     }
   }
@@ -223,6 +227,28 @@ export class Hud {
     if (this.el.powerups!.innerHTML !== html) this.el.powerups!.innerHTML = html;
   }
 
+  /** Gerry Sauce on your screen: `left` = how much is left (1 just hit → 0 clean). Blobs drip and clear one by one. */
+  sauce(left: number) {
+    const el = this.el.sauce!;
+    if (left <= 0) {
+      if (el.classList.contains('on')) {
+        el.classList.remove('on');
+        el.innerHTML = '';
+      }
+      return;
+    }
+    if (!el.classList.contains('on')) {
+      el.innerHTML = sauceSplatHtml();
+      el.classList.add('on');
+    }
+    // 10 updates a second (CSS transitions smooth the steps) keeps style and compositing work low
+    const now = performance.now();
+    if (now - this.sauceAt < 100) return;
+    this.sauceAt = now;
+    el.style.setProperty('--k', left.toFixed(3));
+  }
+  private sauceAt = 0;
+
   /** Dead: hide vitals and ammo. */
   dead(on: boolean) {
     this.root.classList.toggle('dead', on);
@@ -270,6 +296,22 @@ export class Hud {
       .join('');
     if (this.el.score!.innerHTML !== html) this.el.score!.innerHTML = html;
   }
+}
+
+/** A fresh, random set of custard blobs (with drips) covering the screen. */
+function sauceSplatHtml(): string {
+  const r = (a: number, b: number) => a + Math.random() * (b - a);
+  let html = '<div class="film"></div>';
+  for (let i = 0; i < 13; i++) {
+    // bigger blobs near the middle, a staggered clean-up order (--f) and drip length
+    const x = i < 4 ? r(30, 70) : r(-5, 105);
+    const y = i < 4 ? r(25, 65) : r(-5, 95);
+    const s = i < 4 ? r(22, 34) : r(9, 24);
+    const br = `${r(38, 62).toFixed(0)}% ${r(38, 62).toFixed(0)}% ${r(38, 62).toFixed(0)}% ${r(38, 62).toFixed(0)}% / ${r(38, 62).toFixed(0)}% ${r(38, 62).toFixed(0)}% ${r(38, 62).toFixed(0)}% ${r(38, 62).toFixed(0)}%`;
+    const drip = Array.from({ length: 1 + Math.floor(Math.random() * 3) }, () => `<i style="left:${r(15, 75).toFixed(0)}%;--dh:${r(30, 90).toFixed(0)}%;width:${r(9, 18).toFixed(0)}%"></i>`).join('');
+    html += `<div class="blob" style="left:${x.toFixed(1)}%;top:${y.toFixed(1)}%;--s:${s.toFixed(1)}vmin;--f:${r(0, 0.85).toFixed(2)};--drip:${r(4, 18).toFixed(1)}vh;border-radius:${br}">${drip}</div>`;
+  }
+  return html;
 }
 
 export function scoreboardHtml(rows: ScoreRow[], gunGame: boolean): string {

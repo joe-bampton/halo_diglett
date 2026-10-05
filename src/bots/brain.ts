@@ -4,6 +4,7 @@ import type { Arena } from '../sim/arena';
 import { DT, FIRE_EXPOSURE, LOWER_TIME, RISE_TIME, TICK_RATE, secToTicks } from '../sim/constants';
 import { eyePos, isExposed, rayHitbox } from '../sim/hitbox';
 import { clipSize, hasPowerup, isCamo, playerHitbox } from '../sim/match';
+import { sauceAimScale } from '../sim/sauce';
 import { inFlight, springLift } from '../sim/spring';
 import { orbPos } from '../sim/orbs';
 import type { BotDifficulty, MatchState, PlayerCommand, PlayerState, SimEvent } from '../sim/types';
@@ -132,6 +133,7 @@ export class BotBrain {
     }
     this.maybeSpring(m, arena, me);
     cmd.springs = this.springs;
+    if (WEAPONS[me.weapon].fireKind === 'spray') return this.useSoaker(me, cmd);
     if (me.spawnTick !== this.spawnTick) {
       // fresh life: face the middle of the field, stay down for a moment
       this.spawnTick = me.spawnTick;
@@ -232,7 +234,8 @@ export class BotBrain {
       wantYaw += this.errYaw;
       wantPitch += this.errPitch;
     }
-    const maxTurn = pr.turnRate * D2R * DT;
+    // covered in Gerry Sauce: slow to turn
+    const maxTurn = pr.turnRate * D2R * DT * sauceAimScale(me.saucedAt, me.saucedUntil, t);
     const dyaw = angleDiff(wantYaw, this.yaw);
     this.yaw += clamp(dyaw, -maxTurn, maxTurn);
     this.pitch += clamp(wantPitch - this.pitch, -maxTurn, maxTurn);
@@ -280,6 +283,16 @@ export class BotBrain {
     } else cmd.trigger = !(w.trigger === 'charge' && me.needRelease);
   }
 
+  /** Holding the Super Soaker: stand up and squirt (it drenches the whole field, no aiming needed). */
+  private useSoaker(me: PlayerState, cmd: PlayerCommand): PlayerCommand {
+    this.up = true;
+    if (me.exposure >= FIRE_EXPOSURE) this.pull(cmd, me, cmd.vt);
+    cmd.stand = true;
+    cmd.presses = this.presses;
+    cmd.reloads = this.reloads;
+    return cmd;
+  }
+
   /** Jerry: never acts against anyone — stands up and sprays the sky ("Suppressing fire!"). */
   private thinkJerry(m: MatchState, me: PlayerState, cmd: PlayerCommand): PlayerCommand {
     const t = m.tick;
@@ -307,7 +320,7 @@ export class BotBrain {
       this.reloadedThisDuck = true;
     }
     // drift around a patch of sky
-    const maxTurn = pr.turnRate * (Math.PI / 180) * DT;
+    const maxTurn = pr.turnRate * (Math.PI / 180) * DT * sauceAimScale(me.saucedAt, me.saucedUntil, t);
     const wantYaw = this.skyYaw + Math.sin(t * 0.05 + this.slot) * 0.25;
     const wantPitch = this.skyPitch + Math.sin(t * 0.083 + this.slot * 2) * 0.08;
     this.yaw += clamp(angleDiff(wantYaw, this.yaw), -maxTurn, maxTurn);
@@ -359,8 +372,16 @@ export class BotBrain {
       let pitch = ang.pitch;
       const proj = w.projectile;
       if (proj && proj.gravity > 0) pitch = ballisticPitch(Math.hypot(to.x, to.z), to.y, proj.speed, proj.gravity) ?? pitch;
-      this.yaw = ang.yaw;
-      this.pitch = clamp(pitch, -pr.pitchMax, pr.pitchMax);
+      const slow = sauceAimScale(me.saucedAt, me.saucedUntil, t);
+      if (slow < 1) {
+        // even the hacker can't snap through sauce
+        const maxTurn = 300 * D2R * DT * slow;
+        this.yaw += clamp(angleDiff(ang.yaw, this.yaw), -maxTurn, maxTurn);
+        this.pitch = clamp(this.pitch + clamp(pitch - this.pitch, -maxTurn, maxTurn), -pr.pitchMax, pr.pitchMax);
+      } else {
+        this.yaw = ang.yaw;
+        this.pitch = clamp(pitch, -pr.pitchMax, pr.pitchMax);
+      }
       if (me.exposure >= FIRE_EXPOSURE && !reloading && loaded && t + 1 >= me.nextFireAt) {
         let shoot: boolean;
         if (w.fireKind === 'projectile') shoot = w.splash ? true : isExposed(e1);

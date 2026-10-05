@@ -21,6 +21,7 @@ import {
   F_INVINCIBLE,
   F_OVERSHIELD,
   F_RELOAD,
+  F_SAUCED,
   PROTOCOL_VERSION,
   type Channel,
   type CtlMsg,
@@ -507,6 +508,7 @@ export class HostSession {
       if (q.connected) f |= F_CONNECTED;
       if (hasPowerup(q, 'damage', t)) f |= F_DAMAGE;
       if (q.burn) f |= F_BURNING;
+      if (q.saucedUntil > t) f |= F_SAUCED;
       p.push([q.slot, Math.round(q.exposure * 255), Math.round(q.yaw * 1000), Math.round(q.pitch * 1000), f, weaponIndex(q.weapon), q.hole, Math.round(q.beamLen * 10), q.zoom, q.springAt]);
     }
     const snap: SnapshotMsg = { k: t, ph: m.phase, a: c.seq, p, ld: m.leader };
@@ -604,6 +606,8 @@ export function privateState(m: MatchState, me: PlayerState): PrivateState {
     al: me.alive,
     hole: me.hole,
     rq: me.respawnRequested,
+    sa: me.saucedAt,
+    su: me.saucedUntil,
   };
 }
 

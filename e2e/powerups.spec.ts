@@ -1,10 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 
 type HD = {
-  state(): { phase: string; slot: number; me: { al: boolean; pu: [string, number][] } | null };
+  state(): { phase: string; slot: number; me: { al: boolean; pu: [string, number][]; sa: number; su: number } | null; players: { slot: number }[] };
   grant(id: string, slot?: number): void;
-  session: { slot: number; players: ({ springAt: number } | null)[] };
-  game: { camera: { position: { y: number } } } | null;
+  session: { slot: number; hostTick: number; players: ({ springAt: number } | null)[] };
+  game: { camera: { position: { y: number } }; input: { s: { springs: number } } } | null;
 };
 const W = (page: Page) => page.evaluate(() => (window as unknown as { __hd: HD }).__hd.state());
 
@@ -23,11 +23,13 @@ test('Spring Jump: double-tap Space launches you 20 m up', async ({ page }) => {
   await expect(page.locator('.hud .pu.held')).toHaveCount(1);
   // a quick double-tap of Space (dispatched together: two separate round trips can exceed the 300 ms window on a slow CI renderer)
   const springs = await page.evaluate(() => {
+    // the very first key press unlocks (and renders) the audio, which takes a moment — get that out of the way
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyX', key: 'x' }));
     for (let i = 0; i < 2; i++) {
       window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Space', key: ' ' }));
       window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Space', key: ' ' }));
     }
-    return (window as unknown as { __hd: { game: { input: { s: { springs: number } } } } }).__hd.game.input.s.springs;
+    return (window as unknown as { __hd: HD }).__hd.game!.input.s.springs;
   });
   expect(springs).toBe(1);
   await page.waitForFunction(() => {
@@ -40,5 +42,21 @@ test('Spring Jump: double-tap Space launches you 20 m up', async ({ page }) => {
   // ...and comes back down into the hole
   await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.game?.camera.position.y ?? 99) < 5, null, { timeout: 10_000 });
   expect((await W(page)).me?.al).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('Gerry Sauce: a bot squirts, my screen gets covered in custard, then clears', async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto('/?test=1&autostart=offline&bots=1&botdiff=jerry&quality=low&respawn=auto');
+  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd?.state().phase === 'live', null, { timeout: 60_000 });
+  const st = await W(page);
+  const bot = st.players.find((p) => p.slot !== st.slot)!.slot;
+  // bots fire the Super Soaker as soon as they have it
+  await page.evaluate((slot) => (window as unknown as { __hd: HD }).__hd.grant('sauce', slot), bot);
+  await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.state().me?.sa ?? -1) >= 0, null, { timeout: 15_000 });
+  await expect(page.locator('.hud .sauce.on')).toBeVisible();
+  await expect(page.locator('.hud .sauce.on .blob')).toHaveCount(13);
+  // five seconds later it's all cleaned up
+  await expect(page.locator('.hud .sauce.on')).toHaveCount(0, { timeout: 12_000 });
   expect(errors).toEqual([]);
 });

@@ -76,6 +76,8 @@ export interface InputHooks {
   canLock(): boolean;
   /** holding a Spring Jump and on the ground */
   canSpring(): boolean;
+  /** aim speed multiplier (Gerry Sauce slows you down) */
+  aimScale(): number;
 }
 
 /** Unified keyboard+mouse / gamepad / touch input. */
@@ -337,8 +339,9 @@ export class InputManager {
       this.spec.pitch = clamp(this.spec.pitch + dPitch, -1.4, 1.2);
       return;
     }
-    this.s.yaw += dYaw;
-    this.s.pitch = clamp(this.s.pitch + dPitch, -1.35, 1.35);
+    const k = this.hooks.aimScale();
+    this.s.yaw += dYaw * k;
+    this.s.pitch = clamp(this.s.pitch + dPitch * k, -1.35, 1.35);
   }
 
   private press() {
@@ -401,7 +404,7 @@ export class InputManager {
         const st = this.hooks.assistStrength();
         const d = Math.hypot(a.dYaw, a.dPitch);
         if (d < a.radius * 4 && d > 1e-4) {
-          const pull = Math.min(1, dt * 3.2 * st);
+          const pull = Math.min(1, dt * 3.2 * st) * this.hooks.aimScale();
           this.s.yaw += a.dYaw * pull * 0.35;
           this.s.pitch += a.dPitch * pull * 0.35;
         }

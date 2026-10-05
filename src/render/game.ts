@@ -4,9 +4,10 @@ import { PITRE_SLOT, PitreVoiceThrottle, pitreCues, type PitreCue } from '../aud
 import type { SfxId } from '../audio/synth';
 import { InputManager, type AssistInfo } from '../input/input';
 import type { ClientSession, ViewPlayer } from '../net/client';
-import { F_BEAM, F_BURNING, F_CAMO, F_CHARGING, F_DAMAGE, F_INVINCIBLE, F_OVERSHIELD, F_RELOAD } from '../net/protocol';
+import { F_BEAM, F_BURNING, F_CAMO, F_CHARGING, F_DAMAGE, F_INVINCIBLE, F_OVERSHIELD, F_RELOAD, F_SAUCED } from '../net/protocol';
 import { angleDiff, dirFromYawPitch, yawPitchOf } from '../shared/vec';
 import { Arena, WELL_DEPTH } from '../sim/arena';
+import { sauceAimScale, sauceLeft } from '../sim/sauce';
 import { SPRING_TICKS, inFlight, springLift } from '../sim/spring';
 import { FIRE_EXPOSURE, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
 import { drop, eyePos, hitboxOf, rayHitbox } from '../sim/hitbox';
@@ -16,9 +17,9 @@ import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import type { Projectile, SimEvent } from '../sim/types';
 import { WEAPONS, weaponByIndex, type WeaponId } from '../sim/weapons';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
-import { FlashLights, Particles, Ribbons } from './fx';
-import { buildOrb, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
-import { PAL } from './palette';
+import { Decals, FlashLights, Particles, Ribbons } from './fx';
+import { buildOrb, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
+import { PAL, SAUCE } from './palette';
 import { QUALITY, type QualityPreset } from './quality';
 import { Grass, buildFence, buildFlowers, buildHoles, buildSky, buildTerrain, buildTrees } from './world';
 
@@ -44,6 +45,8 @@ interface SpartanView {
   /** speech bubble for callouts ("SUPPRESSING FIRE!") */
   bubble: THREE.Sprite | null;
   bubbleUntil: number;
+  /** dollops of Gerry Sauce stuck on them */
+  sauce: THREE.Mesh[];
 }
 
 /** On-screen text for voice callouts. */
@@ -71,7 +74,7 @@ interface StrikeView {
 }
 
 const WEAPON_SFX: Record<WeaponId, SfxId> = {
-  sniper: 'sniper', br: 'rifle', crossbow: 'crossbow', rpg: 'rocket', grenade: 'bloop', railgun: 'rail', hyperbeam: 'charge', needler: 'needle', flamethrower: 'flameLoop', minigun: 'minigun', orbital: 'beep',
+  sniper: 'sniper', br: 'rifle', crossbow: 'crossbow', rpg: 'rocket', grenade: 'bloop', railgun: 'rail', hyperbeam: 'charge', needler: 'needle', flamethrower: 'flameLoop', minigun: 'minigun', orbital: 'beep', soaker: 'squirt',
 };
 
 /** Dispose geometries, materials and textures of a detached subtree. */
@@ -141,6 +144,11 @@ export class Game {
   private sun: THREE.DirectionalLight;
   private fxAdd: Particles;
   private fxNorm: Particles;
+  /** Gerry Sauce spray gets its own pool so it can't push combat effects out */
+  private fxSauce: Particles;
+  private decals = new Decals(64);
+  /** Super Soaker squirts in flight: one custard jet per target, launched so it lands exactly when the sauce does */
+  private sauceViews = new Map<number, { owner: number; at: number; fired: number; jets: { from: THREE.Vector3; v: THREE.Vector3 }[] | null }>();
   private ribbons: Ribbons;
   private lights: FlashLights;
   private spartans = new Map<number, SpartanView>();
@@ -232,6 +240,8 @@ export class Game {
     // fx
     this.fxAdd = new Particles(quality.particles, true);
     this.fxNorm = new Particles(Math.round(quality.particles * 0.7), false);
+    this.fxSauce = new Particles(Math.round(quality.particles * 1.5), false, true);
+    this.scene.add(this.fxSauce.mesh, this.decals.mesh);
     this.ribbons = new Ribbons(160);
     this.lights = new FlashLights(this.scene, quality.level === 'low' ? 1 : 3);
     this.scene.add(this.fxAdd.mesh, this.fxNorm.mesh, this.ribbons.mesh);
@@ -270,6 +280,7 @@ export class Game {
       },
       canLock: () => !this.hooks.isMenuOpen(),
       canSpring: () => this.canSpring(),
+      aimScale: () => this.aimScale(),
     });
     this.input.mountTouch(this.touchEl);
     this.applyDevice();
@@ -369,6 +380,12 @@ export class Game {
   private liftOf(p: ViewPlayer | null | undefined): number {
     if (!p) return 0;
     return springLift(p.springAt, p.slot === this.session.slot ? this.session.hostTick : this.session.renderTick);
+  }
+
+  /** Covered in Gerry Sauce: aiming is slow, speeding back up as it clears. */
+  private aimScale(): number {
+    const me = this.session.me;
+    return me?.al ? sauceAimScale(me.sa, me.su, this.session.hostTick) : 1;
   }
 
   private canSpring(): boolean {
@@ -525,11 +542,14 @@ export class Game {
     this.updateProjectiles(dt);
     this.updateStrikes();
     this.updateSprings();
+    this.updateSauces(dt);
     this.updateCamera(dt);
     this.updateViewmodel(dt);
     this.updateHud();
     this.fxAdd.update(dt);
     this.fxNorm.update(dt);
+    this.fxSauce.update(dt);
+    this.decals.update(dt);
     this.ribbons.update(dt);
     this.lights.update(dt);
     this.grass.update(this.time);
@@ -808,6 +828,20 @@ export class Game {
         case 'spring':
           this.springViews.set(e.p, { at: e.t, launched: false, mesh: null });
           break;
+        case 'sauce': {
+          // a Super Soaker squirt: the whole field gets drenched in a second
+          this.sauceViews.set(e.id, { owner: e.p, at: e.at, fired: e.t, jets: null });
+          const pos = e.p === mySlot ? null : this.posOf(e.p);
+          audio.play('pump', { pos, gain: 0.9 });
+          audio.play('squirt', { pos, gain: 1.1, delay: 0.2 });
+          audio.announce(POWERUPS.sauce.announce);
+          if (e.p === mySlot) this.hud.message('Everyone gets sauced!', 2200);
+          else this.hud.message('Gerry Sauce incoming!', 1600, 'warn');
+          break;
+        }
+        case 'sauced':
+          this.onSauced(e.v);
+          break;
         case 'forced':
           if (e.p === mySlot) {
             this.hud.message('Get up!', 1500, 'warn');
@@ -1056,7 +1090,7 @@ export class Game {
     if (!sv) {
       const parts = buildSpartan(p.color);
       this.scene.add(parts.root);
-      sv = { slot: p.slot, parts, color: p.color, weapon: '', weaponModel: null, alive: p.alive, deathT: 0, deathDir: 1, flare: 0, flareColor: 0x6ad8ff, estShield: SHIELD_MAX, lastHitAt: -99, name: '', tag: null, tagFor: '', beamSound: null, voice: null, headScale: 1, bubble: null, bubbleUntil: 0 };
+      sv = { slot: p.slot, parts, color: p.color, weapon: '', weaponModel: null, alive: p.alive, deathT: 0, deathDir: 1, flare: 0, flareColor: 0x6ad8ff, estShield: SHIELD_MAX, lastHitAt: -99, name: '', tag: null, tagFor: '', beamSound: null, voice: null, headScale: 1, bubble: null, bubbleUntil: 0, sauce: [] };
       this.spartans.set(p.slot, sv);
     }
     return sv;
@@ -1161,6 +1195,22 @@ export class Game {
         sv.parts.shellMat.uniforms.strength!.value = shellStrength;
         sv.parts.shellMat.uniforms.time!.value = this.time;
       }
+      // Gerry Sauce dollops on sauced players
+      const sauced = (p.flags & F_SAUCED) !== 0;
+      if (sauced && !sv.sauce.length) {
+        const head = buildSauceBlob();
+        head.scale.set(0.3, 0.26, 0.3);
+        head.position.set(0.03, 0.12, -0.02);
+        const chest = buildSauceBlob();
+        chest.scale.set(0.24, 0.2, 0.18);
+        chest.position.set(-0.08, 0.42, -0.2);
+        SHARED.add(head.geometry).add(head.material);
+        sv.parts.head.add(head);
+        sv.parts.body.add(chest);
+        sv.sauce = [head, chest];
+      }
+      for (const b of sv.sauce) b.visible = sauced;
+      if (sauced && Math.random() < dt * 6) this.fxSauce.emit({ pos: this.headPos(p).add(new THREE.Vector3((Math.random() - 0.5) * 0.4, -0.2, (Math.random() - 0.5) * 0.4)), count: 1, speed: [0, 0.3], gravity: 6, life: [0.5, 0.9], size: [0.12, 0.08], color: SAUCE.base, color1: SAUCE.shade, alpha: [1, 0.8] });
       // Pitre: the leader is the Cat in the Hat
       sv.parts.catHat.visible = !!settings?.pitre && settings.pitreCatHat && s.leader === p.slot && !camo;
       // charging & beams
@@ -1371,6 +1421,92 @@ export class Game {
         else if (w === 'needler') this.fxAdd.emit({ pos: pr, count: 1, speed: [0, 0.1], life: [0.1, 0.2], size: [0.14, 0.02], color: 0xff5fd2 });
         else if (w === 'grenade') this.fxAdd.emit({ pos: pr, count: 1, speed: [0, 0.1], life: [0.15, 0.3], size: [0.18, 0.02], color: 0x7cff6b });
       }
+    }
+  }
+
+  /** The sauce lands on someone: splat on them, splats around their hole; my own screen gets covered (HUD). */
+  private onSauced(slot: number) {
+    const s = this.session;
+    const p = s.players[slot];
+    if (!p) return;
+    if (slot === s.slot) {
+      audio.play('splat', { gain: 1.2 });
+      audio.play('splat', { gain: 0.8, rate: 0.8, delay: 0.12 });
+      this.hud.message('Sauced!', 1500, 'warn');
+      this.shake = Math.min(1.2, this.shake + 0.6);
+    } else {
+      const head = this.headPos(p);
+      audio.play('splat', { pos: head, gain: 1.1 });
+      this.fxSauce.emit({ pos: head, count: 26, speed: [2, 7], dir: new THREE.Vector3(0, 1, 0), spread: 1, gravity: 9.8, life: [0.6, 1.2], size: [0.32, 0.14], color: SAUCE.gloss, color1: SAUCE.shade, alpha: [1, 0.9] });
+    }
+    const h = this.holeOf(p);
+    for (let i = 0; i < 3; i++) {
+      const a = Math.random() * Math.PI * 2, r = 2 + Math.random() * 1.5;
+      const x = h.x + Math.cos(a) * r, z = h.z + Math.sin(a) * r;
+      this.decals.add(new THREE.Vector3(x, this.arena.groundAt(x, z) + 0.03, z), 0.6 + Math.random() * 0.8, SAUCE.base, 9);
+    }
+  }
+
+  /** Super Soaker squirts in flight: a geyser at the shooter and a custard jet arcing into every other player's hole, then rain. */
+  private updateSauces(dt: number) {
+    const s = this.session;
+    const g = 9.8;
+    // the jets fly on a heavier, made-up gravity: a higher lob looks more like spraying the whole field
+    const gj = 24;
+    for (const [id, v] of this.sauceViews) {
+      const mine = v.owner === s.slot;
+      const now = mine ? s.hostTick : s.renderTick;
+      const left = (v.at - now) / TICK_RATE;
+      const owner = s.players[v.owner];
+      if (now < v.fired) continue;
+      if (!v.jets && owner) {
+        // aim every jet once: it leaves the soaker now and lands on its target exactly when the sauce does
+        const from = this.muzzleOf(v.owner);
+        const T = (v.at - v.fired) / TICK_RATE;
+        v.jets = s.players
+          .filter((p): p is ViewPlayer => !!p && p.slot !== v.owner && p.alive)
+          .map((p) => {
+            const to = this.headPos(p);
+            return { from: from.clone(), v: new THREE.Vector3((to.x - from.x) / T, (to.y - from.y) / T + 0.5 * gj * T, (to.z - from.z) / T) };
+          });
+      }
+      if (left > 0 && owner && v.jets) {
+        // a custard geyser out of their soaker (not when we're looking down its barrel: it would fill the screen)
+        if (v.owner !== this.viewSlot()) {
+          const from = this.muzzleOf(v.owner);
+          this.fxSauce.emit({ pos: from, count: 3, speed: [7, 12], dir: new THREE.Vector3(0, 1, 0), spread: 0.25, gravity: g, life: [0.6, 1.2], size: [0.35, 0.2], color: SAUCE.gloss, color1: SAUCE.base, alpha: [1, 0.9] });
+        }
+        // each jet is a slug of custard drawn as a chain of drops from its tail to its head, redrawn every frame: the
+        // drops live just past this frame's particle update (however slow the frame), so each chain is seen exactly once
+        const tau = (now - v.fired) / TICK_RATE;
+        const once = dt * 1.2 + 0.005;
+        const tail = 0.22;
+        // enough drops to look continuous, within a per-frame budget shared by all the jets
+        const cap = Math.max(6, Math.floor((this.q.level === 'low' ? 120 : 320) / Math.max(1, v.jets.length)));
+        for (const j of v.jets) {
+          const s0 = Math.max(0, tau - tail);
+          const n = Math.min(cap, Math.max(6, Math.ceil((j.v.length() * (tau - s0)) / 0.22)));
+          for (let i = 0; i <= n; i++) {
+            const t = s0 + ((tau - s0) * i) / n;
+            const pos = { x: j.from.x + j.v.x * t, y: j.from.y + j.v.y * t - 0.5 * gj * t * t, z: j.from.z + j.v.z * t };
+            const head = i / n;
+            const size = 0.32 + head * 0.3;
+            this.fxSauce.emit({ pos, count: 1, speed: [0, 0], life: [once, once], size: [size, size], color: head > 0.9 ? SAUCE.gloss : SAUCE.base, alpha: [1, 1] });
+          }
+          // droplets shed from the head of the jet
+          if (Math.random() < 0.5) {
+            const pos = { x: j.from.x + j.v.x * tau, y: j.from.y + j.v.y * tau - 0.5 * gj * tau * tau, z: j.from.z + j.v.z * tau };
+            this.fxSauce.emit({ pos, count: 1, speed: [0.5, 2], gravity: g, life: [0.4, 0.8], size: [0.18, 0.1], color: SAUCE.base, color1: SAUCE.shade, alpha: [1, 0.8] });
+          }
+        }
+      } else if (left > -1.5) {
+        // after it lands: a short custard rain over the field
+        const R = this.arena.fenceRadius;
+        for (let i = 0; i < (this.q.level === 'low' ? 2 : 6); i++) {
+          const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * R;
+          this.fxSauce.emit({ pos: { x: Math.cos(a) * r, y: 14 + Math.random() * 8, z: Math.sin(a) * r }, count: 1, speed: [0, 1], gravity: 12, life: [1.4, 1.9], size: [0.3, 0.22], color: SAUCE.base, color1: SAUCE.shade, alpha: [0.95, 0.9] });
+        }
+      } else this.sauceViews.delete(id);
     }
   }
 
@@ -1620,6 +1756,7 @@ export class Game {
     if (!settings) return;
     const hud = this.hud;
     if (me) {
+      hud.sauce(me.al ? sauceLeft(me.sa, me.su, s.hostTick) : 0);
       hud.shield(me.sh, me.shm, me.hp, me.hpm, me.os, me.al);
       if (me.al && me.sh < me.shm * 0.25 && me.shm > 0 && this.time - this.lowShieldAt > 1.2) {
         this.lowShieldAt = this.time;

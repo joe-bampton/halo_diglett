@@ -45,8 +45,16 @@ const particleFS = /* glsl */ `
     float d = length(vUv) * 2.0;
     float a = smoothstep(1.0, 0.0, d);
     a *= a;
+    #ifdef SOLID
+    // a gloopy drop: firm edge, darker rim, glossy highlight
+    a = smoothstep(1.0, 0.8, d);
+    float hl = smoothstep(0.3, 0.0, length(vUv - vec2(-0.14, 0.16)));
+    vec3 c = mix(vCol.rgb * (0.8 + 0.2 * (1.0 - d)), vec3(1.0), hl * 0.7);
+    #else
+    vec3 c = vCol.rgb;
+    #endif
     if (a * vCol.a < 0.004) discard;
-    gl_FragColor = vec4(vCol.rgb, a * vCol.a);
+    gl_FragColor = vec4(c, a * vCol.a);
   }`;
 
 /** CPU-simulated billboard particles, one draw call per system. */
@@ -57,7 +65,8 @@ export class Particles {
   private col: Float32Array;
   private size: Float32Array;
   private geo: THREE.InstancedBufferGeometry;
-  constructor(private max: number, additive: boolean) {
+  /** `solid`: opaque, glossy drops (Gerry Sauce) drawn in their exact palette colours. */
+  constructor(private max: number, additive: boolean, private solid = false) {
     const g = new THREE.InstancedBufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0], 3));
     g.setIndex([0, 1, 2, 0, 2, 3]);
@@ -72,6 +81,7 @@ export class Particles {
     const mat = new THREE.ShaderMaterial({
       vertexShader: particleVS,
       fragmentShader: particleFS,
+      defines: solid ? { SOLID: '' } : {},
       transparent: true,
       depthWrite: false,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
@@ -83,8 +93,10 @@ export class Particles {
 
   emit(o: EmitOpts) {
     const n = o.count ?? 10;
-    const c0 = new THREE.Color(o.color ?? 0xffffff);
-    const c1 = new THREE.Color(o.color1 ?? o.color ?? 0xffffff);
+    // the shader writes colours out untouched, so "exact" colours skip the sRGB → linear conversion
+    const cs = this.solid ? THREE.LinearSRGBColorSpace : THREE.SRGBColorSpace;
+    const c0 = new THREE.Color().setHex(o.color ?? 0xffffff, cs);
+    const c1 = new THREE.Color().setHex(o.color1 ?? o.color ?? 0xffffff, cs);
     for (let i = 0; i < n; i++) {
       if (this.ps.length >= this.max) this.ps.shift();
       const sp = o.speed ? o.speed[0] + Math.random() * (o.speed[1] - o.speed[0]) : 1;
@@ -277,5 +289,76 @@ export class FlashLights {
       s.age += dt;
       s.l.intensity = s.i0 * Math.max(0, 1 - s.age / s.life);
     }
+  }
+}
+
+const decalVS = /* glsl */ `
+  attribute float iAlpha;
+  varying vec2 vUv; varying float vA; varying vec3 vC;
+  void main(){
+    vUv = uv;
+    vA = iAlpha;
+    #ifdef USE_INSTANCING_COLOR
+    vC = instanceColor;
+    #else
+    vC = vec3(1.0);
+    #endif
+    gl_Position = projectionMatrix * viewMatrix * modelMatrix * instanceMatrix * vec4(position, 1.0);
+  }`;
+const decalFS = /* glsl */ `
+  varying vec2 vUv; varying float vA; varying vec3 vC;
+  void main(){
+    vec2 p = vUv * 2.0 - 1.0;
+    float r = length(p);
+    float ang = atan(p.y, p.x);
+    // blobby splat edge
+    float edge = 0.78 + 0.12 * sin(ang * 5.0) + 0.06 * sin(ang * 11.0 + 1.3);
+    float a = smoothstep(edge, edge - 0.12, r);
+    if (a * vA < 0.01) discard;
+    gl_FragColor = vec4(vC * (0.9 + 0.1 * (1.0 - r)), a * vA);
+  }`;
+
+/** Flat splats on the ground (Gerry Sauce, scorch marks) that fade away — one instanced draw call. */
+export class Decals {
+  readonly mesh: THREE.InstancedMesh;
+  private items: { age: number; life: number; a0: number }[] = [];
+  private alpha: Float32Array;
+  private next = 0;
+  constructor(private max = 48) {
+    const geo = new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2);
+    this.alpha = new Float32Array(max);
+    geo.setAttribute('iAlpha', new THREE.InstancedBufferAttribute(this.alpha, 1).setUsage(THREE.DynamicDrawUsage));
+    const mat = new THREE.ShaderMaterial({ vertexShader: decalVS, fragmentShader: decalFS, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    this.mesh = new THREE.InstancedMesh(geo, mat, max);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 2;
+    for (let i = 0; i < max; i++) {
+      this.mesh.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0));
+      this.mesh.setColorAt(i, new THREE.Color(0xffffff));
+      this.items.push({ age: 1, life: 1, a0: 0 });
+    }
+  }
+
+  /** A splat of radius `r` lying on the ground at `pos`. */
+  add(pos: THREE.Vector3, r: number, color: number, life = 8, alpha = 0.95) {
+    const i = this.next;
+    this.next = (this.next + 1) % this.max;
+    const m4 = new THREE.Matrix4().compose(pos, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * 6.28), new THREE.Vector3(r, 1, r));
+    this.mesh.setMatrixAt(i, m4);
+    // the shader writes the colour out untouched: keep it as the exact sRGB palette colour
+    this.mesh.setColorAt(i, new THREE.Color().setHex(color, THREE.LinearSRGBColorSpace));
+    this.items[i] = { age: 0, life, a0: alpha };
+    this.mesh.instanceMatrix.needsUpdate = true;
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+  }
+
+  update(dt: number) {
+    for (let i = 0; i < this.max; i++) {
+      const it = this.items[i]!;
+      it.age += dt;
+      // fade over the last 2 seconds
+      this.alpha[i] = it.age >= it.life ? 0 : it.a0 * Math.min(1, (it.life - it.age) / 2);
+    }
+    (this.mesh.geometry.getAttribute('iAlpha') as THREE.InstancedBufferAttribute).needsUpdate = true;
   }
 }

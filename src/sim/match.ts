@@ -63,6 +63,7 @@ export function createMatch(settings: Settings, roster: RosterEntry[], seed: num
     orbs: [],
     nextOrbAt: 0,
     strikes: [],
+    sauces: [],
     history: new Uint8Array(MAX_SLOTS * HISTORY),
     leader: -1,
     winner: -1,
@@ -137,6 +138,8 @@ function newPlayer(m: MatchState, r: RosterEntry, hole: number): PlayerState {
     respawnRequested: false,
     springs: 0,
     springAt: -1,
+    saucedAt: -1,
+    saucedUntil: 0,
     pressAt: -1,
     powerups: [],
     underdogUntil: 0,
@@ -272,6 +275,8 @@ function spawnPlayer(m: MatchState, p: PlayerState, hole: number, events: SimEve
   p.alive = true;
   p.respawnRequested = false;
   p.springAt = -1;
+  p.saucedAt = -1;
+  p.saucedUntil = 0;
   p.spawnTick = m.tick;
   p.exposure = 0;
   p.wantStand = false;
@@ -361,6 +366,7 @@ export function stepMatch(m: MatchState, cmds: (PlayerCommand | undefined)[], ar
     // 4. projectiles, strikes, orbs
     stepProjectiles(m, ctx);
     stepStrikes(m, ctx);
+    stepSauces(m, ctx);
     stepOrbs(m, ctx);
     // 5. end conditions & announcements
     checkEnd(m, ctx);
@@ -615,6 +621,17 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
   const t = m.tick;
   const { arena, rng } = ctx;
   const origin = playerEye(m, arena, p);
+  if (w.fireKind === 'spray') {
+    // Gerry Sauce: one squirt drenches everyone else on the field a moment later
+    p.revealUntil = t + TICK_RATE;
+    const id = m.nextId++;
+    const at = t + secToTicks(w.sauce!.delay);
+    m.sauces.push({ id, owner: p.slot, at });
+    ctx.events.push({ k: 'sauce', t, id, p: p.slot, at });
+    ctx.events.push({ k: 'fire', t, p: p.slot, w: w.id, o: V(origin), e: V(origin), hit: 'none' });
+    p.weaponUntil = t + 1;
+    return;
+  }
   let dir = aimDir(p);
   consumeAmmo(m, p, w);
   p.shots++;
@@ -1082,6 +1099,26 @@ function stepStrikes(m: MatchState, ctx: StepContext) {
   }
 }
 
+/** Sauce lands: everyone but the shooter (and the invincible) is stuck standing, visible and slow to aim for a few seconds. */
+function stepSauces(m: MatchState, ctx: StepContext) {
+  if (!m.sauces.length) return;
+  const t = m.tick;
+  const due = m.sauces.filter((s) => t >= s.at);
+  if (!due.length) return;
+  m.sauces = m.sauces.filter((s) => t < s.at);
+  const dur = secToTicks(WEAPONS.soaker.sauce!.duration);
+  for (const s of due) {
+    for (const q of m.players) {
+      if (!q || !q.alive || q.slot === s.owner || hasPowerup(q, 'invincible', t)) continue;
+      q.saucedAt = t;
+      q.saucedUntil = t + dur;
+      q.forcedStandUntil = Math.max(q.forcedStandUntil, q.saucedUntil);
+      q.revealUntil = Math.max(q.revealUntil, q.saucedUntil);
+      ctx.events.push({ k: 'sauced', t, v: q.slot, a: s.owner, until: q.saucedUntil });
+    }
+  }
+}
+
 function stepOrbs(m: MatchState, ctx: StepContext) {
   const t = m.tick;
   const s = m.settings;
@@ -1180,6 +1217,7 @@ function checkEnd(m: MatchState, ctx: StepContext) {
     m.winner = winner ? winner.slot : -1;
     m.projectiles = [];
     m.strikes = [];
+    m.sauces = [];
     if (winner && winner.deaths === 0 && winner.kills >= 10) {
       winner.medals.perfection = 1;
       ctx.events.push({ k: 'medal', t, p: winner.slot, id: 'perfection' });

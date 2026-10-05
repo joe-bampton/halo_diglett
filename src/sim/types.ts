@@ -86,6 +86,9 @@ export interface PlayerState {
   springs: number;
   /** tick of the current / last Spring Jump launch (-1 none) */
   springAt: number;
+  /** Gerry Sauce: when it hit (-1 never) and when it's gone */
+  saucedAt: number;
+  saucedUntil: number;
   pressAt: number;
   powerups: ActivePowerup[];
   underdogUntil: number;
@@ -159,6 +162,8 @@ export interface MatchState {
   orbs: Orb[];
   nextOrbAt: number;
   strikes: Strike[];
+  /** Gerry Sauce squirts in the air: everyone but the owner gets drenched `at` */
+  sauces: { id: number; owner: number; at: number }[];
   history: Uint8Array;
   leader: number;
   winner: number;
@@ -190,4 +195,8 @@ export type SimEvent =
   /** a player yells a voice line (e.g. a Jerry bot's "Suppressing fire!") */
   | { k: 'callout'; t: number; p: number; key: string }
   /** a Spring Jump launch (lands SPRING_TICKS later) */
-  | { k: 'spring'; t: number; p: number };
+  | { k: 'spring'; t: number; p: number }
+  /** a Super Soaker squirt — the sauce lands on everyone else `at` */
+  | { k: 'sauce'; t: number; id: number; p: number; at: number }
+  /** someone got covered in Gerry Sauce until `until` */
+  | { k: 'sauced'; t: number; v: number; a: number; until: number };

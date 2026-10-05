@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { WeaponId } from '../sim/weapons';
-import { PAL } from './palette';
+import { PAL, SAUCE } from './palette';
 
 type Part = [THREE.BufferGeometry, number | THREE.Material];
 
@@ -145,6 +145,21 @@ export function buildWeaponModel(id: WeaponId): THREE.Group {
       }
       g = assemble(parts);
       muzzle = new THREE.Vector3(0, 0, -0.88);
+      break;
+    }
+    case 'soaker': {
+      // chunky toy water blaster with a see-through tank of Gerry Sauce
+      const tank = new THREE.MeshPhongMaterial({ color: SAUCE.base, specular: SAUCE.gloss, shininess: 90, transparent: true, opacity: 0.85 });
+      g = assemble([
+        [new THREE.BoxGeometry(0.13, 0.16, 0.5).translate(0, 0.0, -0.12), 0xff7a1a],
+        [new THREE.CylinderGeometry(0.035, 0.045, 0.3, 10).rotateX(Math.PI / 2).translate(0, 0.03, -0.5), 0x2fbf4a],
+        [new THREE.CylinderGeometry(0.05, 0.05, 0.06, 10).rotateX(Math.PI / 2).translate(0, 0.03, -0.66), 0xf2c230],
+        [new THREE.BoxGeometry(0.1, 0.07, 0.24).translate(0, -0.09, -0.3), 0x2fbf4a],
+        [new THREE.BoxGeometry(0.06, 0.16, 0.08).translate(0, -0.13, 0.05), 0xff7a1a],
+        [new THREE.CylinderGeometry(0.1, 0.1, 0.26, 14).rotateZ(Math.PI / 2).translate(0, 0.16, -0.1), tank],
+        [new THREE.CylinderGeometry(0.035, 0.035, 0.04, 8).translate(0, 0.28, -0.1), 0xf2c230],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.03, -0.7);
       break;
     }
     case 'orbital':
@@ -305,6 +320,24 @@ export function buildOrb(color: number): THREE.Group {
   g.add(top, bottom, band, btnOuter, btn, aura);
   g.userData.aura = aura;
   return g;
+}
+
+let sauceParts: { geo: THREE.BufferGeometry; mat: THREE.Material } | null = null;
+
+/** A lumpy dollop of Gerry Sauce (custard) to stick on a sauced player. Shared geometry — don't dispose. */
+export function buildSauceBlob(): THREE.Mesh {
+  if (!sauceParts) {
+    const geo = new THREE.IcosahedronGeometry(1, 2);
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const k = 1 + 0.18 * Math.sin(x * 5.1 + y * 2.3) * Math.cos(z * 4.7 - y * 1.7) - (y < -0.2 ? 0.15 : 0);
+      pos.setXYZ(i, x * k, y * k * 0.7, z * k);
+    }
+    geo.computeVertexNormals();
+    sauceParts = { geo, mat: new THREE.MeshPhongMaterial({ color: SAUCE.base, specular: SAUCE.gloss, shininess: 90, emissive: 0x1c1a14 }) };
+  }
+  return new THREE.Mesh(sauceParts.geo, sauceParts.mat);
 }
 
 let springParts: { coil: THREE.BufferGeometry; plate: THREE.BufferGeometry; metal: THREE.Material; pad: THREE.Material } | null = null;

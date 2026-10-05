@@ -96,6 +96,7 @@ export const F_CONNECTED = 128;
 export const F_DAMAGE = 256;
 export const F_BIGHEAD = 512;
 export const F_BURNING = 1024;
+export const F_SAUCED = 2048;
 
 /** Private state for the receiving player only. */
 export interface PrivateState {
@@ -121,6 +122,8 @@ export interface PrivateState {
   al: boolean;
   hole: number;
   rq: boolean; // respawn requested (manual respawn)
+  sa: number; // Gerry Sauce hit at (-1 never)
+  su: number; // ...and gone at
 }
 
 export interface SnapshotMsg {

@@ -340,6 +340,44 @@ const whoosh: Gen = (sr) => {
   );
 };
 
+/** Super Soaker pump: two quick wheezes of air. */
+const pump: Gen = (sr) => {
+  const l1 = lp(1800, sr), h1 = hp(300, sr);
+  return normalize(
+    buf(sr, 0.5, (t) => {
+      const w = (t < 0.22 ? Math.sin((Math.PI * t) / 0.22) : 0) + (t > 0.26 && t < 0.48 ? Math.sin((Math.PI * (t - 0.26)) / 0.22) : 0);
+      return h1(l1(noise())) * w * w;
+    }),
+    0.5,
+  );
+};
+
+/** A big pressurised squirt. */
+const squirt: Gen = (sr) => {
+  const l1 = lp(2600, sr), l2 = lp(500, sr);
+  return normalize(
+    buf(sr, 1.0, (t) => {
+      const e = env(t, 0.02, 0.45);
+      const gurgle = 1 + 0.5 * Math.sin(TAU * (18 + 10 * t) * t);
+      return (l1(noise()) * 0.8 + l2(noise()) * 1.6 * gurgle) * e;
+    }),
+    0.6,
+  );
+};
+
+/** Gooey splat. */
+const splat: Gen = (sr) => {
+  const l1 = lp(1400, sr), l2 = lp(220, sr);
+  let ph = 0;
+  return normalize(
+    buf(sr, 0.45, (t) => {
+      ph += (TAU * (160 - t * 220)) / sr;
+      return l1(noise(), 2400 * Math.exp(-t * 12) + 300) * env(t, 0.002, 0.07) + l2(noise()) * env(t, 0.004, 0.12) * 1.5 + Math.sin(ph) * env(t, 0.003, 0.06) * 0.6;
+    }),
+    0.65,
+  );
+};
+
 export const SFX = {
   sniper,
   rifle,
@@ -372,6 +410,9 @@ export const SFX = {
   // new sounds go last: they share one noise sequence with the ones above
   boing,
   whoosh,
+  pump,
+  squirt,
+  splat,
 } satisfies Record<string, Gen>;
 
 export type SfxId = keyof typeof SFX;
