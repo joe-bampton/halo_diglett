@@ -81,9 +81,9 @@ export interface InputMsg {
 }
 
 /**
- * Packed remote player: [slot, exposure0-255, yaw*1000, pitch*1000, flags, weaponIdx, hole, beamLen*10, zoom]
+ * Packed remote player: [slot, exposure0-255, yaw*1000, pitch*1000, flags, weaponIdx, hole, beamLen*10, zoom, springAt]
  */
-export type PackedPlayer = [number, number, number, number, number, number, number, number, number];
+export type PackedPlayer = [number, number, number, number, number, number, number, number, number, number];
 
 export const F_ALIVE = 1;
 export const F_RELOAD = 2;

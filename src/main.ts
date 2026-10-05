@@ -7,7 +7,9 @@ import type { BotDifficulty } from './sim/types';
 import type { Settings } from './sim/settings';
 import type { WeaponId } from './sim/weapons';
 import { eyePos, hitboxOf } from './sim/hitbox';
-import { damagePlayer } from './sim/match';
+import { damagePlayer, grantPowerup } from './sim/match';
+import type { PowerUpId } from './sim/powerups';
+import { springLift } from './sim/spring';
 import { yawPitchOf } from './shared/vec';
 
 const root = document.getElementById('app')!;
@@ -76,8 +78,8 @@ if (!webglOk()) {
         const me = s?.players[s.slot], t = s?.players[slot];
         if (!g || !s || !me || !t) return false;
         const ar = g.arena;
-        const eye = eyePos(ar.holes[me.hole]!, s.myExposure);
-        const hb = hitboxOf(ar.holes[t.hole]!, t.exposure);
+        const eye = eyePos(ar.holes[me.hole]!, s.myExposure, springLift(me.springAt, s.hostTick));
+        const hb = hitboxOf(ar.holes[t.hole]!, t.exposure, 1, springLift(t.springAt, s.renderTick));
         const a = yawPitchOf({ x: hb.head.x - eye.x, y: hb.head.y - eye.y, z: hb.head.z - eye.z });
         g.input.s.yaw = a.yaw;
         g.input.s.pitch = a.pitch;
@@ -89,6 +91,14 @@ if (!webglOk()) {
         app.host?.debugApply((m, ctx) => {
           const p = m.players[target];
           if (p?.alive) damagePlayer(m, ctx, -1, p, 9999, { head: false, weapon: 'sniper', kind: 'direct' });
+        });
+      },
+      /** give a power-up (default: to me) on the host — offline / host only */
+      grant(id: PowerUpId, slot?: number) {
+        const target = slot ?? app.session?.slot ?? -1;
+        app.host?.debugApply((m, ctx) => {
+          const p = m.players[target];
+          if (p?.alive) grantPowerup(m, ctx, p, id);
         });
       },
       /** press Jump while dead (manual respawn) */

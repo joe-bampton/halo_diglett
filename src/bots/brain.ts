@@ -3,7 +3,8 @@ import { angleDiff, clamp, dirFromYawPitch, dist, sub, yawPitchOf, type V3 } fro
 import type { Arena } from '../sim/arena';
 import { DT, FIRE_EXPOSURE, LOWER_TIME, RISE_TIME, TICK_RATE, secToTicks } from '../sim/constants';
 import { eyePos, isExposed, rayHitbox } from '../sim/hitbox';
-import { clipSize, isCamo, playerHitbox } from '../sim/match';
+import { clipSize, hasPowerup, isCamo, playerHitbox } from '../sim/match';
+import { inFlight, springLift } from '../sim/spring';
 import { orbPos } from '../sim/orbs';
 import type { BotDifficulty, MatchState, PlayerCommand, PlayerState, SimEvent } from '../sim/types';
 import { WEAPONS } from '../sim/weapons';
@@ -30,16 +31,18 @@ export interface BotProfile {
   mode?: 'jerry';
   /** sees through walls, knows who is about to pop up and fires the first tick a head can be hit */
   wallhack?: boolean;
+  /** when to use a held Spring Jump: right away, at a random moment, or when it gives an angle into a ducked enemy's hole */
+  springUse: 'now' | 'random' | 'smart';
 }
 
 /** Record order is the order of the difficulty dropdowns. */
 export const BOT_PROFILES: Record<BotDifficulty, BotProfile> = {
-  jerry: { label: 'Jerry', reaction: 1, aimSigma0: 8, aimTau: 1, aimSigmaMin: 4, turnRate: 90, headChance: 0, fireTol: 2, stand: [1.5, 3], duck: [2, 5], duckOnShieldBreak: 0.2, leadSkill: 0, orbInterest: 0, camoDetect: 0, fovDeg: 90, pitchMax: 1.4, mode: 'jerry' },
-  recruit: { label: 'Recruit', reaction: 0.85, aimSigma0: 5, aimTau: 0.6, aimSigmaMin: 1.4, turnRate: 120, headChance: 0.15, fireTol: 2.0, stand: [2.5, 4.5], duck: [1.5, 4], duckOnShieldBreak: 0.25, leadSkill: 0.4, orbInterest: 0.05, camoDetect: 0.2, fovDeg: 100, pitchMax: 1.2 },
-  normal: { label: 'Normal', reaction: 0.55, aimSigma0: 3.5, aimTau: 0.4, aimSigmaMin: 0.7, turnRate: 200, headChance: 0.35, fireTol: 1.4, stand: [2, 3.5], duck: [1.2, 3], duckOnShieldBreak: 0.55, leadSkill: 0.7, orbInterest: 0.15, camoDetect: 0.35, fovDeg: 120, pitchMax: 1.2 },
-  heroic: { label: 'Heroic', reaction: 0.38, aimSigma0: 2.5, aimTau: 0.28, aimSigmaMin: 0.35, turnRate: 300, headChance: 0.6, fireTol: 1.1, stand: [1.5, 3], duck: [0.8, 2.2], duckOnShieldBreak: 0.85, leadSkill: 0.9, orbInterest: 0.3, camoDetect: 0.5, fovDeg: 140, pitchMax: 1.2 },
-  legendary: { label: 'Legendary', reaction: 0.24, aimSigma0: 1.8, aimTau: 0.18, aimSigmaMin: 0.15, turnRate: 420, headChance: 0.85, fireTol: 0.9, stand: [1, 2.5], duck: [0.6, 1.6], duckOnShieldBreak: 1, leadSkill: 1, orbInterest: 0.5, camoDetect: 0.7, fovDeg: 160, pitchMax: 1.2 },
-  topover: { label: 'Top/Over', reaction: 0, aimSigma0: 0, aimTau: 0.01, aimSigmaMin: 0, turnRate: 1e5, headChance: 1, fireTol: 0.9, stand: [4, 8], duck: [0.3, 0.6], duckOnShieldBreak: 0, leadSkill: 1, orbInterest: 0, camoDetect: 99, fovDeg: 360, pitchMax: 1.45, wallhack: true },
+  jerry: { label: 'Jerry', reaction: 1, aimSigma0: 8, aimTau: 1, aimSigmaMin: 4, turnRate: 90, headChance: 0, fireTol: 2, stand: [1.5, 3], duck: [2, 5], duckOnShieldBreak: 0.2, leadSkill: 0, orbInterest: 0, camoDetect: 0, fovDeg: 90, pitchMax: 1.4, mode: 'jerry', springUse: 'now' },
+  recruit: { label: 'Recruit', reaction: 0.85, aimSigma0: 5, aimTau: 0.6, aimSigmaMin: 1.4, turnRate: 120, headChance: 0.15, fireTol: 2.0, stand: [2.5, 4.5], duck: [1.5, 4], duckOnShieldBreak: 0.25, leadSkill: 0.4, orbInterest: 0.05, camoDetect: 0.2, fovDeg: 100, pitchMax: 1.2, springUse: 'random' },
+  normal: { label: 'Normal', reaction: 0.55, aimSigma0: 3.5, aimTau: 0.4, aimSigmaMin: 0.7, turnRate: 200, headChance: 0.35, fireTol: 1.4, stand: [2, 3.5], duck: [1.2, 3], duckOnShieldBreak: 0.55, leadSkill: 0.7, orbInterest: 0.15, camoDetect: 0.35, fovDeg: 120, pitchMax: 1.2, springUse: 'random' },
+  heroic: { label: 'Heroic', reaction: 0.38, aimSigma0: 2.5, aimTau: 0.28, aimSigmaMin: 0.35, turnRate: 300, headChance: 0.6, fireTol: 1.1, stand: [1.5, 3], duck: [0.8, 2.2], duckOnShieldBreak: 0.85, leadSkill: 0.9, orbInterest: 0.3, camoDetect: 0.5, fovDeg: 140, pitchMax: 1.2, springUse: 'smart' },
+  legendary: { label: 'Legendary', reaction: 0.24, aimSigma0: 1.8, aimTau: 0.18, aimSigmaMin: 0.15, turnRate: 420, headChance: 0.85, fireTol: 0.9, stand: [1, 2.5], duck: [0.6, 1.6], duckOnShieldBreak: 1, leadSkill: 1, orbInterest: 0.5, camoDetect: 0.7, fovDeg: 160, pitchMax: 1.2, springUse: 'smart' },
+  topover: { label: 'Top/Over', reaction: 0, aimSigma0: 0, aimTau: 0.01, aimSigmaMin: 0, turnRate: 1e5, headChance: 1, fireTol: 0.9, stand: [4, 8], duck: [0.3, 0.6], duckOnShieldBreak: 0, leadSkill: 1, orbInterest: 0, camoDetect: 99, fovDeg: 360, pitchMax: 1.45, wallhack: true, springUse: 'now' },
 };
 
 export const BOT_NAMES = [
@@ -82,6 +85,10 @@ export class BotBrain {
   private threatAt = -9999;
   private reloadedThisDuck = false;
   private spawnTick = -1;
+  private springs = 0;
+  private springSeen = -1;
+  private springWait = 0;
+  private lastTargetAt = 0;
   private skyYaw = 0;
   private skyPitch = 1.2;
   private lastYell = -9999;
@@ -117,12 +124,14 @@ export class BotBrain {
     const me = m.players[this.slot]!;
     const t = m.tick;
     const pr = this.profile;
-    const cmd: PlayerCommand = { yaw: this.yaw, pitch: this.pitch, stand: false, trigger: false, presses: this.presses, reloads: this.reloads, respawns: 0, zoom: 0, vt: t };
+    const cmd: PlayerCommand = { yaw: this.yaw, pitch: this.pitch, stand: false, trigger: false, presses: this.presses, reloads: this.reloads, respawns: 0, springs: this.springs, zoom: 0, vt: t };
     if (!me.alive) {
       this.up = false;
       this.target = -1;
       return cmd;
     }
+    this.maybeSpring(m, arena, me);
+    cmd.springs = this.springs;
     if (me.spawnTick !== this.spawnTick) {
       // fresh life: face the middle of the field, stay down for a moment
       this.spawnTick = me.spawnTick;
@@ -164,7 +173,9 @@ export class BotBrain {
     }
 
     // --- target selection ----------------------------------------------------------------
-    const eye = eyePos(arena.holes[me.hole]!, Math.max(me.exposure, FIRE_EXPOSURE));
+    // on a Spring Jump we can see (and shoot) down into ducked players' holes
+    const flying = inFlight(me.springAt, t);
+    const eye = eyePos(arena.holes[me.hole]!, Math.max(me.exposure, FIRE_EXPOSURE), springLift(me.springAt, t));
     if (t >= this.nextScan) {
       this.nextScan = t + 12 + this.rng.int(0, 6);
       this.pickTarget(m, arena, me, eye);
@@ -175,7 +186,8 @@ export class BotBrain {
     let tolRad = 0;
     const tgt = this.target >= 0 ? m.players[this.target] : null;
     if (tgt && tgt.alive) {
-      const hb = playerHitbox(m, arena, tgt, Math.max(tgt.exposure, 0.3), me);
+      this.lastTargetAt = t;
+      const hb = playerHitbox(m, arena, tgt, flying ? tgt.exposure : Math.max(tgt.exposure, 0.3), me);
       if (w.splash) {
         // aim at the rim for splash weapons (or into the hole for lobbed grenades)
         aimPoint = w.projectile?.bounce ? { x: hb.head.x, y: hb.rim - 0.2, z: hb.head.z } : { x: hb.torsoA.x, y: Math.max(hb.rim + 0.1, hb.torsoA.y + 0.2), z: hb.torsoA.z };
@@ -187,7 +199,7 @@ export class BotBrain {
         aimPoint = { x: hb.torsoB.x, y: hb.torsoB.y - 0.1, z: hb.torsoB.z };
         tolRad = (hb.torsoR / Math.max(1, dist(eye, aimPoint))) * pr.fireTol;
       }
-      if (!isExposed(tgt.exposure) && !w.projectile?.bounce) tolRad = 0; // wait for them to pop up
+      if (!isExposed(tgt.exposure) && !w.projectile?.bounce && !flying) tolRad = 0; // wait for them to pop up
     } else if (this.targetOrb >= 0) {
       const orb = m.orbs.find((o) => o.id === this.targetOrb);
       if (orb) {
@@ -326,7 +338,7 @@ export class BotBrain {
     // stay up unless reloading; reload the moment the clip runs dry
     this.up = !reloading && loaded;
     if (!loaded && !reloading) this.reloads++;
-    const eye = eyePos(arena.holes[me.hole]!, 1);
+    const eye = eyePos(arena.holes[me.hole]!, 1, springLift(me.springAt, t));
     if (t >= this.nextScan) {
       this.nextScan = t + 6;
       this.target = this.pickWallhack(m, arena, me, eye);
@@ -370,6 +382,36 @@ export class BotBrain {
     return cmd;
   }
 
+  /** Use a held Spring Jump (the sim only needs the launch counter; humans double-press Jump). */
+  private maybeSpring(m: MatchState, arena: Arena, me: PlayerState) {
+    const t = m.tick;
+    if (!hasPowerup(me, 'spring', t) || inFlight(me.springAt, t)) {
+      this.springSeen = -1;
+      return;
+    }
+    if (this.springSeen < 0) {
+      this.springSeen = t;
+      this.springWait = secToTicks(this.rng.range(2, 8));
+    }
+    const held = t - this.springSeen;
+    let go: boolean;
+    if (this.profile.springUse === 'now') go = held > 6;
+    else if (this.profile.springUse === 'random') go = held >= this.springWait;
+    else {
+      // nobody to shoot for a while, but someone is ducked within reach: go look down into their hole
+      const mine = arena.holes[me.hole]!;
+      const idle = t - this.lastTargetAt > secToTicks(1.5);
+      const ducked = m.players.some((q) => {
+        if (!q || q === me || !q.alive || isExposed(q.exposure)) return false;
+        const h = arena.holes[q.hole]!;
+        const d = Math.hypot(h.x - mine.x, h.z - mine.z);
+        return d > 8 && d < 35;
+      });
+      go = (idle && ducked) || held > secToTicks(12);
+    }
+    if (go) this.springs++;
+  }
+
   /** Every enemy whose head would be visible once they stand: exposed first, then about to pop up, then nearest. */
   private pickWallhack(m: MatchState, arena: Arena, me: PlayerState, eye: V3): number {
     let best = -1;
@@ -400,8 +442,9 @@ export class BotBrain {
     if (cur && cur.alive && isExposed(cur.exposure) && arena.lineClear(eye, playerHitbox(m, arena, cur).head, 0.4)) return;
     let best = -1;
     let bestScore = Infinity;
+    const flying = inFlight(me.springAt, t);
     for (const q of m.players) {
-      if (!q || q === me || !q.alive || !isExposed(q.exposure)) continue;
+      if (!q || q === me || !q.alive || (!isExposed(q.exposure) && !flying)) continue;
       const head = playerHitbox(m, arena, q).head;
       const d = dist(eye, head);
       const ang = yawPitchOf({ x: head.x - eye.x, y: head.y - eye.y, z: head.z - eye.z });

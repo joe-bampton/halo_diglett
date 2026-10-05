@@ -6,7 +6,8 @@ import { InputManager, type AssistInfo } from '../input/input';
 import type { ClientSession, ViewPlayer } from '../net/client';
 import { F_BEAM, F_BURNING, F_CAMO, F_CHARGING, F_DAMAGE, F_INVINCIBLE, F_OVERSHIELD, F_RELOAD } from '../net/protocol';
 import { angleDiff, dirFromYawPitch, yawPitchOf } from '../shared/vec';
-import { Arena } from '../sim/arena';
+import { Arena, WELL_DEPTH } from '../sim/arena';
+import { SPRING_TICKS, inFlight, springLift } from '../sim/spring';
 import { FIRE_EXPOSURE, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
 import { drop, eyePos, hitboxOf, rayHitbox } from '../sim/hitbox';
 import { integrateProjectile } from '../sim/match';
@@ -16,7 +17,7 @@ import type { Projectile, SimEvent } from '../sim/types';
 import { WEAPONS, weaponByIndex, type WeaponId } from '../sim/weapons';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
 import { FlashLights, Particles, Ribbons } from './fx';
-import { buildOrb, buildSpartan, buildWeaponModel, textSprite, type SpartanParts } from './models';
+import { buildOrb, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
 import { PAL } from './palette';
 import { QUALITY, type QualityPreset } from './quality';
 import { Grass, buildFence, buildFlowers, buildHoles, buildSky, buildTerrain, buildTrees } from './world';
@@ -268,6 +269,7 @@ export class Game {
         return a === 'off' ? 0 : a === 'low' ? 0.5 : 1;
       },
       canLock: () => !this.hooks.isMenuOpen(),
+      canSpring: () => this.canSpring(),
     });
     this.input.mountTouch(this.touchEl);
     this.applyDevice();
@@ -363,8 +365,19 @@ export class Game {
     return this.arena.holes[p.hole] ?? this.arena.holes[0]!;
   }
 
+  /** Spring Jump height as drawn: mine on the host's clock, everyone else delayed like the rest of their state. */
+  private liftOf(p: ViewPlayer | null | undefined): number {
+    if (!p) return 0;
+    return springLift(p.springAt, p.slot === this.session.slot ? this.session.hostTick : this.session.renderTick);
+  }
+
+  private canSpring(): boolean {
+    const me = this.me;
+    return !!this.session.me?.al && this.hasPu('spring') && !!me && !inFlight(me.springAt, this.session.hostTick);
+  }
+
   private headPos(p: ViewPlayer): THREE.Vector3 {
-    const hb = hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p));
+    const hb = hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p));
     return new THREE.Vector3(hb.head.x, hb.head.y, hb.head.z);
   }
 
@@ -388,7 +401,7 @@ export class Game {
   private eye(): THREE.Vector3 {
     const me = this.me;
     if (!me) return new THREE.Vector3(0, 5, 0);
-    const e = eyePos(this.myHole(), this.session.myExposure);
+    const e = eyePos(this.myHole(), this.session.myExposure, this.liftOf(me));
     return new THREE.Vector3(e.x, e.y, e.z);
   }
 
@@ -396,7 +409,7 @@ export class Game {
     if (slot === this.session.slot) return this.fpMuzzle(this.eye(), this.input.s.yaw, this.input.s.pitch);
     const p = this.session.players[slot];
     if (p && slot === this.viewSlot()) {
-      const e = eyePos(this.holeOf(p), p.exposure);
+      const e = eyePos(this.holeOf(p), p.exposure, this.liftOf(p));
       return this.fpMuzzle(new THREE.Vector3(e.x, e.y, e.z), p.yaw, p.pitch);
     }
     const sv = this.spartans.get(slot);
@@ -437,7 +450,7 @@ export class Game {
     const p = this.session.players[slot];
     if (!p) return null;
     const h = this.holeOf(p);
-    return new THREE.Vector3(h.x, h.rim + 0.6, h.z);
+    return new THREE.Vector3(h.x, h.rim + 0.6 + this.liftOf(p), h.z);
   }
 
   private predicted(w: WeaponId): boolean {
@@ -459,7 +472,7 @@ export class Game {
     let bd = Infinity;
     for (const p of this.session.players) {
       if (!p || p.slot === me.slot || !p.alive || p.exposure < 0.2 || p.flags & F_CAMO) continue;
-      const hb = hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p));
+      const hb = hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p));
       const target = { x: hb.head.x, y: (hb.head.y + hb.torsoB.y) / 2, z: hb.head.z };
       const dist = Math.hypot(target.x - eye.x, target.y - eye.y, target.z - eye.z);
       const a = yawPitchOf({ x: target.x - eye.x, y: target.y - eye.y, z: target.z - eye.z });
@@ -496,9 +509,10 @@ export class Game {
       this.lastStand = inp.stand;
       if (s.me?.al) audio.play('rustle', { gain: 0.35, rate: inp.stand ? 1.2 : 0.9 });
     }
-    Object.assign(s.input, { yaw: inp.yaw, pitch: inp.pitch, stand: inp.stand, trigger: inp.trigger, presses: inp.presses, reloads: inp.reloads, respawns: inp.respawns, zoom: inp.zoom });
-    if (this.pred.pending || inp.respawns !== this.lastRespawns) {
+    Object.assign(s.input, { yaw: inp.yaw, pitch: inp.pitch, stand: inp.stand, trigger: inp.trigger, presses: inp.presses, reloads: inp.reloads, respawns: inp.respawns, springs: inp.springs, zoom: inp.zoom });
+    if (this.pred.pending || inp.respawns !== this.lastRespawns || inp.springs !== this.lastSprings) {
       this.lastRespawns = inp.respawns;
+      this.lastSprings = inp.springs;
       s.flushInput();
     }
     s.update(now);
@@ -510,6 +524,7 @@ export class Game {
     this.updateOrbs(dt);
     this.updateProjectiles(dt);
     this.updateStrikes();
+    this.updateSprings();
     this.updateCamera(dt);
     this.updateViewmodel(dt);
     this.updateHud();
@@ -625,8 +640,8 @@ export class Game {
       // cosmetic trace: terrain + interpolated players
       let end = Math.min(w.range, this.arena.raycast(eye, d, w.range));
       for (const p of s.players) {
-        if (!p || p.slot === s.slot || !p.alive || p.exposure < 0.01) continue;
-        const h = rayHitbox(eye, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p)));
+        if (!p || p.slot === s.slot || !p.alive) continue;
+        const h = rayHitbox(eye, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p)));
         if (h && h.t < end) end = h.t;
       }
       const endP = eye.clone().addScaledVector(dir, end);
@@ -739,7 +754,8 @@ export class Game {
             if (def) {
               audio.announce(def.announce);
               audio.play('powerup');
-              this.hud.message(def.name, 2000);
+              const key = this.input.device === 'pad' ? 'Ⓐ' : this.input.device === 'touch' ? 'STAND' : 'SPACE';
+              this.hud.message(def.id === 'spring' ? `${def.name} — double-tap ${key} to launch` : def.name, def.id === 'spring' ? 3500 : 2000);
             }
           }
           break;
@@ -788,6 +804,9 @@ export class Game {
         }
         case 'callout':
           this.playCallout(e.p, e.key);
+          break;
+        case 'spring':
+          this.springViews.set(e.p, { at: e.t, launched: false, mesh: null });
           break;
         case 'forced':
           if (e.p === mySlot) {
@@ -858,6 +877,9 @@ export class Game {
   private myVoice: SoundHandle | null = null;
   private lastStand = false;
   private lastRespawns = 0;
+  private lastSprings = 0;
+  /** Spring Jumps in progress (pop-out spring, sounds, landing) */
+  private springViews = new Map<number, { at: number; launched: boolean; mesh: THREE.Group | null }>();
 
   private brapMode(): boolean {
     const st = this.session.start?.settings;
@@ -1074,12 +1096,13 @@ export class Game {
         root.visible = sv.deathT < 1.1;
         const t = Math.min(1, sv.deathT / 0.6);
         root.rotation.x = -t * 1.2 * sv.deathDir;
-        root.position.set(hole.x, hole.rim + drop(0.6) - t * t * 1.4, hole.z);
+        // shot down mid Spring Jump: the body keeps falling back into the hole
+        root.position.set(hole.x, hole.rim + drop(0.6) - t * t * 1.4 + this.liftOf(p), hole.z);
         continue;
       }
       root.visible = true;
       root.rotation.set(0, 0, 0);
-      root.position.set(hole.x, hole.rim + drop(p.exposure), hole.z);
+      root.position.set(hole.x, hole.rim + drop(p.exposure) + this.liftOf(p), hole.z);
       sv.parts.body.rotation.y = p.yaw;
       sv.parts.aim.rotation.x = p.pitch * 0.85;
       const hs = this.headScaleFor(p);
@@ -1314,7 +1337,7 @@ export class Game {
           if (pv.local) {
             for (const p of s.players) {
               if (!p || p.slot === s.slot || !p.alive) continue;
-              const h = rayHitbox(prev, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p)), def.radius);
+              const h = rayHitbox(prev, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p)), def.radius);
               if (h && h.t < L) dead = true;
             }
           }
@@ -1347,6 +1370,50 @@ export class Game {
         } else if (w === 'crossbow') this.fxAdd.emit({ pos: pr, count: 1, speed: [0, 0.1], life: [0.15, 0.25], size: [0.12, 0.02], color: 0x9fe8ff });
         else if (w === 'needler') this.fxAdd.emit({ pos: pr, count: 1, speed: [0, 0.1], life: [0.1, 0.2], size: [0.14, 0.02], color: 0xff5fd2 });
         else if (w === 'grenade') this.fxAdd.emit({ pos: pr, count: 1, speed: [0, 0.1], life: [0.15, 0.3], size: [0.18, 0.02], color: 0x7cff6b });
+      }
+    }
+  }
+
+  /** Spring Jumps: a spring pops out of the hole, boing + whoosh, then a thud on landing. Remote ones play on their delayed clock. */
+  private updateSprings() {
+    const s = this.session;
+    for (const [slot, v] of this.springViews) {
+      const p = s.players[slot];
+      if (!p) {
+        if (v.mesh) this.scene.remove(v.mesh);
+        this.springViews.delete(slot);
+        continue;
+      }
+      const mine = slot === s.slot;
+      const now = mine ? s.hostTick : s.renderTick;
+      const hole = this.holeOf(p);
+      const at = new THREE.Vector3(hole.x, hole.rim, hole.z);
+      const age = (now - v.at) / TICK_RATE;
+      if (!v.launched && age >= 0) {
+        v.launched = true;
+        audio.play('boing', { pos: mine ? null : at, gain: 0.9, reverb: 0.2 });
+        audio.play('whoosh', { pos: mine ? null : at, gain: mine ? 0.45 : 0.6 });
+        this.fxNorm.emit({ pos: at, count: 18, speed: [1, 4], dir: new THREE.Vector3(0, 1, 0), spread: 1.2, life: [0.5, 1], size: [0.3, 0.9], color: 0x8a7a5a, alpha: [0.6, 0], gravity: 2 });
+        v.mesh = buildSpring();
+        this.scene.add(v.mesh);
+      }
+      if (v.mesh) {
+        // pops up out of the well, then sinks back
+        const k = age < 0.18 ? age / 0.18 : Math.max(0, 1 - (age - 0.18) / 0.5);
+        v.mesh.position.set(hole.x, hole.ground - WELL_DEPTH + 0.1, hole.z);
+        v.mesh.scale.set(1, 0.05 + k * (WELL_DEPTH + 1.6), 1);
+        v.mesh.visible = k > 0.01;
+        if (age > 0.8) {
+          this.scene.remove(v.mesh);
+          v.mesh = null;
+        }
+      }
+      if (now >= v.at + SPRING_TICKS) {
+        audio.play('thud', { pos: mine ? null : at, gain: 0.9 });
+        this.fxNorm.emit({ pos: at, count: 14, speed: [1, 3], dir: new THREE.Vector3(0, 1, 0), spread: 1.4, life: [0.4, 0.9], size: [0.3, 0.8], color: 0x8a7a5a, alpha: [0.6, 0], gravity: 3 });
+        if (mine) this.shake = Math.min(1, this.shake + 0.35);
+        if (v.mesh) this.scene.remove(v.mesh);
+        this.springViews.delete(slot);
       }
     }
   }
@@ -1398,7 +1465,7 @@ export class Game {
       const h = this.myHole();
       const t = Math.min(1, (this.time - this.diedAt) / 1.2);
       const target = this.killer >= 0 && this.killer !== s.slot ? this.posOf(this.killer) : new THREE.Vector3(0, 2, 0);
-      const base = new THREE.Vector3(h.x, h.rim + 0.9, h.z);
+      const base = new THREE.Vector3(h.x, h.rim + 0.9 + this.liftOf(me), h.z);
       const away = base.clone().sub(target ?? new THREE.Vector3()).setY(0).normalize();
       const camPos = base.clone().add(new THREE.Vector3(0, 1 + t * 3.5, 0)).addScaledVector(away, t * 4);
       this.camera.position.lerp(camPos, this.wasAlive ? 1 : 1 - Math.exp(-dt * 6));
@@ -1461,7 +1528,7 @@ export class Game {
     const hole = this.holeOf(t);
     if (sp.view === 'first' && t.alive) {
       // through their eyes
-      const e = eyePos(hole, t.exposure);
+      const e = eyePos(hole, t.exposure, this.liftOf(t));
       const k = sp.snap ? 1 : 1 - Math.exp(-dt * 25);
       sp.yaw += angleDiff(t.yaw, sp.yaw) * k;
       sp.pitch += (t.pitch - sp.pitch) * k;
@@ -1473,7 +1540,7 @@ export class Game {
       return fov / this.zoomOf(t);
     }
     // third person: orbit around their head; the terrain pulls the camera in rather than block the view
-    const pivot = t.alive ? this.headPos(t) : new THREE.Vector3(hole.x, hole.rim + 1, hole.z);
+    const pivot = t.alive ? this.headPos(t) : new THREE.Vector3(hole.x, hole.rim + 1 + this.liftOf(t), hole.z);
     const o = this.input.spec;
     const d = dirFromYawPitch(o.yaw, o.pitch);
     let dist = o.dist;
@@ -1589,8 +1656,12 @@ export class Game {
       }
       // power-ups
       const pus = me.pu
-        .filter(([, until]) => until > s.hostTick)
-        .map(([id, until]) => ({ id: id as PowerUpId, frac: (until - s.hostTick) / (POWERUPS[id as PowerUpId].duration * settings.powerupDurationMult * TICK_RATE) }));
+        .filter(([id, until]) => until > s.hostTick && POWERUPS[id as PowerUpId])
+        .map(([id, until]) => {
+          const def = POWERUPS[id as PowerUpId];
+          // held power-ups (Spring Jump) don't run down
+          return { id: def.id, frac: def.held ? 1 : (until - s.hostTick) / (def.duration * settings.powerupDurationMult * TICK_RATE) };
+        });
       if (me.ud > s.hostTick) pus.push({ id: 'camo', frac: (me.ud - s.hostTick) / (20 * TICK_RATE) });
       hud.powerups(pus);
       // respawn / warnings

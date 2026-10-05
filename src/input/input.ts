@@ -9,7 +9,26 @@ export interface InputState {
   reloads: number;
   /** cumulative respawn requests (Jump while dead) */
   respawns: number;
+  /** cumulative Spring Jump launches (double-press Jump) */
+  springs: number;
   zoom: number;
+}
+
+/** Two presses within `windowMs` make a double-press (the next press starts over). */
+export class DoubleTap {
+  private last = -Infinity;
+  constructor(private windowMs = 300) {}
+  press(nowMs: number): boolean {
+    if (nowMs - this.last <= this.windowMs) {
+      this.last = -Infinity;
+      return true;
+    }
+    this.last = nowMs;
+    return false;
+  }
+  reset() {
+    this.last = -Infinity;
+  }
 }
 
 export interface Options {
@@ -55,11 +74,13 @@ export interface InputHooks {
   assist(): AssistInfo | null;
   assistStrength(): number;
   canLock(): boolean;
+  /** holding a Spring Jump and on the ground */
+  canSpring(): boolean;
 }
 
 /** Unified keyboard+mouse / gamepad / touch input. */
 export class InputManager {
-  readonly s: InputState = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, respawns: 0, zoom: 0 };
+  readonly s: InputState = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, respawns: 0, springs: 0, zoom: 0 };
   opts: Options = loadOptions();
   /** 'spectate' while dead: Jump asks for a respawn, aim drives the spectator camera */
   private _mode: 'play' | 'spectate' = 'play';
@@ -68,6 +89,8 @@ export class InputManager {
   private specCycle = 0;
   private specToggles = 0;
   private pinchD = 0;
+  private standTap = new DoubleTap(300);
+  private touchSpringTap = false;
   device: 'kbm' | 'pad' | 'touch' = matchMedia('(pointer: coarse)').matches ? 'touch' : 'kbm';
   enabled = false;
   /** test hooks */
@@ -179,8 +202,13 @@ export class InputManager {
           e.preventDefault();
           if (e.repeat) break;
           if (this._mode === 'spectate') this.s.respawns++;
-          else if (this.opts.standMode === 'toggle') this.toggleStand = !this.toggleStand;
-          else this.keysStand = true;
+          else {
+            const launch = this.standPress(e.timeStamp);
+            // in toggle mode the launching second press doesn't toggle you back down
+            if (this.opts.standMode === 'toggle') {
+              if (!launch) this.toggleStand = !this.toggleStand;
+            } else this.keysStand = true;
+          }
           break;
         case 'ControlLeft':
         case 'KeyC':
@@ -318,6 +346,16 @@ export class InputManager {
     this.hooks.onFirePress();
   }
 
+  /**
+   * Every Jump/stand press: a quick double-press launches a held Spring Jump. Returns true if it did.
+   * `at`: when the press happened (event timestamps survive a busy main thread).
+   */
+  private standPress(at = performance.now()): boolean {
+    const launch = this.standTap.press(at) && this.hooks.canSpring();
+    if (launch) this.s.springs++;
+    return launch;
+  }
+
   reload() {
     this.s.reloads++;
     this.s.zoom = 0;
@@ -339,6 +377,7 @@ export class InputManager {
     this.toggleStand = false;
     this.touchStandToggle = false;
     this.padStandToggle = false;
+    this.standTap.reset();
   }
 
   /** Called every frame. */
@@ -414,7 +453,9 @@ export class InputManager {
       if ((gp.buttons[7]?.value ?? 0) > 0.35 && !this.prevPad[7]) this.press();
       if (edge(6)) this.cycleZoom();
       this.padStandHold = b(0);
-      if (edge(4) || edge(10)) this.padStandToggle = !this.padStandToggle;
+      const toggle = edge(4) || edge(10);
+      const launch = (edge(0) || toggle) && this.standPress();
+      if (toggle && !launch) this.padStandToggle = !this.padStandToggle;
       if (edge(1)) this.padStandToggle = false;
       if (edge(2)) this.reload();
     }
@@ -436,7 +477,8 @@ export class InputManager {
       <button class="tbtn tscore" data-act="score">≡</button>
       <button class="tbtn tprev" data-act="prev" aria-label="Previous player">◀</button>
       <button class="tbtn tnext" data-act="next" aria-label="Next player">▶</button>
-      <button class="tbtn tview" data-act="view" aria-label="First / third person">👁</button>`;
+      <button class="tbtn tview" data-act="view" aria-label="First / third person">👁</button>
+      <button class="tbtn tspring" data-act="spring" aria-label="Spring Jump">⇈</button>`;
     root.classList.toggle('spec', this._mode === 'spectate');
     const btns = root.querySelectorAll<HTMLButtonElement>('.tbtn');
     btns.forEach((btn) => {
@@ -458,7 +500,13 @@ export class InputManager {
             break;
           case 'stand':
             if (this._mode === 'spectate') this.s.respawns++;
-            else this.touchStandHold = true;
+            else {
+              this.touchStandHold = true;
+              this.touchSpringTap = this.standPress(e.timeStamp);
+            }
+            break;
+          case 'spring':
+            if (this.hooks.canSpring()) this.s.springs++;
             break;
           case 'prev':
             this.specCycle--;
@@ -496,8 +544,9 @@ export class InputManager {
         if (act === 'fire') this.touchFire = false;
         if (act === 'stand' && this.touchStandHold) {
           this.touchStandHold = false;
-          // quick tap toggles, long hold is momentary
-          if (performance.now() - downAt < 220) this.touchStandToggle = !this.touchStandToggle;
+          // quick tap toggles, long hold is momentary (a launching double-tap leaves the toggle alone)
+          if (performance.now() - downAt < 220 && !this.touchSpringTap) this.touchStandToggle = !this.touchStandToggle;
+          this.touchSpringTap = false;
         }
         if (act === 'score') this.hooks.onScoreboard(false);
       };
@@ -507,6 +556,7 @@ export class InputManager {
   }
 
   updateTouchLabels() {
+    this.touchRoot?.classList.toggle('canspring', this._mode === 'play' && this.hooks.canSpring());
     const b = this.touchRoot?.querySelector<HTMLButtonElement>('.tstand');
     if (b) {
       const label = this._mode === 'spectate' ? 'RESPAWN' : this.s.stand ? 'DUCK' : 'STAND';

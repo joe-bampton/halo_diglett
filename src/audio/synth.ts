@@ -314,6 +314,32 @@ const spawn: Gen = (sr) => {
   );
 };
 
+/** Spring Jump launch: a springy "boing". */
+const boing: Gen = (sr) => {
+  let ph = 0;
+  return normalize(
+    buf(sr, 0.75, (t) => {
+      const f = 110 + 340 * Math.exp(-t * 4.5) * (1 + 0.45 * Math.sin(TAU * 15 * t));
+      ph += (TAU * f) / sr;
+      return (Math.sin(ph) + 0.3 * Math.sin(ph * 2.01)) * env(t, 0.003, 0.24);
+    }),
+    0.6,
+  );
+};
+
+/** Rushing air (Spring Jump flight). */
+const whoosh: Gen = (sr) => {
+  const l1 = lp(900, sr), h1 = hp(160, sr);
+  const dur = 1.2;
+  return normalize(
+    buf(sr, dur, (t) => {
+      const k = Math.sin(Math.PI * Math.min(1, t / dur));
+      return h1(l1(noise(), 350 + 2400 * k)) * k * k;
+    }),
+    0.45,
+  );
+};
+
 export const SFX = {
   sniper,
   rifle,
@@ -343,6 +369,9 @@ export const SFX = {
   whistle,
   empty,
   spawn,
+  // new sounds go last: they share one noise sequence with the ones above
+  boing,
+  whoosh,
 } satisfies Record<string, Gen>;
 
 export type SfxId = keyof typeof SFX;

@@ -24,6 +24,8 @@ export interface PlayerCommand {
   reloads: number;
   /** cumulative respawn requests (Jump while dead) */
   respawns: number;
+  /** cumulative Spring Jump launches (double-press Jump) */
+  springs: number;
   zoom: number;
   /** host tick the client was rendering when it sampled this (lag compensation) */
   vt: number;
@@ -81,6 +83,9 @@ export interface PlayerState {
   respawns: number;
   /** pressed Jump while dead (manual respawn) */
   respawnRequested: boolean;
+  springs: number;
+  /** tick of the current / last Spring Jump launch (-1 none) */
+  springAt: number;
   pressAt: number;
   powerups: ActivePowerup[];
   underdogUntil: number;
@@ -183,4 +188,6 @@ export type SimEvent =
   | { k: 'end'; t: number; winner: number }
   | { k: 'forced'; t: number; p: number }
   /** a player yells a voice line (e.g. a Jerry bot's "Suppressing fire!") */
-  | { k: 'callout'; t: number; p: number; key: string };
+  | { k: 'callout'; t: number; p: number; key: string }
+  /** a Spring Jump launch (lands SPRING_TICKS later) */
+  | { k: 'spring'; t: number; p: number };

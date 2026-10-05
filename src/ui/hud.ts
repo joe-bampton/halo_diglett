@@ -217,7 +217,7 @@ export class Hud {
     const html = list
       .map((p) => {
         const d = POWERUPS[p.id];
-        return `<div class="pu" style="--pc:${hex(d.color)}"><div class="ic">${d.icon}</div><div class="t" style="transform:scaleX(${p.frac.toFixed(3)})"></div></div>`;
+        return `<div class="pu${d.held ? ' held' : ''}" style="--pc:${hex(d.color)}"><div class="ic">${d.icon}</div><div class="t" style="transform:scaleX(${p.frac.toFixed(3)})"></div></div>`;
       })
       .join('');
     if (this.el.powerups!.innerHTML !== html) this.el.powerups!.innerHTML = html;

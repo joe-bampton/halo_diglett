@@ -307,6 +307,29 @@ export function buildOrb(color: number): THREE.Group {
   return g;
 }
 
+let springParts: { coil: THREE.BufferGeometry; plate: THREE.BufferGeometry; metal: THREE.Material; pad: THREE.Material } | null = null;
+
+/** Giant coil spring that pops out of a hole for a Spring Jump: 1 m tall, scaled in Y at runtime. Shared geometry — don't dispose. */
+export function buildSpring(): THREE.Group {
+  if (!springParts) {
+    const turns = 6, perTurn = 24;
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= turns * perTurn; i++) {
+      const a = (i / perTurn) * Math.PI * 2;
+      pts.push(new THREE.Vector3(Math.cos(a) * 0.42, i / (turns * perTurn), Math.sin(a) * 0.42));
+    }
+    springParts = {
+      coil: new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), turns * perTurn, 0.05, 6, false),
+      plate: new THREE.CylinderGeometry(0.55, 0.55, 0.07, 18).translate(0, 1, 0),
+      metal: new THREE.MeshLambertMaterial({ color: 0xc9d2da }),
+      pad: new THREE.MeshLambertMaterial({ color: 0x3cffd0, emissive: 0x0b4a3c }),
+    };
+  }
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(springParts.coil, springParts.metal), new THREE.Mesh(springParts.plate, springParts.pad));
+  return g;
+}
+
 /** Canvas sprite with text (names, orb icons). */
 export function textSprite(text: string, color = '#ffffff', size = 48, bg = 'rgba(0,0,0,0)'): THREE.Sprite {
   const canvas = document.createElement('canvas');

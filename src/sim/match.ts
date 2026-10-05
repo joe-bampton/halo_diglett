@@ -23,6 +23,7 @@ import { pointSegmentDist, raySphere } from './geom';
 import { eyePos, hitboxOf, isExposed, rayHitbox, type Hitbox } from './hitbox';
 import { ORB_R, ORB_RATES, orbPos } from './orbs';
 import { POWERUPS, type PowerUpId } from './powerups';
+import { HELD_UNTIL, SPRING_COOLDOWN, SPRING_TICKS, inFlight, springLift } from './spring';
 import type { Settings } from './settings';
 import type {
   HitKind,
@@ -134,6 +135,8 @@ function newPlayer(m: MatchState, r: RosterEntry, hole: number): PlayerState {
     reloads: 0,
     respawns: 0,
     respawnRequested: false,
+    springs: 0,
+    springAt: -1,
     pressAt: -1,
     powerups: [],
     underdogUntil: 0,
@@ -215,8 +218,14 @@ function headScaleFor(m: MatchState, shooter: PlayerState | null): number {
   return s;
 }
 
-export function playerHitbox(m: MatchState, arena: Arena, p: PlayerState, exposure = p.exposure, shooter: PlayerState | null = null): Hitbox {
-  return hitboxOf(arena.holes[p.hole]!, exposure, headScaleFor(m, shooter));
+/** `tick`: when (lag compensation rewinds a Spring Jump's height too). */
+export function playerHitbox(m: MatchState, arena: Arena, p: PlayerState, exposure = p.exposure, shooter: PlayerState | null = null, tick = m.tick): Hitbox {
+  return hitboxOf(arena.holes[p.hole]!, exposure, headScaleFor(m, shooter), springLift(p.springAt, tick));
+}
+
+/** Where a player's eyes (and gun) are right now, Spring Jump included. */
+export function playerEye(m: MatchState, arena: Arena, p: PlayerState): V3 {
+  return eyePos(arena.holes[p.hole]!, p.exposure, springLift(p.springAt, m.tick));
 }
 
 function pickHole(m: MatchState, arena: Arena, rng: Rng, prefer: number): number {
@@ -262,6 +271,7 @@ function spawnPlayer(m: MatchState, p: PlayerState, hole: number, events: SimEve
   p.hole = hole;
   p.alive = true;
   p.respawnRequested = false;
+  p.springAt = -1;
   p.spawnTick = m.tick;
   p.exposure = 0;
   p.wantStand = false;
@@ -295,7 +305,7 @@ function spawnPlayer(m: MatchState, p: PlayerState, hole: number, events: SimEve
 }
 
 export function isCamo(m: MatchState, p: PlayerState): boolean {
-  if (p.revealUntil > m.tick) return false;
+  if (p.revealUntil > m.tick || inFlight(p.springAt, m.tick)) return false;
   return p.underdogUntil > m.tick || hasPowerup(p, 'camo', m.tick);
 }
 
@@ -330,7 +340,7 @@ export function stepMatch(m: MatchState, cmds: (PlayerCommand | undefined)[], ar
   for (const p of m.players) {
     if (!p) continue;
     const c = cmds[p.slot];
-    if (c) applyCommand(m, p, c);
+    if (c) applyCommand(m, p, c, events);
     if (!p.alive) {
       if (!frozen && t >= p.respawnAt && p.connected && (p.kind === 'bot' || m.settings.respawnMode === 'auto' || p.respawnRequested)) {
         const hole = pickHole(m, arena, rng, m.settings.respawnHole === 'same' ? p.hole : -1);
@@ -359,7 +369,7 @@ export function stepMatch(m: MatchState, cmds: (PlayerCommand | undefined)[], ar
   return events;
 }
 
-function applyCommand(m: MatchState, p: PlayerState, c: PlayerCommand) {
+function applyCommand(m: MatchState, p: PlayerState, c: PlayerCommand, events: SimEvent[]) {
   if (Number.isFinite(c.yaw)) p.yaw = c.yaw;
   if (Number.isFinite(c.pitch)) p.pitch = clamp(c.pitch, -1.45, 1.45);
   p.wantStand = !!c.stand;
@@ -375,12 +385,33 @@ function applyCommand(m: MatchState, p: PlayerState, c: PlayerCommand) {
   const newRespawns = (c.respawns | 0) - p.respawns;
   p.respawns = c.respawns | 0;
   if (newRespawns > 0 && newRespawns < 1000 && !p.alive) p.respawnRequested = true;
+  const newSprings = (c.springs | 0) - p.springs;
+  p.springs = c.springs | 0;
+  if (newSprings > 0 && newSprings < 1000) launchSpring(m, p, events);
   p.trigger = !!c.trigger;
+}
+
+/** Spring Jump: one launch per pickup; must have landed (plus a short pause) first. */
+function launchSpring(m: MatchState, p: PlayerState, events: SimEvent[]) {
+  const t = m.tick;
+  if (!p.alive || m.phase !== 'live' || !hasPowerup(p, 'spring', t)) return;
+  if (p.springAt >= 0 && t < p.springAt + SPRING_TICKS + SPRING_COOLDOWN) return;
+  p.springAt = t;
+  p.exposure = 1;
+  p.powerups = p.powerups.filter((x) => x.id !== 'spring');
+  events.push({ k: 'spring', t, p: p.slot });
 }
 
 function updateStance(m: MatchState, p: PlayerState, events: SimEvent[], frozen: boolean) {
   const t = m.tick;
   const s = m.settings;
+  if (inFlight(p.springAt, t)) {
+    // airborne: fully exposed, no ducking until you land back in your hole
+    if (!isExposed(p.exposure)) p.exposedSince = t;
+    p.exposure = 1;
+    p.duckedSince = -1;
+    return;
+  }
   let want = p.wantStand;
   if (p.forcedStandUntil > t) want = true;
   if (frozen) want = false;
@@ -542,7 +573,7 @@ function updateWeapon(m: MatchState, p: PlayerState, c: PlayerCommand | undefine
             consumeAmmo(m, p, w);
             p.shots++;
             p.revealUntil = t + TICK_RATE;
-            ctx.events.push({ k: 'fire', t, p: p.slot, w: w.id, o: V(eyePos(ctx.arena.holes[p.hole]!, p.exposure)), e: [0, 0, 0], hit: 'none' });
+            ctx.events.push({ k: 'fire', t, p: p.slot, w: w.id, o: V(playerEye(m, ctx.arena, p)), e: [0, 0, 0], hit: 'none' });
             beamTick(m, p, w, ctx, 0.1);
           }
         } else p.chargeStart = -1;
@@ -583,8 +614,7 @@ function findHomingTarget(m: MatchState, arena: Arena, p: PlayerState, origin: V
 function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
   const t = m.tick;
   const { arena, rng } = ctx;
-  const hole = arena.holes[p.hole]!;
-  const origin = eyePos(hole, p.exposure);
+  const origin = playerEye(m, arena, p);
   let dir = aimDir(p);
   consumeAmmo(m, p, w);
   p.shots++;
@@ -641,9 +671,9 @@ export function traceRay(m: MatchState, arena: Arena, shooter: PlayerState | nul
   const hits: TraceHit[] = [];
   for (const q of m.players) {
     if (!q || q === shooter || !q.alive) continue;
+    // ducked players are only reachable from above, through the mouth (rayHitbox)
     const e = exposureAt(m, q.slot, rewindTick);
-    if (e <= 0.001) continue;
-    const hb = playerHitbox(m, arena, q, e, shooter);
+    const hb = playerHitbox(m, arena, q, e, shooter, rewindTick);
     const h = rayHitbox(o, d, hb);
     if (h && h.t < world) hits.push({ t: h.t, kind: 'player', slot: q.slot, head: h.head });
   }
@@ -701,8 +731,7 @@ function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx:
 }
 
 function beamTick(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext, sec: number) {
-  const hole = ctx.arena.holes[p.hole]!;
-  const o = eyePos(hole, p.exposure);
+  const o = playerEye(m, ctx.arena, p);
   const d = aimDir(p);
   const { hits, world } = traceRay(m, ctx.arena, p, o, d, w.range, rewindTickFor(m, p));
   const first = hits[0];
@@ -770,16 +799,17 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     const d = { x: seg.x / L, y: seg.y / L, z: seg.z / L };
     // nearest collision along the segment
     let bestT = L;
-    let hitPlayer: { slot: number; head: boolean } | null = null;
+    let hitPlayer: { slot: number; head: boolean; inHole: boolean } | null = null;
     let hitOrb = -1;
     for (const q of m.players) {
-      if (!q || !q.alive || q.exposure <= 0.001) continue;
+      if (!q || !q.alive) continue;
       if (q.slot === pr.owner && t - pr.born < 20) continue;
       const hb = playerHitbox(m, arena, q, q.exposure, owner ?? null);
       const h = rayHitbox(prev, d, hb, def.radius);
       if (h && h.t < bestT) {
         bestT = h.t;
-        hitPlayer = { slot: q.slot, head: h.head };
+        // came down through the mouth: it's in their hole (grenades must still kill ducked players)
+        hitPlayer = { slot: q.slot, head: h.head, inHole: prev.y + d.y * h.t < hb.rim };
       }
     }
     for (const orb of m.orbs) {
@@ -824,7 +854,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
         }
       }
       if (def.burn && q.alive) q.burn = { by: pr.owner, until: t + secToTicks(def.burn.time), dps: def.burn.dps, next: t + 15 };
-      endProjectile(m, ctx, pr, at, w, -1, w.damage > 0);
+      endProjectile(m, ctx, pr, at, w, hitPlayer.inHole ? q.hole : -1, w.damage > 0);
       continue;
     }
     if (inMouth && def.bounce) {
@@ -1081,7 +1111,7 @@ function claimOrb(m: MatchState, ctx: StepContext, id: number, p: PlayerState) {
 export function grantPowerup(m: MatchState, ctx: StepContext, p: PlayerState, id: PowerUpId) {
   const t = m.tick;
   const def = POWERUPS[id];
-  const until = t + secToTicks(def.duration * m.settings.powerupDurationMult);
+  const until = def.held ? HELD_UNTIL : t + secToTicks(def.duration * m.settings.powerupDurationMult);
   if (def.weapon) {
     if (!p.weaponUntil) p.baseClip = p.clip;
     p.powerups = p.powerups.filter((x) => !POWERUPS[x.id].weapon);

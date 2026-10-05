@@ -135,4 +135,11 @@ describe('bots', () => {
     damagePlayer(m, ctx, 0, m.players[2]!, 11, { head: true, weapon: 'br', kind: 'direct', headMult: 2.5 });
     expect(m.players[2]!.alive).toBe(true);
   });
+
+  it('bots use Spring Jumps', () => {
+    const { events } = botMatch(['jerry', 'topover', 'legendary', 'normal'], { orbRate: 'chaos', powerups: ['spring'] }, 90, 21);
+    const springs = events.filter((e) => e.k === 'spring');
+    console.log('spring launches', springs.length);
+    expect(springs.length).toBeGreaterThan(2);
+  });
 });

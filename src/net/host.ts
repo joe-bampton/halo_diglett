@@ -308,6 +308,7 @@ export class HostSession {
       presses: num(k.presses) | 0,
       reloads: num(k.reloads) | 0,
       respawns: num(k.respawns) | 0,
+      springs: num(k.springs) | 0,
       zoom: num(k.zoom) | 0,
       vt: num(k.vt),
       pick: typeof k.pick === 'string' && k.pick in WEAPONS ? k.pick : undefined,
@@ -424,7 +425,7 @@ export class HostSession {
     }
     for (const s of this.lobby.slots) {
       const p = m.players[s.slot];
-      if (s.kind === 'human' && !s.connected && p) cmds[s.slot] = { yaw: p.yaw, pitch: p.pitch, stand: false, trigger: false, presses: p.presses, reloads: p.reloads, respawns: p.respawns, zoom: 0, vt: m.tick };
+      if (s.kind === 'human' && !s.connected && p) cmds[s.slot] = { yaw: p.yaw, pitch: p.pitch, stand: false, trigger: false, presses: p.presses, reloads: p.reloads, respawns: p.respawns, springs: p.springs, zoom: 0, vt: m.tick };
     }
     for (const [slot, b] of this.bots) if (m.players[slot]) cmds[slot] = b.think(m, this.arena);
     const events = stepMatch(m, cmds, this.arena);
@@ -506,7 +507,7 @@ export class HostSession {
       if (q.connected) f |= F_CONNECTED;
       if (hasPowerup(q, 'damage', t)) f |= F_DAMAGE;
       if (q.burn) f |= F_BURNING;
-      p.push([q.slot, Math.round(q.exposure * 255), Math.round(q.yaw * 1000), Math.round(q.pitch * 1000), f, weaponIndex(q.weapon), q.hole, Math.round(q.beamLen * 10), q.zoom]);
+      p.push([q.slot, Math.round(q.exposure * 255), Math.round(q.yaw * 1000), Math.round(q.pitch * 1000), f, weaponIndex(q.weapon), q.hole, Math.round(q.beamLen * 10), q.zoom, q.springAt]);
     }
     const snap: SnapshotMsg = { k: t, ph: m.phase, a: c.seq, p, ld: m.leader };
     const homing = m.projectiles.filter((pr) => pr.target >= 0);
