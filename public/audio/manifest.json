@@ -47,6 +47,30 @@
       ],
       "gain": 0.9
     },
+    "pitre.please": {
+      "files": [
+        "audio/pitre/bitch_please_1.mp3",
+        "audio/pitre/bitch_please_2.mp3",
+        "audio/pitre/bitch_please_3.mp3"
+      ],
+      "gain": 1.0
+    },
+    "pitre.bullets": {
+      "files": [
+        "audio/pitre/how_many_bullets_1.mp3",
+        "audio/pitre/how_many_bullets_2.mp3",
+        "audio/pitre/how_many_bullets_3.mp3"
+      ],
+      "gain": 1.0
+    },
+    "jerry.suppress": {
+      "files": [
+        "audio/jerry/suppressing_fire_1.mp3",
+        "audio/jerry/suppressing_fire_2.mp3",
+        "audio/jerry/suppressing_fire_3.mp3"
+      ],
+      "gain": 1.0
+    },
     "ann.slay": {
       "files": [
         "audio/announcer/slay_your_enemies.mp3"
@@ -248,6 +272,18 @@
     "ann.quickhands": {
       "files": [
         "audio/announcer/quick_hands.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.spring": {
+      "files": [
+        "audio/announcer/spring_jump.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.sauce": {
+      "files": [
+        "audio/announcer/gerry_sauce.mp3"
       ],
       "gain": 1.0
     },

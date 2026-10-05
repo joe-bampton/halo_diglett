@@ -46,6 +46,7 @@ export class AudioEngine {
   private voicePending = new Map<string, Promise<AudioBuffer[]>>();
   private annQueue: { slot: string; gain: number }[] = [];
   private wanted = new Set<string>();
+  private wantedPrefixes = new Set<string>();
   private annBusyUntil = 0;
   hrtf = true;
   volumes: Volumes = { ...DEFAULT_VOLUMES };
@@ -96,6 +97,7 @@ export class AudioEngine {
     }
     void this.loadManifest();
     for (const slot of this.wanted) void this.voice(slot);
+    if (this.wantedPrefixes.size) void this.voicesByPrefix();
   }
 
   setVolumes(v: Partial<Volumes>) {
@@ -250,6 +252,18 @@ export class AudioEngine {
       this.wanted.add(s);
       if (this.ctx) void this.voice(s);
     }
+  }
+
+  /** Decode every slot whose id starts with `prefix` (e.g. "ann." for all the announcer lines). */
+  preloadPrefix(prefix: string) {
+    this.wantedPrefixes.add(prefix);
+    if (this.ctx) void this.voicesByPrefix();
+  }
+
+  private async voicesByPrefix() {
+    await this.loadManifest();
+    for (const slot of Object.keys(this.manifest?.slots ?? {}))
+      for (const p of this.wantedPrefixes) if (slot.startsWith(p)) void this.voice(slot);
   }
 
   private voice(slot: string): Promise<AudioBuffer[]> {

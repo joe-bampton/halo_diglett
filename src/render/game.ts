@@ -298,9 +298,10 @@ export class Game {
       this.renderer.shadowMap.needsUpdate = true;
       this.renderer.render(this.scene, this.camera);
     }
-    const slots = Object.values(PITRE_SLOT);
-    audio.preload(['ann.slay', 'ann.double', 'ann.triple', 'ann.headshot', 'ann.spree', 'ann.lead_taken', 'ann.lead_lost', 'ann.game_over', 'ann.victory', 'ann.defeat', ...Object.keys(CALLOUT_TEXT)]);
-    if (session.start?.settings.pitre) audio.preload(slots);
+    // every announcer line (medals, power-ups…): a line that isn't decoded yet when it's due is skipped
+    audio.preloadPrefix('ann.');
+    audio.preload(Object.keys(CALLOUT_TEXT));
+    if (session.start?.settings.pitre) audio.preload(Object.values(PITRE_SLOT));
   }
 
   private applyDevice() {
