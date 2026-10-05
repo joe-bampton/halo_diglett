@@ -116,6 +116,10 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 .chip { font-size: 14px; padding: 6px 10px; border-radius: 16px; border: 1px solid var(--line); background: #0d1b2a; color: var(--muted); cursor: pointer; }
 .chip.on { background: rgba(63, 182, 255, 0.25); border-color: var(--accent); color: var(--text); }
 .chip .ord { font-weight: 700; color: var(--gold); margin-right: 4px; }
+.chip .ic { margin-right: 5px; display: inline-block; min-width: 1em; text-align: center; }
+.chip[style*="--cc"].on { border-color: var(--cc); box-shadow: inset 0 0 0 1px var(--cc), 0 0 6px color-mix(in srgb, var(--cc) 45%, transparent); }
+.chip[style*="--cc"].on .ic { color: var(--cc); }
+.field .bulk { display: flex; gap: 6px; justify-content: flex-end; }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .note { color: var(--muted); font-size: 14px; }
 .err { color: #ffb4b4; }

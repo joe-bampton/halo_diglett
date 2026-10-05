@@ -12,7 +12,7 @@ import { Backdrop } from '../render/backdrop';
 import { Game } from '../render/game';
 import { QUALITY, detectQuality, type QualityLevel } from '../render/quality';
 import { MAX_BOTS, MAX_HUMANS } from '../sim/constants';
-import { DEFAULT_SETTINGS, sanitizeSettings, type Settings } from '../sim/settings';
+import { DEFAULT_SETTINGS, migrateSavedSettings, sanitizeSettings, settingsForStorage, type Settings } from '../sim/settings';
 import type { BotDifficulty } from '../sim/types';
 import { WEAPONS, type WeaponId } from '../sim/weapons';
 import { esc, hex, toast } from '../ui/dom';
@@ -57,7 +57,7 @@ function token(): string {
 
 function loadSettings(): Settings {
   try {
-    return sanitizeSettings(JSON.parse(localStorage.getItem('hd.settings') ?? 'null') ?? DEFAULT_SETTINGS);
+    return migrateSavedSettings(JSON.parse(localStorage.getItem('hd.settings') ?? 'null') ?? DEFAULT_SETTINGS);
   } catch {
     return sanitizeSettings(DEFAULT_SETTINGS);
   }
@@ -355,7 +355,7 @@ export class App {
   private persistSettings() {
     if (!this.host) return;
     try {
-      localStorage.setItem('hd.settings', JSON.stringify(this.host.lobby.settings));
+      localStorage.setItem('hd.settings', JSON.stringify(settingsForStorage(this.host.lobby.settings)));
     } catch {
       /* ignore */
     }

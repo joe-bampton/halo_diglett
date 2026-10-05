@@ -1,5 +1,5 @@
 import { PRESETS, SETTINGS_SCHEMA, SKULLS, applyPreset, sanitizeSettings, type Field, type Settings } from '../sim/settings';
-import { esc } from './dom';
+import { esc, hex } from './dom';
 
 /** Renders the host settings from the schema. Read-only for non-hosts. */
 export function renderSettings(root: HTMLElement, settings: Settings, editable: boolean, onChange: (s: Settings) => void) {
@@ -45,6 +45,12 @@ export function renderSettings(root: HTMLElement, settings: Settings, editable: 
     });
     root.querySelectorAll<HTMLInputElement>('input[type=checkbox]').forEach((inp) => inp.addEventListener('change', () => set(inp.dataset.key as keyof Settings, inp.checked)));
     root.querySelectorAll<HTMLSelectElement>('select[data-key]').forEach((sel) => sel.addEventListener('change', () => set(sel.dataset.key as keyof Settings, sel.value)));
+    root.querySelectorAll<HTMLButtonElement>('[data-bulk]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const f = SETTINGS_SCHEMA.find((x) => x.key === b.dataset.bulk)!;
+        if (f.kind === 'multi') set(f.key, b.dataset.all === '1' ? f.options.map((o) => o.value) : []);
+      }),
+    );
     root.querySelectorAll<HTMLButtonElement>('.chip[data-key]').forEach((chip) =>
       chip.addEventListener('click', () => {
         const key = chip.dataset.key as keyof Settings;
@@ -92,10 +98,13 @@ function fieldHtml(f: Field, s: Settings, editable: boolean): string {
         .map((o) => {
           const i = arr.indexOf(o.value);
           const ord = f.ordered && i >= 0 ? `<span class="ord">${i + 1}</span>` : '';
-          return `<button class="chip ${i >= 0 ? 'on' : ''}" data-key="${f.key}" data-v="${esc(o.value)}" ${dis}>${ord}${esc(o.label)}</button>`;
+          const style = o.color !== undefined ? ` style="--cc:${hex(o.color)}"` : '';
+          const icon = o.icon ? `<span class="ic">${esc(o.icon)}</span>` : '';
+          return `<button class="chip ${i >= 0 ? 'on' : ''}" data-key="${f.key}" data-v="${esc(o.value)}"${style} ${dis}>${ord}${icon}${esc(o.label)}</button>`;
         })
         .join('');
-      return `<div class="field"><label>${esc(f.label)}</label><div></div><div class="chips">${chips}</div>${help}${skullHelp}</div>`;
+      const bulk = f.bulk && editable ? `<div class="bulk"><button class="btn small" data-bulk="${f.key}" data-all="1">All</button><button class="btn small" data-bulk="${f.key}" data-all="0">None</button></div>` : '<div></div>';
+      return `<div class="field"><label>${esc(f.label)}</label>${bulk}<div class="chips">${chips}</div>${help}${skullHelp}</div>`;
     }
   }
 }

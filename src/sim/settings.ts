@@ -72,12 +72,12 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 export type FieldGroup = 'Match' | 'Weapons' | 'Damage' | 'Ammo' | 'Respawn' | 'Power-ups' | 'Pitre Mode' | 'Skulls' | 'Advanced';
-type Opt = { value: string; label: string };
+type Opt = { value: string; label: string; icon?: string; color?: number };
 export type Field =
   | ({ kind: 'number'; min: number; max: number; step: number; unit?: string; zeroLabel?: string } & FieldBase)
   | ({ kind: 'bool' } & FieldBase)
   | ({ kind: 'enum'; options: readonly Opt[] } & FieldBase)
-  | ({ kind: 'multi'; options: readonly Opt[]; minCount?: number; ordered?: boolean } & FieldBase);
+  | ({ kind: 'multi'; options: readonly Opt[]; minCount?: number; ordered?: boolean; /** All / None buttons */ bulk?: boolean } & FieldBase);
 interface FieldBase {
   key: keyof Settings;
   label: string;
@@ -87,7 +87,7 @@ interface FieldBase {
 }
 
 const weaponOpts = LOADOUT_WEAPONS.map((w) => ({ value: w, label: WEAPONS[w].name }));
-const powerupOpts = POWERUP_IDS.map((p) => ({ value: p, label: POWERUPS[p].name }));
+const powerupOpts = POWERUP_IDS.map((p) => ({ value: p, label: POWERUPS[p].name, icon: POWERUPS[p].icon, color: POWERUPS[p].color }));
 export const SKULLS: { value: SkullId; label: string; help: string }[] = [
   { value: 'bighead', label: 'Big Head', help: 'Everyone has huge heads (bigger headshot target).' },
   { value: 'gruntbday', label: 'Grunt Birthday Party', help: 'Headshot kills explode in confetti. Yay!' },
@@ -121,8 +121,8 @@ export const SETTINGS_SCHEMA: Field[] = [
   { key: 'respawnSec', label: 'Respawn time', group: 'Respawn', kind: 'number', min: 0, max: 10, step: 1, unit: 's', zeroLabel: 'Instant' },
   {
     key: 'respawnMode', label: 'Respawn', group: 'Respawn', kind: 'enum',
-    options: [{ value: 'manual', label: 'When you press Jump (spectate while dead)' }, { value: 'auto', label: 'Automatically' }],
-    help: 'Respawn time is the minimum wait. Bots always respawn automatically.',
+    options: [{ value: 'manual', label: 'When you press Jump' }, { value: 'auto', label: 'Automatically' }],
+    help: 'Press Jump: while dead you spectate the others until you press Jump (respawn time is the minimum wait). Bots always respawn automatically.',
   },
   { key: 'respawnHole', label: 'Respawn in', group: 'Respawn', kind: 'enum', options: [{ value: 'random', label: 'Random hole' }, { value: 'same', label: 'Same hole' }] },
   { key: 'antiTurtleSec', label: 'Anti-turtle (max time ducked)', group: 'Respawn', kind: 'number', min: 0, max: 20, step: 1, unit: 's', zeroLabel: 'Off', help: 'Stay ducked too long and you pop up for 2 seconds.' },
@@ -133,7 +133,7 @@ export const SETTINGS_SCHEMA: Field[] = [
     key: 'orbRate', label: 'Power-up bubbles', group: 'Power-ups', kind: 'enum',
     options: [{ value: 'off', label: 'Off' }, { value: 'low', label: 'Rare' }, { value: 'normal', label: 'Normal' }, { value: 'high', label: 'Lots' }, { value: 'chaos', label: 'CHAOS' }],
   },
-  { key: 'powerups', label: 'Enabled power-ups', group: 'Power-ups', kind: 'multi', options: powerupOpts, minCount: 1, visibleIf: (s) => s.orbRate !== 'off' },
+  { key: 'powerups', label: 'Enabled power-ups', group: 'Power-ups', kind: 'multi', options: powerupOpts, minCount: 0, bulk: true, help: 'Tap to switch each one on or off. With none enabled, no bubbles appear.', visibleIf: (s) => s.orbRate !== 'off' },
   { key: 'powerupDurationMult', label: 'Power-up duration', group: 'Power-ups', kind: 'number', min: 0.25, max: 4, step: 0.25, unit: '×', visibleIf: (s) => s.orbRate !== 'off' },
   { key: 'pitre', label: 'Pitre Mode', group: 'Pitre Mode', kind: 'bool', help: 'The leader becomes the Cat in the Hat and everyone gets… voice lines.' },
   { key: 'pitreCatHat', label: 'Leader wears the Cat in the Hat costume', group: 'Pitre Mode', kind: 'bool', visibleIf: (s) => s.pitre },
@@ -190,6 +190,25 @@ export function sanitizeSettings(raw: unknown): Settings {
     }
   }
   return out as unknown as Settings;
+}
+
+/** Power-ups that existed before saved settings remembered which ones they knew about. */
+const LEGACY_POWERUPS: string[] = ['flamethrower', 'minigun', 'overshield', 'invincible', 'camo', 'damage', 'homing', 'xray', 'bighead', 'orbital', 'quickhands'];
+
+/**
+ * Load settings saved by an older version: power-ups added since then start enabled
+ * (a saved list only says which of the power-ups known at the time were picked).
+ */
+export function migrateSavedSettings(raw: unknown): Settings {
+  const src = raw && typeof raw === 'object' ? { ...(raw as Record<string, unknown>) } : {};
+  const known = Array.isArray(src.knownPowerups) ? src.knownPowerups.filter((x): x is string => typeof x === 'string') : LEGACY_POWERUPS;
+  if (Array.isArray(src.powerups)) src.powerups = [...src.powerups, ...POWERUP_IDS.filter((id) => !known.includes(id) && !(src.powerups as unknown[]).includes(id))];
+  return sanitizeSettings(src);
+}
+
+/** What to save: the settings plus the power-ups this version knows about. */
+export function settingsForStorage(s: Settings): Settings & { knownPowerups: string[] } {
+  return { ...s, knownPowerups: [...POWERUP_IDS] };
 }
 
 export function applyPreset(base: Settings, preset: string): Settings {
