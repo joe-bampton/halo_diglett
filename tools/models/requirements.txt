@@ -1,0 +1,3 @@
+# Blender as a Python module, for tools/models/build_models.py (needs CPython 3.11).
+# Pinned so a re-run rebuilds the same models.
+bpy==4.5.3

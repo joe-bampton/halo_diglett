@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "models": {
+    "spartan": {
+      "file": "models/spartan.glb",
+      "triangles": 6180,
+      "bytes": 172256
+    },
+    "can": {
+      "file": "models/can.glb",
+      "triangles": 1120,
+      "bytes": 48720
+    },
+    "soaker": {
+      "file": "models/soaker.glb",
+      "triangles": 1580,
+      "bytes": 45188
+    },
+    "spring": {
+      "file": "models/spring.glb",
+      "triangles": 2680,
+      "bytes": 77476
+    }
+  }
+}

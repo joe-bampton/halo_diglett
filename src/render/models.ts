@@ -65,7 +65,20 @@ function pbrify(root: THREE.Object3D, o: { roughness: number; metalness: number 
  * Weapon models share one convention: barrel points toward -Z, origin at the grip,
  * muzzle position stored in userData.muzzle.
  */
-export function buildWeaponModel(id: WeaponId, pbr = false): THREE.Group {
+export function buildWeaponModel(id: WeaponId, pbr = false, detailed = false): THREE.Group {
+  if (id === 'soaker' && detailed && GLB.soaker) {
+    const mats: Record<string, THREE.Material> = {
+      body: aoMat(0xff7a1a, 0.35, 0, pbr),
+      accent: aoMat(0x2fbf4a, 0.4, 0, pbr),
+      trim: aoMat(0xf2c230, 0.35, 0.2, pbr),
+      tank: aoMat(SAUCE.base, 0.15, 0, pbr, { transparent: true, opacity: 0.88 }),
+    };
+    const g = new THREE.Group();
+    const model = fromGlb('soaker', 'soaker', (n) => mats[n] ?? mats.body!);
+    g.add(model);
+    g.userData.muzzle = model.getObjectByName('muzzle')!.position.clone();
+    return g;
+  }
   const dark = 0x3a4148, mid = 0x5c6670, light = 0x8a949d;
   let g: THREE.Group;
   let muzzle = new THREE.Vector3(0, 0.05, -0.9);
@@ -244,7 +257,8 @@ export interface SpartanParts {
   materials: THREE.Material[];
 }
 
-export function buildSpartan(color: number, pbr = false): SpartanParts {
+export function buildSpartan(color: number, pbr = false, detailed = false): SpartanParts {
+  if (detailed && GLB.spartan) return spartanFromGlb(color, pbr);
   const armorC = color;
   const accentC = new THREE.Color(color).multiplyScalar(0.62).getHex();
   const suitC = PAL.undersuit;
@@ -308,6 +322,33 @@ export function buildSpartan(color: number, pbr = false): SpartanParts {
   return { root, body, aim, head, weaponHolder, mat, visor, shell, shellMat, catHat, materials: [mat, visor] };
 }
 
+/** The Blender-made Spartan: same pivots (root > body > aim > head, aim > weaponHolder), per-player materials. */
+function spartanFromGlb(color: number, pbr: boolean): SpartanParts {
+  const accentC = new THREE.Color(color).multiplyScalar(0.62).getHex();
+  const armor = aoMat(color, 0.45, 0.22, pbr);
+  const visor = new THREE.MeshStandardMaterial({ color: 0xc08a20, metalness: 0.9, roughness: 0.18, emissive: 0x2a1800 });
+  const mats: Record<string, THREE.Material> = {
+    armor,
+    accent: aoMat(accentC, 0.5, 0.3, pbr),
+    undersuit: aoMat(PAL.undersuit, 0.8, 0, pbr),
+    visor,
+    trim: aoMat(0x8a949d, 0.35, 0.8, pbr),
+    light: new THREE.MeshBasicMaterial({ color: 0x8fe3ff }),
+  };
+  const root = fromGlb('spartan', 'root', (n) => mats[n] ?? armor) as THREE.Group;
+  const get = (n: string) => root.getObjectByName(n) as THREE.Group;
+  const body = get('body'), aim = get('aim'), head = get('head'), weaponHolder = get('weaponHolder');
+  const shellMat = shellMaterial(0x40ff70);
+  const shell = new THREE.Mesh(new THREE.CapsuleGeometry(0.46, 0.72, 4, 12), shellMat);
+  shell.position.set(0, 0.46, 0);
+  shell.visible = false;
+  body.add(shell);
+  const catHat = buildCatHat();
+  catHat.visible = false;
+  head.add(catHat);
+  return { root, body, aim, head, weaponHolder, mat: armor, visor, shell, shellMat, catHat, materials: Object.values(mats) };
+}
+
 /** Original Seuss-inspired costume: tall red/white striped hat, bow tie, cat ears & whiskers. */
 export function buildCatHat(): THREE.Group {
   const RED = 0xd8202a, WHITE = 0xfafafa, BLACK = 0x151515, PINK = 0xff9ab8;
@@ -338,6 +379,33 @@ export function buildCatHat(): THREE.Group {
 /** Geometry / materials used by many objects at once: never disposed with any one of them (see disposeTree). */
 export const SHARED = new Set<unknown>();
 const share = <T>(x: T): T => (SHARED.add(x), x);
+
+export type GlbModel = 'spartan' | 'can' | 'soaker' | 'spring';
+/** The detailed (Blender-made) models once assets.ts has loaded them; `version` counts loads. */
+export const GLB: { version: number } & Partial<Record<GlbModel, THREE.Object3D>> = { version: 0 };
+
+/** A clone of a loaded model's node (sharing its geometry) with materials picked by their names. */
+function fromGlb(model: GlbModel, nodeName: string, pick: (name: string) => THREE.Material, castShadow = true): THREE.Object3D {
+  const inst = GLB[model]!.getObjectByName(nodeName)!.clone(true);
+  inst.position.set(0, 0, 0);
+  inst.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    m.material = pick((m.material as THREE.Material).name);
+    m.castShadow = castShadow;
+  });
+  return inst;
+}
+
+/** Standard (or Lambert) material that also uses the models' baked ambient occlusion (vertex colours). */
+function aoMat(color: number, roughness: number, metalness: number, pbr: boolean, extra: THREE.MeshStandardMaterialParameters = {}): THREE.MeshStandardMaterial | THREE.MeshLambertMaterial {
+  if (pbr) return new THREE.MeshStandardMaterial({ color, roughness, metalness, vertexColors: true, ...extra });
+  const lambert: THREE.MeshLambertMaterialParameters = { color, vertexColors: true };
+  if (extra.emissive !== undefined) lambert.emissive = extra.emissive;
+  if (extra.transparent !== undefined) lambert.transparent = extra.transparent;
+  if (extra.opacity !== undefined) lambert.opacity = extra.opacity;
+  return new THREE.MeshLambertMaterial(lambert);
+}
 
 /** Pitre Mode energy drink can: radius and height (m). It fits inside the power-up's hit sphere (ORB_R). */
 export const CAN_R = 0.3;
@@ -426,7 +494,7 @@ function canLabel(color: number, pbr: boolean): THREE.Material {
 }
 
 /** Pitre Mode power-up: a tall energy drink can — black, silver ends, claw scratches in the power-up's colour. */
-export function buildCan(color: number, pbr = false): THREE.Group {
+export function buildCan(color: number, pbr = false, detailed = false): THREE.Group {
   if (!canParts) {
     const r = CAN_R, h = CAN_H / 2;
     const v = (pts: number[][]) => pts.map(([x, y]) => new THREE.Vector2(x!, y!));
@@ -448,12 +516,15 @@ export function buildCan(color: number, pbr = false): THREE.Group {
     };
   }
   const g = new THREE.Group();
-  const metal = new THREE.Mesh(canParts.metal, pbr ? canParts.metalPbr : canParts.metalMat);
-  const body = new THREE.Mesh(canParts.body, canLabel(color, pbr));
+  const metalMat = pbr ? canParts.metalPbr : canParts.metalMat;
+  if (detailed && GLB.can) {
+    const label = canLabel(color, pbr);
+    g.add(fromGlb('can', 'can', (n) => (n === 'label' ? label : metalMat), false));
+  } else g.add(new THREE.Mesh(canParts.metal, metalMat), new THREE.Mesh(canParts.body, canLabel(color, pbr)));
   const aura = new THREE.Mesh(canParts.aura, shellMaterial(color));
   aura.scale.set(0.5, 0.98, 0.5);
   (aura.material as THREE.ShaderMaterial).uniforms.strength!.value = 0.9;
-  g.add(metal, body, aura);
+  g.add(aura);
   g.userData.aura = aura;
   g.userData.kind = 'can';
   return g;
@@ -499,7 +570,18 @@ export function buildSauceBlob(): THREE.Mesh {
 let springParts: { coil: THREE.BufferGeometry; plate: THREE.BufferGeometry; metal: THREE.Material; pad: THREE.Material } | null = null;
 
 /** Giant coil spring that pops out of a hole for a Spring Jump: 1 m tall, scaled in Y at runtime. Shared geometry — don't dispose. */
-export function buildSpring(): THREE.Group {
+let springGlbMats: Record<string, THREE.Material> | null = null;
+
+export function buildSpring(detailed = false): THREE.Group {
+  if (detailed && GLB.spring) {
+    springGlbMats ??= {
+      metal: share(new THREE.MeshStandardMaterial({ color: 0xc9d2da, metalness: 0.9, roughness: 0.3, vertexColors: true })),
+      pad: share(new THREE.MeshStandardMaterial({ color: 0x3cffd0, emissive: 0x0b4a3c, roughness: 0.5, vertexColors: true })),
+    };
+    const g = new THREE.Group();
+    g.add(fromGlb('spring', 'spring', (n) => springGlbMats![n] ?? springGlbMats!.metal!));
+    return g;
+  }
   if (!springParts) {
     const turns = 6, perTurn = 24;
     const pts: THREE.Vector3[] = [];

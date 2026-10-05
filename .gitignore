@@ -9,3 +9,4 @@ tools/voices/.venv/
 tools/voices/models/
 tools/voices/out/
 __pycache__/
+tools/models/.venv/

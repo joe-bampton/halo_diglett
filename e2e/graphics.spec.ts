@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-type Render = { post: boolean; pbr: boolean; shadows: boolean; level: string; particles: number };
+type Render = { post: boolean; pbr: boolean; shadows: boolean; level: string; particles: number; models: string };
 type HD = { state(): { phase: string; render: Render } };
 const render = (page: Page) => page.evaluate(() => (window as unknown as { __hd: HD }).__hd.state().render);
 
@@ -23,6 +23,8 @@ test('graphics settings apply mid-match from the pause menu (Ultra preset, Advan
     const r = (window as unknown as { __hd: HD }).__hd.state().render;
     return r.level === 'high' && r.post && r.pbr;
   }, null, { timeout: 15_000 });
+  // ...and the Blender-made models load and replace the built-in ones
+  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().render.models === 'detailed', null, { timeout: 20_000 });
 
   // Advanced: shadows off (live), FPS counter
   await page.locator('details.gfx-adv summary').click();

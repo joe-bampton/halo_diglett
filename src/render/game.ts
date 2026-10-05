@@ -18,7 +18,8 @@ import type { Projectile, SimEvent } from '../sim/types';
 import { WEAPONS, weaponByIndex, type WeaponId } from '../sim/weapons';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
 import { Decals, FlashLights, Particles, Ribbons, Shockwaves } from './fx';
-import { SHARED, buildCan, buildOrb, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
+import { loadDetailedModels } from './assets';
+import { GLB, SHARED, buildCan, buildOrb, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
 import { PAL, SAUCE } from './palette';
 import type { PostFx } from './post';
 import { QUALITY, type QualityPreset } from './quality';
@@ -160,6 +161,8 @@ export class Game {
   /** frame-rate watch for the "running slow?" hint: 5 s windows, two slow ones in a row */
   private fpsWatch = { t: 0, n: 0, slow: 0 };
   private fpsAvg = { t: 0, n: 0 };
+  /** which load of the detailed models the Spartans etc. were built with */
+  private glbSeen = 0;
   /** Super Soaker squirts in flight: one custard jet per target, launched so it lands exactly when the sauce does */
   private sauceViews = new Map<number, { owner: number; at: number; fired: number; jets: { from: THREE.Vector3; v: THREE.Vector3 }[] | null }>();
   private ribbons: Ribbons;
@@ -318,6 +321,7 @@ export class Game {
     this.renderer.setClearColor(PAL.horizon);
     this.setupPost();
     this.applyEnv();
+    if (quality.models === 'detailed') void loadDetailedModels();
     if (quality.shadows === 'static') this.bakeStaticShadows();
     // every announcer line (medals, power-ups…): a line that isn't decoded yet when it's due is skipped
     audio.preloadPrefix('ann.');
@@ -405,8 +409,13 @@ export class Game {
       if (next.shadows === 'static') this.bakeStaticShadows();
     }
     if (prev.post !== next.post || prev.antialias !== next.antialias || prev.smaa !== next.smaa) this.setupPost();
+    if (next.models === 'detailed') void loadDetailedModels();
     if (prev.pbr !== next.pbr || prev.models !== next.models) this.rebuildModels();
     this.onResize();
+  }
+
+  private get detailed() {
+    return this.q.models === 'detailed';
   }
 
   private buildParticles() {
@@ -736,6 +745,11 @@ export class Game {
     const events = s.drainEvents();
     if (events.length) this.handleEvents(events);
     this.localWeapon(now, dt);
+    // the detailed models just arrived: swap them in
+    if (GLB.version !== this.glbSeen) {
+      this.glbSeen = GLB.version;
+      if (this.detailed) this.rebuildModels();
+    }
     this.updateSpartans(dt);
     this.updateOrbs(dt);
     this.updateProjectiles(dt);
@@ -800,7 +814,7 @@ export class Game {
 
   renderInfo() {
     const i = this.renderer.info.render;
-    return { calls: i.calls, triangles: i.triangles, dynScale: this.dynScale, post: !!this.post, pbr: this.q.pbr, shadows: this.renderer.shadowMap.enabled, level: this.q.level, particles: this.q.particles, dpr: this.renderer.getPixelRatio() };
+    return { calls: i.calls, triangles: i.triangles, dynScale: this.dynScale, post: !!this.post, pbr: this.q.pbr, shadows: this.renderer.shadowMap.enabled, level: this.q.level, particles: this.q.particles, dpr: this.renderer.getPixelRatio(), models: this.detailed && this.glbSeen > 0 ? 'detailed' : 'simple' };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1319,7 +1333,7 @@ export class Game {
       sv = undefined;
     }
     if (!sv) {
-      const parts = buildSpartan(p.color, this.q.pbr);
+      const parts = buildSpartan(p.color, this.q.pbr, this.detailed);
       this.scene.add(parts.root);
       sv = { slot: p.slot, parts, color: p.color, weapon: '', weaponModel: null, alive: p.alive, deathT: 0, deathDir: 1, flare: 0, flareColor: 0x6ad8ff, estShield: SHIELD_MAX, lastHitAt: -99, name: '', tag: null, tagFor: '', beamSound: null, voice: null, headScale: 1, bubble: null, bubbleUntil: 0, sauce: [] };
       this.spartans.set(p.slot, sv);
@@ -1382,7 +1396,7 @@ export class Game {
           sv.parts.weaponHolder.remove(sv.weaponModel);
           disposeTree(sv.weaponModel);
         }
-        sv.weaponModel = buildWeaponModel(p.weapon, this.q.pbr);
+        sv.weaponModel = buildWeaponModel(p.weapon, this.q.pbr, this.detailed);
         sv.parts.weaponHolder.add(sv.weaponModel);
         sv.weapon = p.weapon;
       }
@@ -1531,7 +1545,7 @@ export class Game {
       if (!v) {
         const def = POWERUPS[o.type as PowerUpId];
         const color = def?.color ?? 0xffffff;
-        const group = this.cans() ? buildCan(color, this.q.pbr) : buildOrb(color, this.q.pbr);
+        const group = this.cans() ? buildCan(color, this.q.pbr, this.detailed) : buildOrb(color, this.q.pbr);
         const label = textSprite(`${def?.icon ?? '?'} ${def?.name ?? ''}`, '#ffffff', 36);
         group.add(label);
         label.position.y = 1.25;
@@ -1754,7 +1768,7 @@ export class Game {
         audio.play('boing', { pos: mine ? null : at, gain: 0.9, reverb: 0.2 });
         audio.play('whoosh', { pos: mine ? null : at, gain: mine ? 0.45 : 0.6 });
         this.fxNorm.emit({ pos: at, count: 18, speed: [1, 4], dir: new THREE.Vector3(0, 1, 0), spread: 1.2, life: [0.5, 1], size: [0.3, 0.9], color: 0x8a7a5a, alpha: [0.6, 0], gravity: 2 });
-        v.mesh = buildSpring();
+        v.mesh = buildSpring(this.detailed);
         this.scene.add(v.mesh);
       }
       if (v.mesh) {
@@ -1932,7 +1946,7 @@ export class Game {
         this.vmHolder.remove(this.vmModel);
         disposeTree(this.vmModel);
       }
-      this.vmModel = buildWeaponModel(w, this.q.pbr);
+      this.vmModel = buildWeaponModel(w, this.q.pbr, this.detailed);
       // gloved hand
       const glove = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.13, 0.14), new THREE.MeshLambertMaterial({ color }));
       glove.position.set(0, -0.1, 0.02);
