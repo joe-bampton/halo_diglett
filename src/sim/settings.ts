@@ -8,6 +8,8 @@ export type OrbRate = 'off' | 'low' | 'normal' | 'high' | 'chaos';
 export interface Settings {
   scoreLimit: number; // 0 = unlimited
   timeLimitMin: number; // 0 = unlimited
+  holeCount: number; // 0 = Auto (classic 16-hole field)
+  holeSpacing: number; // minimum metres between holes
   weaponMode: WeaponMode;
   weapon: WeaponId;
   allowedWeapons: WeaponId[];
@@ -41,6 +43,8 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   scoreLimit: 25,
   timeLimitMin: 10,
+  holeCount: 0,
+  holeSpacing: 11.5,
   weaponMode: 'fixed',
   weapon: 'sniper',
   allowedWeapons: [...LOADOUT_WEAPONS],
@@ -71,7 +75,7 @@ export const DEFAULT_SETTINGS: Settings = {
   pitreBrap: true,
 };
 
-export type FieldGroup = 'Match' | 'Weapons' | 'Damage' | 'Ammo' | 'Respawn' | 'Power-ups' | 'Pitre Mode' | 'Skulls' | 'Advanced';
+export type FieldGroup = 'Match' | 'Map' | 'Weapons' | 'Damage' | 'Ammo' | 'Respawn' | 'Power-ups' | 'Pitre Mode' | 'Skulls' | 'Advanced';
 type Opt = { value: string; label: string; icon?: string; color?: number };
 export type Field =
   | ({ kind: 'number'; min: number; max: number; step: number; unit?: string; zeroLabel?: string } & FieldBase)
@@ -99,6 +103,8 @@ export const SKULLS: { value: SkullId; label: string; help: string }[] = [
 export const SETTINGS_SCHEMA: Field[] = [
   { key: 'scoreLimit', label: 'Score limit (kills)', group: 'Match', kind: 'number', min: 0, max: 200, step: 5, zeroLabel: 'Unlimited', visibleIf: (s) => s.weaponMode !== 'gunGame' },
   { key: 'timeLimitMin', label: 'Time limit', group: 'Match', kind: 'number', min: 0, max: 30, step: 1, unit: 'min', zeroLabel: 'Off' },
+  { key: 'holeCount', label: 'Holes', group: 'Map', kind: 'number', min: 0, max: 32, step: 1, zeroLabel: 'Auto (16)', help: 'Auto: the classic 16-hole field (a match uses the most central players + 3). Otherwise every hole is in play — never fewer than the number of players.' },
+  { key: 'holeSpacing', label: 'Distance between holes', group: 'Map', kind: 'number', min: 6, max: 40, step: 0.5, unit: 'm', help: 'The closest two holes can be. The field grows to fit.' },
   {
     key: 'weaponMode', label: 'Weapon mode', group: 'Weapons', kind: 'enum',
     options: [
@@ -189,6 +195,8 @@ export function sanitizeSettings(raw: unknown): Settings {
       }
     }
   }
+  // a custom field needs a few holes
+  if ((out.holeCount as number) > 0 && (out.holeCount as number) < 4) out.holeCount = 4;
   return out as unknown as Settings;
 }
 

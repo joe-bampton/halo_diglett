@@ -999,7 +999,7 @@ function killPlayer(m: MatchState, ctx: StepContext, attacker: number, v: Player
     }
     if (v.exposedSince >= 0 && t - v.exposedSince <= secToTicks(0.5)) medals.push('whack');
     const ha = ctx.arena.holes[a.hole]!, hv = ctx.arena.holes[v.hole]!;
-    if (Math.hypot(ha.x - hv.x, ha.z - hv.z) > 55) medals.push('longshot');
+    if (Math.hypot(ha.x - hv.x, ha.z - hv.z) > 55 * Math.max(1, ctx.arena.scale)) medals.push('longshot');
     if (!m.announced.first) {
       m.announced.first = true;
       medals.push('first');

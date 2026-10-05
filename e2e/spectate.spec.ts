@@ -21,7 +21,7 @@ test('dead players spectate (cycle, 1st/3rd person, zoom) until they press Jump'
   await page.evaluate(() => (window as unknown as { __hd: HD }).__hd.kill());
   await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().me?.al === false, null, { timeout: 10_000 });
   // after the short death cam the spectator camera takes over
-  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().spec?.active === true, null, { timeout: 6000 });
+  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().spec?.active === true, null, { timeout: 15_000 });
   const st = await hd(page);
   expect(st.mode).toBe('spectate');
   expect(st.spec!.target).not.toBe(st.slot);

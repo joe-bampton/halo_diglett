@@ -77,6 +77,48 @@ describe('manual respawn over the wire', () => {
   });
 });
 
+describe('custom hole layouts over the wire', () => {
+  it('sends the host-built field to clients, and seats latecomers when a hole frees up', async () => {
+    const w = new FakeWorld();
+    const hub = new LagHub(w);
+    const host = new HostSession(hub, 'MAP', true);
+    host.clock = () => w.now;
+    const mk = (peer: string) => {
+      const c = new ClientSession(hub.connect(peer, 20), { name: peer, color: peer.charCodeAt(0), token: peer });
+      c.clock = () => w.now;
+      return c;
+    };
+    const A = mk('A');
+    w.advance(300);
+    host.setSettings({ ...host.lobby.settings, holeCount: 4, holeSpacing: 9, orbRate: 'off' });
+    host.addBot('jerry');
+    host.addBot('jerry');
+    w.advance(100);
+    expect(A.lobby?.map?.holes.length).toBe(4);
+    host.startMatch(9);
+    w.advance(300);
+    expect(A.start?.arena).toEqual(host.arena.layout);
+    expect(host.arena.holes.length).toBe(4);
+    // a 4th player fills the field; a 5th has to wait
+    const B = mk('B');
+    w.advance(300);
+    expect(host.match!.players[B.slot]).toBeTruthy();
+    const C = mk('C');
+    w.advance(300);
+    expect(C.state).toBe('match');
+    expect(host.match!.players[C.slot]).toBeNull();
+    // a bot leaves → C gets its hole
+    host.removeSlot(host.lobby.slots.find((s) => s.kind === 'bot')!.slot);
+    for (let i = 0; i < 40; i++) {
+      w.advance(1000 / 60);
+      host.update(w.now);
+    }
+    expect(host.match!.players[C.slot]).toBeTruthy();
+    const holes = host.match!.players.filter(Boolean).map((p) => p!.hole);
+    expect(new Set(holes).size).toBe(holes.length);
+  });
+});
+
 function lagMatch(oneWay: number, jitter: number, maxRewindMs: number) {
   const w = new FakeWorld();
   const hub = new LagHub(w);

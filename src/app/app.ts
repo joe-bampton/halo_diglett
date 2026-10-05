@@ -17,6 +17,7 @@ import type { BotDifficulty } from '../sim/types';
 import { WEAPONS, type WeaponId } from '../sim/weapons';
 import { esc, hex, toast } from '../ui/dom';
 import { MEDALS } from '../ui/hud';
+import { mapPreviewHtml } from '../ui/mapPreview';
 import { renderSettings } from '../ui/settingsForm';
 
 interface Profile {
@@ -397,6 +398,7 @@ export class App {
     if (!force && this.screen?.classList.contains('lobby-screen') && key === this.lastLobbyKey) {
       // only settings changed → refresh the form in place
       if (!isHost) this.settingsView?.update(lobby.settings);
+      this.renderMapPreview(lobby);
       return;
     }
     this.lastLobbyKey = key;
@@ -444,6 +446,7 @@ export class App {
             <div class="field"><label>Armor</label><div class="swatches">${PLAYER_COLORS.map((c) => `<span class="swatch ${c === (me?.color ?? this.profile.color) ? 'on' : ''}" data-c="${c}" style="background:${hex(c)}"></span>`).join('')}</div></div>
             ${choice ? `<div class="field"><label>Weapon</label><select class="pick">${lobby.settings.allowedWeapons.map((w) => `<option value="${w}" ${me?.pick === w ? 'selected' : ''}>${WEAPONS[w].name}</option>`).join('')}</select></div>` : ''}
           </div>
+          <div class="card"><h3>Map</h3><div class="mappreview"></div></div>
           <div class="row">
             ${isHost ? `<button class="btn primary start" style="flex:1">${lobby.phase === 'match' ? 'Match in progress' : 'Start match'}</button>` : `<div class="note" style="flex:1">Waiting for the host to start…</div>`}
             <button class="btn small leave">Leave</button>
@@ -454,6 +457,7 @@ export class App {
     const scr = this.setScreen(html, 'lobby-screen');
     scr.scrollTop = scrollTop;
     this.settingsView = renderSettings(scr.querySelector('.settings-root')!, lobby.settings, isHost, (ns) => this.host?.setSettings(ns));
+    this.renderMapPreview(lobby);
     scr.querySelector('.copy')?.addEventListener('click', () => {
       void navigator.clipboard?.writeText(link).then(
         () => toast('Invite link copied!'),
@@ -497,6 +501,16 @@ export class App {
       }),
     );
     if (voice.available) this.watchVoice(() => this.refreshLobbyVoice(scr));
+  }
+
+  private renderMapPreview(lobby: LobbyState) {
+    const el = this.screen?.querySelector<HTMLElement>('.mappreview');
+    if (!el) return;
+    const html = mapPreviewHtml(lobby.map, lobby.slots.length);
+    if (el.dataset.html !== html) {
+      el.dataset.html = html;
+      el.innerHTML = html;
+    }
   }
 
   /** Update mute buttons and talking indicators in place (no re-render). */

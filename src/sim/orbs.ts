@@ -18,10 +18,12 @@ export const ORB_RATES = {
 export function orbPos(orb: Pick<Orb, 'seed' | 'spawn'>, tick: number, arena: Arena): V3 {
   const s = orb.seed;
   const t = (tick - orb.spawn) / TICK_RATE;
-  const cx = (hash01(s, 1) - 0.5) * 30;
-  const cz = (hash01(s, 2) - 0.5) * 30;
-  const ax = 10 + hash01(s, 3) * 12;
-  const az = 10 + hash01(s, 4) * 12;
+  // bigger fields (custom hole layouts) get wider drift
+  const k = arena.scale;
+  const cx = (hash01(s, 1) - 0.5) * 30 * k;
+  const cz = (hash01(s, 2) - 0.5) * 30 * k;
+  const ax = (10 + hash01(s, 3) * 12) * k;
+  const az = (10 + hash01(s, 4) * 12) * k;
   const fx = 0.1 + hash01(s, 5) * 0.08;
   const fz = 0.08 + hash01(s, 6) * 0.08;
   const px = hash01(s, 7) * Math.PI * 2;

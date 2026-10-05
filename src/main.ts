@@ -34,6 +34,8 @@ if (!webglOk()) {
   if (params.get('pitre')) settings.pitre = params.get('pitre') !== '0';
   if (params.get('mode')) settings.weaponMode = params.get('mode') as Settings['weaponMode'];
   if (params.get('respawn')) settings.respawnMode = params.get('respawn') === 'auto' ? 'auto' : 'manual';
+  if (params.get('holes')) settings.holeCount = Number(params.get('holes'));
+  if (params.get('spacing')) settings.holeSpacing = Number(params.get('spacing'));
   if (auto === 'offline') {
     const bots = Number(params.get('bots') ?? 3);
     // botdiff=jerry or botdiff=jerry,topover (cycled); default mixes normal → recruit

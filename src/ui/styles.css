@@ -120,6 +120,10 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 .chip[style*="--cc"].on { border-color: var(--cc); box-shadow: inset 0 0 0 1px var(--cc), 0 0 6px color-mix(in srgb, var(--cc) 45%, transparent); }
 .chip[style*="--cc"].on .ic { color: var(--cc); }
 .field .bulk { display: flex; gap: 6px; justify-content: flex-end; }
+.mappreview svg { width: 100%; max-width: 280px; aspect-ratio: 1; display: block; margin: 0 auto; }
+.mappreview circle.on { fill: #d8dde2; stroke: #3a3f44; stroke-width: 0.4; }
+.mappreview circle.off { fill: #6d7378; opacity: 0.55; }
+.mappreview .cap { text-align: center; font-size: 13px; color: var(--muted); margin-top: 6px; }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .note { color: var(--muted); font-size: 14px; }
 .err { color: #ffb4b4; }

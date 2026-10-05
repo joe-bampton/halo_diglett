@@ -1,3 +1,4 @@
+import type { ArenaLayout } from '../sim/arena';
 import type { Settings } from '../sim/settings';
 import type { BotDifficulty, MatchPhase, PlayerCommand, RosterEntry, SimEvent } from '../sim/types';
 import type { WeaponId } from '../sim/weapons';
@@ -23,6 +24,8 @@ export interface LobbyState {
   settings: Settings;
   slots: SlotInfo[];
   online: boolean;
+  /** custom hole layout preview (absent = the classic field) */
+  map?: ArenaLayout;
 }
 
 /** Control channel messages (reliable, both directions). */
@@ -47,6 +50,8 @@ export interface MatchStart {
   phase: MatchPhase;
   leader: number;
   orbs: { id: number; type: string; seed: number; spawn: number; expire: number }[];
+  /** the field (host-generated so every browser builds identical holes) */
+  arena: ArenaLayout;
 }
 
 export interface ResultRow {

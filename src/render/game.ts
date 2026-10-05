@@ -125,7 +125,7 @@ export interface GameHooks {
 }
 
 export class Game {
-  readonly arena = new Arena();
+  readonly arena: Arena;
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
@@ -163,6 +163,7 @@ export class Game {
   private wasAlive = false;
   private killer = -1;
   private diedAt = 0;
+  private diedAtMs = 0;
   private pred = { lastShot: -1e9, pending: false, pendingAt: -1e9, fresh: false, burst: 0, nextBurst: 0, localId: 0 };
   private chargeSound: SoundHandle | null = null;
   private lowShieldAt = 0;
@@ -187,6 +188,7 @@ export class Game {
     private hooks: GameHooks,
   ) {
     this.q = quality;
+    this.arena = session.start?.arena ? new Arena(session.start.arena) : new Arena();
     const canvas = document.createElement('canvas');
     canvas.className = 'game';
     container.appendChild(canvas);
@@ -203,12 +205,15 @@ export class Game {
     const hemi = new THREE.HemisphereLight(0xd8ecff, 0x5d7a3a, 1.35);
     this.scene.add(hemi);
     this.sun = new THREE.DirectionalLight(0xfff1d6, 2.3);
-    this.sun.position.set(45, 60, -65);
+    // the sun's shadow box covers the whole fenced field (bigger custom fields included)
+    const ks = Math.max(1, this.arena.scale);
+    this.sun.position.set(45 * ks, 60 * ks, -65 * ks);
     if (quality.shadows !== 'none') {
       this.sun.castShadow = true;
       this.sun.shadow.mapSize.set(quality.shadowSize, quality.shadowSize);
       const c = this.sun.shadow.camera;
-      c.left = -62; c.right = 62; c.top = 62; c.bottom = -62; c.near = 10; c.far = 220;
+      const R = this.arena.fenceRadius + 10;
+      c.left = -R; c.right = R; c.top = R; c.bottom = -R; c.near = 10; c.far = 220 * ks;
       this.sun.shadow.bias = -0.0008;
       this.sun.shadow.normalBias = 0.03;
     }
@@ -957,6 +962,7 @@ export class Game {
     if (e.v === mySlot) {
       this.killer = e.a;
       this.diedAt = this.time;
+      this.diedAtMs = performance.now();
       this.hud.message(killer && e.a !== e.v ? `Killed by ${killer.name}` : 'You died', 2500, 'warn');
       this.beamSound?.stop();
       this.beamSound = null;
@@ -1387,7 +1393,7 @@ export class Game {
       this.wasAlive = true;
       const w = this.myWeaponDef();
       fov /= inp.zoom > 0 ? w.zoom[inp.zoom - 1] ?? 1 : 1;
-    } else if (me && s.me && !this.spec.active && this.time - this.diedAt < 1.2 && !this.input.specPending()) {
+    } else if (me && s.me && !this.spec.active && performance.now() - this.diedAtMs < 1200 && !this.input.specPending()) {
       // death cam: rise above the hole and look at the killer
       const h = this.myHole();
       const t = Math.min(1, (this.time - this.diedAt) / 1.2);
@@ -1598,6 +1604,9 @@ export class Game {
         const left = settings.antiTurtleSec - (s.hostTick - me.ds) / TICK_RATE;
         hud.sub(left < 3 ? `Pop up in ${Math.max(0, left).toFixed(1)}s` : '');
       } else if (!this.endShown) hud.sub(me.al && me.rl > s.hostTick ? 'Reloading' : '');
+    } else if (s.start && s.latestTick - s.start.tick > 30) {
+      // joined a full custom field: watch until a hole frees up
+      hud.sub('All holes are taken — you’ll join when one frees up');
     }
     this.updateSpectateHud();
     // timer

@@ -1,6 +1,6 @@
 import { BotBrain, BOT_NAMES } from '../bots/brain';
 import { Rng } from '../shared/rng';
-import { Arena } from '../sim/arena';
+import { Arena, HOLE_SPACING, layoutForSettings } from '../sim/arena';
 import { MAX_BOTS, MAX_HUMANS, MAX_SLOTS, TICK_RATE, secToTicks } from '../sim/constants';
 import { addPlayer, clipSize, createMatch, hasPowerup, isCamo, removePlayer, score, stepMatch, type StepContext } from '../sim/match';
 import { sanitizeSettings, DEFAULT_SETTINGS, type Settings } from '../sim/settings';
@@ -61,7 +61,7 @@ const REJOIN_MS = 120_000;
 const AFK_MS = 5000;
 
 export class HostSession {
-  readonly arena = new Arena();
+  arena = new Arena();
   lobby: LobbyState;
   match: MatchState | null = null;
   results: MatchResults | null = null;
@@ -102,6 +102,10 @@ export class HostSession {
 
   private bumpLobby() {
     this.lobby.slots.sort((a, b) => a.slot - b.slot);
+    if (this.lobby.phase === 'lobby') {
+      const s = this.lobby.settings;
+      this.lobby.map = s.holeCount > 0 || s.holeSpacing !== HOLE_SPACING ? layoutForSettings(s, this.lobby.slots.length) : undefined;
+    }
     for (const c of this.conns.values()) this.send(c.peer, CH_CTL, { t: 'lobby', lobby: this.lobby });
     this.onChange?.();
   }
@@ -117,6 +121,7 @@ export class HostSession {
     if (slot < 0) return;
     const used = new Set(this.lobby.slots.map((s) => s.name));
     const name = BOT_NAMES.find((n) => !used.has(n)) ?? `Bot ${slot}`;
+    if (this.match && !this.hasRoom()) return; // every hole is taken
     const info: SlotInfo = { slot, name, color: this.pickColor(), kind: 'bot', bot: difficulty, connected: true };
     this.lobby.slots.push(info);
     if (this.match) {
@@ -277,9 +282,10 @@ export class HostSession {
     this.conns.set(peer, conn);
     this.send(peer, CH_CTL, { t: 'welcome', slot, lobby: this.lobby });
     if (this.match && this.lobby.phase === 'match') {
+      // a full custom field: the newcomer watches until a hole frees up (admitWaiting)
       let p = this.match.players[slot];
-      if (!p) p = addPlayer(this.match, this.rosterEntry(info), this.arena);
-      p.connected = true;
+      if (!p && this.hasRoom()) p = addPlayer(this.match, this.rosterEntry(info), this.arena);
+      if (p) p.connected = true;
       this.send(peer, CH_CTL, { t: 'start', start: this.matchStart() });
     } else if (this.lobby.phase === 'results' && this.results) {
       this.send(peer, CH_CTL, { t: 'results', results: this.results });
@@ -314,6 +320,7 @@ export class HostSession {
 
   startMatch(seed = this.rng.int(1, 2 ** 30)) {
     const roster = this.lobby.slots.filter((s) => s.connected).map((s) => this.rosterEntry(s));
+    this.arena = new Arena(layoutForSettings(this.lobby.settings, roster.length));
     this.match = createMatch(this.lobby.settings, roster, seed, this.arena);
     for (const s of this.lobby.slots) {
       const p = this.match.players[s.slot];
@@ -348,7 +355,25 @@ export class HostSession {
       phase: m.phase,
       leader: m.leader,
       orbs: m.orbs.map((o) => ({ ...o })),
+      arena: this.arena.layout,
     };
+  }
+
+  /** A free hole for one more player? (Custom fields have exactly their hole count.) */
+  private hasRoom(): boolean {
+    const m = this.match;
+    return !m || m.players.filter(Boolean).length < this.arena.holes.length;
+  }
+
+  /** Bring in humans who joined a full field once a hole frees up. */
+  private admitWaiting() {
+    const m = this.match!;
+    for (const s of this.lobby.slots) {
+      if (s.kind !== 'human' || !s.connected || m.players[s.slot]) continue;
+      if (!this.hasRoom()) return;
+      const p = addPlayer(m, this.rosterEntry(s), this.arena);
+      if (s.pick) p.pick = s.pick;
+    }
   }
 
   backToLobby() {
@@ -413,6 +438,7 @@ export class HostSession {
       for (const c of this.conns.values()) c.pending.push(...events);
       if (events.some((e) => e.k === 'end')) this.resultsAt = nowMs + 3500;
     }
+    if (m.tick % 30 === 0) this.admitWaiting();
     for (const c of this.conns.values()) {
       const every = c.local ? 1 : 3;
       if (m.tick - c.lastSnapTick >= every) this.sendSnapshot(c);

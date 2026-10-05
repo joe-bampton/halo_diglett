@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ARENA_SEED, Arena } from '../../src/sim/arena';
-import { visibilityStats } from '../../scripts/findSeed';
+import { ARENA_SEED, Arena, visibilityStats } from '../../src/sim/arena';
 import { RISE_TIME, TICK_RATE } from '../../src/sim/constants';
 import { run, makeMatch, cmd, liveAndStanding, aimAt, faceOff, arena } from './helpers';
 import type { PlayerCommand } from '../../src/sim/types';
