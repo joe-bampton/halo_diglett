@@ -56,8 +56,10 @@ test('Gerry Sauce: a bot squirts, my screen gets covered in custard, then clears
   await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.state().me?.sa ?? -1) >= 0, null, { timeout: 15_000 });
   await expect(page.locator('.hud .sauce.on')).toBeVisible();
   await expect(page.locator('.hud .sauce.on .blob')).toHaveCount(13);
-  // five seconds later it's all cleaned up
-  await expect(page.locator('.hud .sauce.on')).toHaveCount(0, { timeout: 12_000 });
+  // five seconds (of game time: a slow software renderer can run the game slower than real time) later it's all cleaned up
+  const until = (await W(page)).me!.su;
+  await page.waitForFunction((su) => (window as unknown as { __hd: HD }).__hd.session.hostTick >= su + 6, until, { timeout: 90_000 });
+  await expect(page.locator('.hud .sauce.on')).toHaveCount(0, { timeout: 5_000 });
   expect(errors).toEqual([]);
 });
 

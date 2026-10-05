@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { DISPLAY_COLOR } from './shaderUtil';
 
 interface Particle {
   x: number; y: number; z: number;
@@ -40,6 +41,7 @@ const particleVS = /* glsl */ `
     gl_Position = projectionMatrix * mv;
   }`;
 const particleFS = /* glsl */ `
+  ${DISPLAY_COLOR}
   varying vec4 vCol; varying vec2 vUv;
   void main(){
     float d = length(vUv) * 2.0;
@@ -54,7 +56,7 @@ const particleFS = /* glsl */ `
     vec3 c = vCol.rgb;
     #endif
     if (a * vCol.a < 0.004) discard;
-    gl_FragColor = vec4(c, a * vCol.a);
+    gl_FragColor = displayColor(vec4(c, a * vCol.a));
   }`;
 
 /** CPU-simulated billboard particles, one draw call per system. */
@@ -152,6 +154,11 @@ export class Particles {
     this.ps = [];
     this.geo.instanceCount = 0;
   }
+
+  dispose() {
+    this.geo.dispose();
+    (this.mesh.material as THREE.Material).dispose();
+  }
 }
 
 interface Ribbon {
@@ -178,11 +185,12 @@ const ribbonVS = /* glsl */ `
     gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
   }`;
 const ribbonFS = /* glsl */ `
+  ${DISPLAY_COLOR}
   varying vec4 vCol; varying float vV;
   void main(){
     float a = 1.0 - abs(vV) * 2.0;
     a = pow(max(a, 0.0), 1.5);
-    gl_FragColor = vec4(vCol.rgb * (1.0 + a), a * vCol.a);
+    gl_FragColor = displayColor(vec4(vCol.rgb * (1.0 + a), a * vCol.a));
   }`;
 
 /** Camera-facing ribbons for tracers & beams (world-space endpoints). */
@@ -262,7 +270,7 @@ export class Ribbons {
 /** Handful of pooled point lights for muzzle flashes & explosions. */
 export class FlashLights {
   private lights: { l: THREE.PointLight; life: number; age: number; i0: number }[] = [];
-  constructor(scene: THREE.Scene, n = 3) {
+  constructor(private scene: THREE.Scene, n = 3) {
     for (let i = 0; i < n; i++) {
       const l = new THREE.PointLight(0xffaa55, 0, 20, 2);
       l.visible = false;
@@ -290,22 +298,97 @@ export class FlashLights {
       s.l.intensity = s.i0 * Math.max(0, 1 - s.age / s.life);
     }
   }
+
+  dispose() {
+    for (const s of this.lights) {
+      this.scene.remove(s.l);
+      s.l.dispose();
+    }
+    this.lights = [];
+  }
 }
 
-const decalVS = /* glsl */ `
-  attribute float iAlpha;
+const ringVS = /* glsl */ `
+  attribute float iAlpha; attribute vec3 iColor;
   varying vec2 vUv; varying float vA; varying vec3 vC;
   void main(){
     vUv = uv;
     vA = iAlpha;
-    #ifdef USE_INSTANCING_COLOR
-    vC = instanceColor;
-    #else
-    vC = vec3(1.0);
-    #endif
+    vC = iColor;
     gl_Position = projectionMatrix * viewMatrix * modelMatrix * instanceMatrix * vec4(position, 1.0);
   }`;
+const ringFS = /* glsl */ `
+  ${DISPLAY_COLOR}
+  varying vec2 vUv; varying float vA; varying vec3 vC;
+  void main(){
+    float r = length(vUv * 2.0 - 1.0);
+    // a thin bright band at the edge, with a faint wake inside
+    float a = smoothstep(1.0, 0.94, r) * (smoothstep(0.66, 0.94, r) + 0.15 * smoothstep(0.2, 0.9, r));
+    if (a * vA < 0.01) discard;
+    gl_FragColor = displayColor(vec4(vC * (1.0 + a), a * vA));
+  }`;
+
+/** Flat, additive shockwave rings that race outwards from big explosions. */
+export class Shockwaves {
+  readonly mesh: THREE.InstancedMesh;
+  private items: { pos: THREE.Vector3; r: number; life: number; age: number }[] = [];
+  private alpha: Float32Array;
+  private color: Float32Array;
+  private next = 0;
+  private m4 = new THREE.Matrix4();
+  constructor(private max = 8) {
+    const geo = new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2);
+    this.alpha = new Float32Array(max);
+    this.color = new Float32Array(max * 3);
+    geo.setAttribute('iAlpha', new THREE.InstancedBufferAttribute(this.alpha, 1).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('iColor', new THREE.InstancedBufferAttribute(this.color, 3));
+    const mat = new THREE.ShaderMaterial({ vertexShader: ringVS, fragmentShader: ringFS, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    this.mesh = new THREE.InstancedMesh(geo, mat, max);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 6;
+    for (let i = 0; i < max; i++) {
+      this.mesh.setMatrixAt(i, this.m4.makeScale(0, 0, 0));
+      this.items.push({ pos: new THREE.Vector3(), r: 0, life: 1, age: 1 });
+    }
+  }
+
+  /** A ring at `pos` growing to radius `r` over `life` seconds. */
+  add(pos: THREE.Vector3, r: number, color: number, life = 0.45) {
+    const i = this.next;
+    this.next = (this.next + 1) % this.max;
+    this.items[i] = { pos: pos.clone(), r, life, age: 0 };
+    // exact palette colour (the shader writes it out untouched)
+    const c = new THREE.Color().setHex(color, THREE.LinearSRGBColorSpace);
+    this.color.set([c.r, c.g, c.b], i * 3);
+    (this.mesh.geometry.getAttribute('iColor') as THREE.InstancedBufferAttribute).needsUpdate = true;
+  }
+
+  update(dt: number) {
+    for (let i = 0; i < this.max; i++) {
+      const it = this.items[i]!;
+      it.age += dt;
+      const t = Math.min(1, it.age / it.life);
+      const live = it.age < it.life;
+      const s = live ? Math.max(0.01, it.r * (1 - Math.pow(1 - t, 3))) : 0;
+      this.mesh.setMatrixAt(i, this.m4.makeScale(s, 1, s).setPosition(it.pos));
+      this.alpha[i] = live ? 0.85 * (1 - t) * (1 - t) : 0;
+    }
+    this.mesh.instanceMatrix.needsUpdate = true;
+    (this.mesh.geometry.getAttribute('iAlpha') as THREE.InstancedBufferAttribute).needsUpdate = true;
+  }
+}
+
+const decalVS = /* glsl */ `
+  attribute float aAlpha; attribute vec3 aColor;
+  varying vec2 vUv; varying float vA; varying vec3 vC;
+  void main(){
+    vUv = uv;
+    vA = aAlpha;
+    vC = aColor;
+    gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.0);
+  }`;
 const decalFS = /* glsl */ `
+  ${DISPLAY_COLOR}
   varying vec2 vUv; varying float vA; varying vec3 vC;
   void main(){
     vec2 p = vUv * 2.0 - 1.0;
@@ -315,50 +398,92 @@ const decalFS = /* glsl */ `
     float edge = 0.78 + 0.12 * sin(ang * 5.0) + 0.06 * sin(ang * 11.0 + 1.3);
     float a = smoothstep(edge, edge - 0.12, r);
     if (a * vA < 0.01) discard;
-    gl_FragColor = vec4(vC * (0.9 + 0.1 * (1.0 - r)), a * vA);
+    gl_FragColor = displayColor(vec4(vC * (0.9 + 0.1 * (1.0 - r)), a * vA));
   }`;
 
-/** Flat splats on the ground (Gerry Sauce, scorch marks) that fade away — one instanced draw call. */
+/** Grid cells per decal side: each splat is draped over the terrain, not a flat card that sinks into slopes. */
+const DECAL_N = 6;
+const DECAL_V = (DECAL_N + 1) * (DECAL_N + 1);
+
+/** Splats on the ground (Gerry Sauce, scorch marks) that fade away, draped over the terrain — one draw call. */
 export class Decals {
-  readonly mesh: THREE.InstancedMesh;
+  readonly mesh: THREE.Mesh;
   private items: { age: number; life: number; a0: number }[] = [];
+  private pos: Float32Array;
   private alpha: Float32Array;
+  /** per-vertex visibility: 0 over a hole (a splat must not cover the mouth) */
+  private mask: Float32Array;
+  private color: Float32Array;
   private next = 0;
-  constructor(private max = 48) {
-    const geo = new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2);
-    this.alpha = new Float32Array(max);
-    geo.setAttribute('iAlpha', new THREE.InstancedBufferAttribute(this.alpha, 1).setUsage(THREE.DynamicDrawUsage));
-    const mat = new THREE.ShaderMaterial({ vertexShader: decalVS, fragmentShader: decalFS, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-    this.mesh = new THREE.InstancedMesh(geo, mat, max);
-    this.mesh.frustumCulled = false;
-    this.mesh.renderOrder = 2;
-    for (let i = 0; i < max; i++) {
-      this.mesh.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0));
-      this.mesh.setColorAt(i, new THREE.Color(0xffffff));
+  constructor(
+    private max: number,
+    /** ground height (m) at (x, z) */
+    private groundAt: (x: number, z: number) => number,
+    /** places a splat must not cover (hole rims and mouths) */
+    private blocked: (x: number, z: number) => boolean = () => false,
+  ) {
+    const geo = new THREE.BufferGeometry();
+    this.pos = new Float32Array(max * DECAL_V * 3);
+    this.alpha = new Float32Array(max * DECAL_V);
+    this.mask = new Float32Array(max * DECAL_V);
+    this.color = new Float32Array(max * DECAL_V * 3);
+    const uv = new Float32Array(max * DECAL_V * 2);
+    const index: number[] = [];
+    for (let d = 0; d < max; d++) {
+      const o = d * DECAL_V;
+      for (let j = 0; j <= DECAL_N; j++)
+        for (let i = 0; i <= DECAL_N; i++) {
+          const k = o + j * (DECAL_N + 1) + i;
+          uv[k * 2] = i / DECAL_N;
+          uv[k * 2 + 1] = j / DECAL_N;
+          if (i < DECAL_N && j < DECAL_N) {
+            const a = k, b = k + 1, c = k + DECAL_N + 1, e = k + DECAL_N + 2;
+            index.push(a, c, b, b, c, e);
+          }
+        }
       this.items.push({ age: 1, life: 1, a0: 0 });
     }
+    geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geo.setAttribute('aAlpha', new THREE.BufferAttribute(this.alpha, 1).setUsage(THREE.DynamicDrawUsage));
+    geo.setAttribute('aColor', new THREE.BufferAttribute(this.color, 3).setUsage(THREE.DynamicDrawUsage));
+    geo.setIndex(index);
+    const mat = new THREE.ShaderMaterial({ vertexShader: decalVS, fragmentShader: decalFS, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, side: THREE.DoubleSide });
+    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 2;
   }
 
-  /** A splat of radius `r` lying on the ground at `pos`. */
-  add(pos: THREE.Vector3, r: number, color: number, life = 8, alpha = 0.95) {
-    const i = this.next;
+  /** A splat of radius `r` lying on the ground around (x, z). */
+  add(x: number, z: number, r: number, color: number, life = 8, alpha = 0.95) {
+    const d = this.next;
     this.next = (this.next + 1) % this.max;
-    const m4 = new THREE.Matrix4().compose(pos, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * 6.28), new THREE.Vector3(r, 1, r));
-    this.mesh.setMatrixAt(i, m4);
+    const rot = Math.random() * Math.PI * 2, cs = Math.cos(rot), sn = Math.sin(rot);
     // the shader writes the colour out untouched: keep it as the exact sRGB palette colour
-    this.mesh.setColorAt(i, new THREE.Color().setHex(color, THREE.LinearSRGBColorSpace));
-    this.items[i] = { age: 0, life, a0: alpha };
-    this.mesh.instanceMatrix.needsUpdate = true;
-    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    const c = new THREE.Color().setHex(color, THREE.LinearSRGBColorSpace);
+    for (let j = 0; j <= DECAL_N; j++)
+      for (let i = 0; i <= DECAL_N; i++) {
+        const k = d * DECAL_V + j * (DECAL_N + 1) + i;
+        const u = (i / DECAL_N) * 2 - 1, v = (j / DECAL_N) * 2 - 1;
+        const px = x + (u * cs - v * sn) * r, pz = z + (u * sn + v * cs) * r;
+        this.pos.set([px, this.groundAt(px, pz) + 0.05, pz], k * 3);
+        this.color.set([c.r, c.g, c.b], k * 3);
+        this.mask[k] = this.blocked(px, pz) ? 0 : 1;
+      }
+    this.items[d] = { age: 0, life, a0: alpha };
+    const g = this.mesh.geometry;
+    g.getAttribute('position').needsUpdate = true;
+    g.getAttribute('aColor').needsUpdate = true;
   }
 
   update(dt: number) {
-    for (let i = 0; i < this.max; i++) {
-      const it = this.items[i]!;
+    for (let d = 0; d < this.max; d++) {
+      const it = this.items[d]!;
       it.age += dt;
       // fade over the last 2 seconds
-      this.alpha[i] = it.age >= it.life ? 0 : it.a0 * Math.min(1, (it.life - it.age) / 2);
+      const a = it.age >= it.life ? 0 : it.a0 * Math.min(1, (it.life - it.age) / 2);
+      for (let k = d * DECAL_V; k < (d + 1) * DECAL_V; k++) this.alpha[k] = a * this.mask[k]!;
     }
-    (this.mesh.geometry.getAttribute('iAlpha') as THREE.InstancedBufferAttribute).needsUpdate = true;
+    this.mesh.geometry.getAttribute('aAlpha').needsUpdate = true;
   }
 }

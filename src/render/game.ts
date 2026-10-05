@@ -6,7 +6,7 @@ import { InputManager, type AssistInfo } from '../input/input';
 import type { ClientSession, ViewPlayer } from '../net/client';
 import { F_BEAM, F_BURNING, F_CAMO, F_CHARGING, F_DAMAGE, F_INVINCIBLE, F_OVERSHIELD, F_RELOAD, F_SAUCED } from '../net/protocol';
 import { angleDiff, dirFromYawPitch, yawPitchOf } from '../shared/vec';
-import { Arena, WELL_DEPTH } from '../sim/arena';
+import { Arena, MOUTH_R, RIM_OUT, WELL_DEPTH } from '../sim/arena';
 import { sauceAimScale, sauceLeft } from '../sim/sauce';
 import { SPRING_TICKS, inFlight, springLift } from '../sim/spring';
 import { FIRE_EXPOSURE, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
@@ -17,9 +17,10 @@ import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import type { Projectile, SimEvent } from '../sim/types';
 import { WEAPONS, weaponByIndex, type WeaponId } from '../sim/weapons';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
-import { Decals, FlashLights, Particles, Ribbons } from './fx';
+import { Decals, FlashLights, Particles, Ribbons, Shockwaves } from './fx';
 import { SHARED, buildCan, buildOrb, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
 import { PAL, SAUCE } from './palette';
+import type { PostFx } from './post';
 import { QUALITY, type QualityPreset } from './quality';
 import { Grass, buildFence, buildFlowers, buildHoles, buildSky, buildTerrain, buildTrees } from './world';
 
@@ -121,6 +122,8 @@ function projMesh(kind: string): THREE.Object3D | null {
 
 const tmpV = new THREE.Vector3();
 const tmpV2 = new THREE.Vector3();
+/** the "running slow?" hint shows once per visit */
+let slowHintShown = false;
 
 export interface GameHooks {
   onMenu(): void;
@@ -140,12 +143,23 @@ export class Game {
   private vmKick = 0;
   private sky: THREE.Mesh;
   private grass: Grass;
+  private trees: THREE.InstancedMesh;
   private sun: THREE.DirectionalLight;
-  private fxAdd: Particles;
-  private fxNorm: Particles;
+  private fxAdd!: Particles;
+  private fxNorm!: Particles;
   /** Gerry Sauce spray gets its own pool so it can't push combat effects out */
-  private fxSauce: Particles;
-  private decals = new Decals(64);
+  private fxSauce!: Particles;
+  private decals: Decals;
+  private shockwaves = new Shockwaves(8);
+  /** High / Ultra: bloom + tone mapping (null = draw straight to the canvas) */
+  private post: PostFx | null = null;
+  private postGen = 0;
+  /** High / Ultra: the sky as an environment map, for reflections on PBR materials */
+  private envRT: THREE.WebGLRenderTarget | null = null;
+  private fpsEl: HTMLElement | null = null;
+  /** frame-rate watch for the "running slow?" hint: 5 s windows, two slow ones in a row */
+  private fpsWatch = { t: 0, n: 0, slow: 0 };
+  private fpsAvg = { t: 0, n: 0 };
   /** Super Soaker squirts in flight: one custard jet per target, launched so it lands exactly when the sauce does */
   private sauceViews = new Map<number, { owner: number; at: number; fired: number; jets: { from: THREE.Vector3; v: THREE.Vector3 }[] | null }>();
   private ribbons: Ribbons;
@@ -202,7 +216,8 @@ export class Game {
     const canvas = document.createElement('canvas');
     canvas.className = 'game';
     container.appendChild(canvas);
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality.antialias, powerPreference: 'high-performance', stencil: false });
+    // with post-processing the MSAA happens in its buffer; the canvas's own can't change later
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality.antialias && !quality.post, powerPreference: 'high-performance', stencil: false });
     this.renderer.autoClear = false;
     this.renderer.info.autoReset = false;
     this.renderer.shadowMap.enabled = quality.shadows !== 'none';
@@ -218,14 +233,14 @@ export class Game {
     // the sun's shadow box covers the whole fenced field (bigger custom fields included)
     const ks = Math.max(1, this.arena.scale);
     this.sun.position.set(45 * ks, 60 * ks, -65 * ks);
+    const c = this.sun.shadow.camera;
+    const R = this.arena.fenceRadius + 10;
+    c.left = -R; c.right = R; c.top = R; c.bottom = -R; c.near = 10; c.far = 220 * ks;
+    this.sun.shadow.bias = -0.0008;
+    this.sun.shadow.normalBias = 0.03;
     if (quality.shadows !== 'none') {
       this.sun.castShadow = true;
       this.sun.shadow.mapSize.set(quality.shadowSize, quality.shadowSize);
-      const c = this.sun.shadow.camera;
-      const R = this.arena.fenceRadius + 10;
-      c.left = -R; c.right = R; c.top = R; c.bottom = -R; c.near = 10; c.far = 220 * ks;
-      this.sun.shadow.bias = -0.0008;
-      this.sun.shadow.normalBias = 0.03;
     }
     this.scene.add(this.sun, this.sun.target);
     // world
@@ -234,18 +249,25 @@ export class Game {
     this.scene.add(buildTerrain(this.arena, quality));
     this.scene.add(buildHoles(this.arena));
     this.scene.add(buildFence(this.arena));
-    this.scene.add(buildTrees(this.arena, quality));
+    this.trees = buildTrees(this.arena, quality);
+    this.scene.add(this.trees);
     this.scene.add(buildFlowers(this.arena));
     this.grass = new Grass(this.arena, quality);
     this.scene.add(this.grass.mesh);
     // fx
-    this.fxAdd = new Particles(quality.particles, true);
-    this.fxNorm = new Particles(Math.round(quality.particles * 0.7), false);
-    this.fxSauce = new Particles(Math.round(quality.particles * 1.5), false, true);
-    this.scene.add(this.fxSauce.mesh, this.decals.mesh);
+    this.buildParticles();
+    this.decals = new Decals(
+      64,
+      (x, z) => this.arena.groundAt(x, z),
+      (x, z) => {
+        const h = this.arena.nearestHole(x, z);
+        return !!h && Math.hypot(h.x - x, h.z - z) < RIM_OUT;
+      },
+    );
+    this.scene.add(this.decals.mesh, this.shockwaves.mesh);
     this.ribbons = new Ribbons(160);
-    this.lights = new FlashLights(this.scene, quality.level === 'low' ? 1 : 3);
-    this.scene.add(this.fxAdd.mesh, this.fxNorm.mesh, this.ribbons.mesh);
+    this.lights = new FlashLights(this.scene, quality.flashLights);
+    this.scene.add(this.ribbons.mesh);
     // viewmodel scene
     this.vmScene.add(new THREE.HemisphereLight(0xe0f0ff, 0x506040, 1.6));
     const vmSun = new THREE.DirectionalLight(0xfff1d6, 1.8);
@@ -293,11 +315,10 @@ export class Game {
     this.onResize();
     window.addEventListener('resize', this.onResize);
     canvas.addEventListener('webglcontextlost', (e) => e.preventDefault());
-    if (quality.shadows === 'static') {
-      // bake the static shadow map once, before any Spartans exist (their shadows would go stale)
-      this.renderer.shadowMap.needsUpdate = true;
-      this.renderer.render(this.scene, this.camera);
-    }
+    this.renderer.setClearColor(PAL.horizon);
+    this.setupPost();
+    this.applyEnv();
+    if (quality.shadows === 'static') this.bakeStaticShadows();
     // every announcer line (medals, power-ups…): a line that isn't decoded yet when it's due is skipped
     audio.preloadPrefix('ann.');
     audio.preload(Object.keys(CALLOUT_TEXT));
@@ -313,9 +334,10 @@ export class Game {
   private onResize = () => {
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
-    const dpr = Math.min(window.devicePixelRatio || 1, this.q.dprCap) * this.dynScale;
+    const dpr = Math.min(window.devicePixelRatio || 1, this.q.dprCap) * this.q.renderScale * this.dynScale;
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(w, h, false);
+    this.post?.setSize(w, h, dpr);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.vmCamera.aspect = w / h;
@@ -346,15 +368,190 @@ export class Game {
     this.chargeSound?.stop();
     this.beamSound?.stop();
     this.myVoice?.stop();
+    this.post?.dispose();
+    this.envRT?.dispose();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
     this.container.innerHTML = '';
   }
 
-  setQuality(q: QualityPreset) {
-    this.q = q;
+  /**
+   * New graphics settings, mid-match (Options from the pause menu). Only terrain detail and the canvas's own
+   * MSAA (no post-processing) wait for the next match.
+   */
+  applyGraphics(next: QualityPreset) {
+    const prev = this.q;
+    this.q = next;
     this.dynScale = 1;
+    this.frameTimes = [];
+    if (prev.shadows !== next.shadows || prev.shadowSize !== next.shadowSize) this.applyShadows(prev.shadows !== 'none');
+    if (prev.particles !== next.particles) this.buildParticles();
+    if (prev.flashLights !== next.flashLights) {
+      this.lights.dispose();
+      this.lights = new FlashLights(this.scene, next.flashLights);
+    }
+    if (prev.grassClumps !== next.grassClumps || prev.grassRadius !== next.grassRadius) {
+      this.scene.remove(this.grass.mesh);
+      disposeTree(this.grass.mesh);
+      this.grass = new Grass(this.arena, next);
+      this.scene.add(this.grass.mesh);
+      this.grassAt.set(NaN, NaN);
+    }
+    if (prev.trees !== next.trees) {
+      this.scene.remove(this.trees);
+      disposeTree(this.trees);
+      this.trees = buildTrees(this.arena, next);
+      this.scene.add(this.trees);
+      if (next.shadows === 'static') this.bakeStaticShadows();
+    }
+    if (prev.post !== next.post || prev.antialias !== next.antialias || prev.smaa !== next.smaa) this.setupPost();
+    if (prev.pbr !== next.pbr || prev.models !== next.models) this.rebuildModels();
     this.onResize();
+  }
+
+  private buildParticles() {
+    for (const p of [this.fxAdd, this.fxNorm, this.fxSauce]) {
+      if (!p) continue;
+      this.scene.remove(p.mesh);
+      p.dispose();
+    }
+    const n = this.q.particles;
+    this.fxAdd = new Particles(n, true);
+    this.fxNorm = new Particles(Math.round(n * 0.7), false);
+    this.fxSauce = new Particles(Math.round(n * 1.5), false, true);
+    this.scene.add(this.fxAdd.mesh, this.fxNorm.mesh, this.fxSauce.mesh);
+  }
+
+  private applyShadows(wasOn: boolean) {
+    const q = this.q;
+    const on = q.shadows !== 'none';
+    const sm = this.renderer.shadowMap;
+    sm.enabled = on;
+    sm.autoUpdate = q.shadows === 'dynamic';
+    this.sun.castShadow = on;
+    if (on && this.sun.shadow.mapSize.x !== q.shadowSize) {
+      this.sun.shadow.map?.dispose();
+      this.sun.shadow.map = null;
+      this.sun.shadow.mapSize.set(q.shadowSize, q.shadowSize);
+    }
+    // every lit material compiles with or without shadow code
+    if (wasOn !== on)
+      for (const sc of [this.scene, this.vmScene])
+        sc.traverse((o) => {
+          const m = (o as THREE.Mesh).material;
+          if (m) for (const mm of Array.isArray(m) ? m : [m]) mm.needsUpdate = true;
+        });
+    if (q.shadows === 'static') this.bakeStaticShadows();
+  }
+
+  /** "Low" shadows are drawn once, of the field without anyone on it (players' shadows would go stale). */
+  private bakeStaticShadows() {
+    const hidden: THREE.Object3D[] = [];
+    for (const sv of this.spartans.values())
+      if (sv.parts.root.visible) {
+        sv.parts.root.visible = false;
+        hidden.push(sv.parts.root);
+      }
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
+    // the next frame draws over this one
+    this.renderer.render(this.scene, this.camera);
+    for (const o of hidden) o.visible = true;
+  }
+
+  /** Post-processing code is only downloaded when it's switched on (it draws straight to the canvas until then). */
+  private setupPost() {
+    const gen = ++this.postGen;
+    this.post?.dispose();
+    this.post = null;
+    if (!this.q.post) return;
+    const q = this.q;
+    void import('./post').then(({ PostFx }) => {
+      if (gen !== this.postGen || this.destroyed) return;
+      this.post = new PostFx(this.renderer, this.scene, this.camera, this.vmScene, this.vmCamera, { msaa: q.antialias, smaa: q.smaa });
+      this.onResize();
+    });
+  }
+
+  /** PBR materials reflect the sky: a pre-filtered environment map made from the sky dome and a green ground. */
+  private applyEnv() {
+    if (this.q.pbr && !this.envRT) {
+      const pm = new THREE.PMREMGenerator(this.renderer);
+      const env = new THREE.Scene();
+      env.add(buildSky());
+      const ground = new THREE.Mesh(new THREE.CircleGeometry(400, 24).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x4d6a2e }));
+      ground.position.y = -20;
+      env.add(ground);
+      this.envRT = pm.fromScene(env, 0.02, 0.1, 1000);
+      pm.dispose();
+      disposeTree(env);
+    }
+    const tex = this.q.pbr ? this.envRT!.texture : null;
+    for (const sc of [this.scene, this.vmScene]) {
+      sc.environment = tex;
+      sc.environmentIntensity = 0.85;
+    }
+  }
+
+  /** Materials or models changed: rebuild Spartans, the viewmodel and power-ups (they come back next frame). */
+  private rebuildModels() {
+    for (const sv of this.spartans.values()) this.dropSpartan(sv);
+    this.spartans.clear();
+    for (const v of this.orbs.values()) {
+      this.scene.remove(v.group);
+      disposeTree(v.group);
+    }
+    this.orbs.clear();
+    this.vmWeapon = '';
+    this.applyEnv();
+  }
+
+  private dropSpartan(sv: SpartanView) {
+    this.scene.remove(sv.parts.root);
+    disposeTree(sv.parts.root);
+    for (const sp of [sv.tag, sv.bubble]) {
+      if (!sp) continue;
+      this.scene.remove(sp);
+      disposeTree(sp);
+    }
+    sv.beamSound?.stop();
+  }
+
+  /** The Options' FPS counter. */
+  setFpsCounter(on: boolean) {
+    if (on && !this.fpsEl) {
+      this.fpsEl = document.createElement('div');
+      this.fpsEl.className = 'fps';
+      this.container.appendChild(this.fpsEl);
+    } else if (!on && this.fpsEl) {
+      this.fpsEl.remove();
+      this.fpsEl = null;
+    }
+  }
+
+  /** FPS counter, and a one-time hint when the game runs slowly for a while. */
+  private watchFps(dt: number) {
+    const a = this.fpsAvg;
+    a.t += dt;
+    a.n++;
+    if (a.t >= 0.5) {
+      if (this.fpsEl) this.fpsEl.textContent = `${Math.round(a.n / a.t)} fps`;
+      a.t = 0;
+      a.n = 0;
+    }
+    const w = this.fpsWatch;
+    if (slowHintShown || this.session.phase !== 'live' || this.time < 8) return;
+    w.t += dt;
+    w.n++;
+    if (w.t < 5) return;
+    const fps = w.n / w.t;
+    w.t = 0;
+    w.n = 0;
+    w.slow = fps < 28 ? w.slow + 1 : 0;
+    if (w.slow >= 2 && this.q.level !== 'low') {
+      slowHintShown = true;
+      this.hud.message('Running slow? Try Options → Graphics → Low', 6000, 'warn');
+    }
   }
 
   // -------------------------------------------------------------------------------------------
@@ -552,6 +749,7 @@ export class Game {
     this.fxNorm.update(dt);
     this.fxSauce.update(dt);
     this.decals.update(dt);
+    this.shockwaves.update(dt);
     this.ribbons.update(dt);
     this.lights.update(dt);
     this.grass.update(this.time);
@@ -565,13 +763,17 @@ export class Game {
     // render
     this.renderer.info.reset();
     this.renderer.setClearColor(PAL.horizon);
-    this.renderer.clear();
-    this.renderer.render(this.scene, this.camera);
-    if (this.vmHolder.visible) {
-      this.renderer.clearDepth();
-      this.renderer.render(this.vmScene, this.vmCamera);
+    if (this.post) this.post.render(dt, this.vmHolder.visible);
+    else {
+      this.renderer.clear();
+      this.renderer.render(this.scene, this.camera);
+      if (this.vmHolder.visible) {
+        this.renderer.clearDepth();
+        this.renderer.render(this.vmScene, this.vmCamera);
+      }
     }
     this.dynamicResolution(dt);
+    this.watchFps(dt);
     this.clickToPlay.style.display = this.input.device === 'kbm' && !this.input.locked && !this.hooks.isMenuOpen() && s.state === 'match' ? '' : 'none';
     if (this.perfEl && this.frames % 15 === 0) {
       const info = this.renderer.info.render;
@@ -598,7 +800,7 @@ export class Game {
 
   renderInfo() {
     const i = this.renderer.info.render;
-    return { calls: i.calls, triangles: i.triangles, dynScale: this.dynScale };
+    return { calls: i.calls, triangles: i.triangles, dynScale: this.dynScale, post: !!this.post, pbr: this.q.pbr, shadows: this.renderer.shadowMap.enabled, level: this.q.level, particles: this.q.particles, dpr: this.renderer.getPixelRatio() };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1052,7 +1254,7 @@ export class Game {
     const c = WEAPONS[w].fx.color;
     if (w === 'flamethrower') return;
     this.fxAdd.emit({ pos, count: mine ? 5 : 7, speed: [0.5, 3], dir, spread: 0.5, life: [0.04, 0.09], size: [mine ? 0.25 : 0.45, 0.05], color: 0xffffff, color1: c });
-    if (!mine && this.q.level !== 'low') this.lights.flash(pos, c, 3, 6, 0.08);
+    if (!mine && this.q.flashLights > 1) this.lights.flash(pos, c, 3, 6, 0.08);
   }
 
   private tracer(from: THREE.Vector3, to: THREE.Vector3, w: WeaponId) {
@@ -1079,7 +1281,7 @@ export class Game {
 
   private explosion(p: THREE.Vector3, r: number, w: WeaponId) {
     const big = r >= 5;
-    const k = this.q.level === 'low' ? 0.6 : 1;
+    const k = this.q.fxScale;
     const needle = w === 'needler';
     const col0 = needle ? 0xffd0ff : 0xfff0b0;
     const col1 = needle ? 0xff40c0 : 0xff5a10;
@@ -1087,6 +1289,16 @@ export class Game {
     this.fxAdd.emit({ pos: p, count: Math.round(18 * k), speed: [6, 16], life: [0.3, 0.8], size: [0.12, 0.03], color: 0xffe080, gravity: 12, drag: 0.5 });
     this.fxNorm.emit({ pos: p, count: Math.round((big ? 22 : 14) * k), speed: [0.8, 3], life: [1.2, 2.6], size: [r * 0.4, r * 0.9], color: 0x5a5550, color1: 0x9a9a9a, alpha: [0.75, 0], gravity: -1.2, drag: 1.2, jitter: r * 0.3 });
     this.fxNorm.emit({ pos: p, count: Math.round(12 * k), speed: [3, 8], dir: new THREE.Vector3(0, 1, 0), spread: 0.9, life: [0.8, 1.4], size: [0.1, 0.08], color: 0x5a4a30, gravity: 14, alpha: [1, 1] });
+    if (k >= 1.3 && !needle) {
+      // High / Ultra: a shockwave ring, white-hot sparks, clods of earth and a scorch mark
+      this.shockwaves.add(p, r * 1.7, 0xffc078, big ? 0.5 : 0.4);
+      this.fxAdd.emit({ pos: p, count: Math.round(22 * k), speed: [8, 24], life: [0.2, 0.45], size: [0.09, 0.02], color: 0xffffff, color1: 0xffa040, gravity: 6, drag: 0.8 });
+      this.fxNorm.emit({ pos: p, count: Math.round(9 * k), speed: [4, 11], dir: new THREE.Vector3(0, 1, 0), spread: 0.75, life: [1, 1.7], size: [0.24, 0.16], color: 0x3a2e20, color1: 0x2a2218, gravity: 17, alpha: [1, 1] });
+      const g = this.arena.groundAt(p.x, p.z);
+      const hole = this.arena.nearestHole(p.x, p.z);
+      const inMouth = hole && Math.hypot(hole.x - p.x, hole.z - p.z) < MOUTH_R + 0.4;
+      if (p.y - g < 1.6 && !inMouth) this.decals.add(p.x, p.z, r * 0.5, 0x1d1915, 14, 0.85);
+    }
     this.lights.flash(p.clone().add(new THREE.Vector3(0, 1, 0)), needle ? 0xff60d0 : 0xffa040, big ? 60 : 30, r * 5, 0.35);
     const d = p.distanceTo(this.camera.position);
     this.shake = Math.min(1.2, this.shake + Math.max(0, 1 - d / (r * 6)) * (big ? 1.2 : 0.7));
@@ -1107,7 +1319,7 @@ export class Game {
       sv = undefined;
     }
     if (!sv) {
-      const parts = buildSpartan(p.color);
+      const parts = buildSpartan(p.color, this.q.pbr);
       this.scene.add(parts.root);
       sv = { slot: p.slot, parts, color: p.color, weapon: '', weaponModel: null, alive: p.alive, deathT: 0, deathDir: 1, flare: 0, flareColor: 0x6ad8ff, estShield: SHIELD_MAX, lastHitAt: -99, name: '', tag: null, tagFor: '', beamSound: null, voice: null, headScale: 1, bubble: null, bubbleUntil: 0, sauce: [] };
       this.spartans.set(p.slot, sv);
@@ -1170,7 +1382,7 @@ export class Game {
           sv.parts.weaponHolder.remove(sv.weaponModel);
           disposeTree(sv.weaponModel);
         }
-        sv.weaponModel = buildWeaponModel(p.weapon);
+        sv.weaponModel = buildWeaponModel(p.weapon, this.q.pbr);
         sv.parts.weaponHolder.add(sv.weaponModel);
         sv.weapon = p.weapon;
       }
@@ -1285,14 +1497,7 @@ export class Game {
     }
     for (const [slot, sv] of this.spartans) {
       if (!seen.has(slot)) {
-        this.scene.remove(sv.parts.root);
-        disposeTree(sv.parts.root);
-        for (const sp of [sv.tag, sv.bubble]) {
-          if (!sp) continue;
-          this.scene.remove(sp);
-          disposeTree(sp);
-        }
-        sv.beamSound?.stop();
+        this.dropSpartan(sv);
         this.spartans.delete(slot);
       }
     }
@@ -1326,7 +1531,7 @@ export class Game {
       if (!v) {
         const def = POWERUPS[o.type as PowerUpId];
         const color = def?.color ?? 0xffffff;
-        const group = this.cans() ? buildCan(color) : buildOrb(color);
+        const group = this.cans() ? buildCan(color, this.q.pbr) : buildOrb(color, this.q.pbr);
         const label = textSprite(`${def?.icon ?? '?'} ${def?.name ?? ''}`, '#ffffff', 36);
         group.add(label);
         label.position.y = 1.25;
@@ -1462,7 +1667,7 @@ export class Game {
     for (let i = 0; i < 3; i++) {
       const a = Math.random() * Math.PI * 2, r = 2 + Math.random() * 1.5;
       const x = h.x + Math.cos(a) * r, z = h.z + Math.sin(a) * r;
-      this.decals.add(new THREE.Vector3(x, this.arena.groundAt(x, z) + 0.03, z), 0.6 + Math.random() * 0.8, SAUCE.base, 9);
+      this.decals.add(x, z, 0.6 + Math.random() * 0.8, SAUCE.base, 9);
     }
   }
 
@@ -1501,7 +1706,7 @@ export class Game {
         const once = dt * 1.2 + 0.005;
         const tail = 0.22;
         // enough drops to look continuous, within a per-frame budget shared by all the jets
-        const cap = Math.max(6, Math.floor((this.q.level === 'low' ? 120 : 320) / Math.max(1, v.jets.length)));
+        const cap = Math.max(6, Math.floor((this.q.fxScale < 1 ? 120 : 320) / Math.max(1, v.jets.length)));
         for (const j of v.jets) {
           const s0 = Math.max(0, tau - tail);
           const n = Math.min(cap, Math.max(6, Math.ceil((j.v.length() * (tau - s0)) / 0.22)));
@@ -1521,7 +1726,7 @@ export class Game {
       } else if (left > -1.5) {
         // after it lands: a short custard rain over the field
         const R = this.arena.fenceRadius;
-        for (let i = 0; i < (this.q.level === 'low' ? 2 : 6); i++) {
+        for (let i = 0; i < (this.q.fxScale < 1 ? 2 : 6); i++) {
           const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * R;
           this.fxSauce.emit({ pos: { x: Math.cos(a) * r, y: 14 + Math.random() * 8, z: Math.sin(a) * r }, count: 1, speed: [0, 1], gravity: 12, life: [1.4, 1.9], size: [0.3, 0.22], color: SAUCE.base, color1: SAUCE.shade, alpha: [0.95, 0.9] });
         }
@@ -1727,7 +1932,7 @@ export class Game {
         this.vmHolder.remove(this.vmModel);
         disposeTree(this.vmModel);
       }
-      this.vmModel = buildWeaponModel(w);
+      this.vmModel = buildWeaponModel(w, this.q.pbr);
       // gloved hand
       const glove = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.13, 0.14), new THREE.MeshLambertMaterial({ color }));
       glove.position.set(0, -0.1, 0.02);

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { WeaponId } from '../sim/weapons';
 import { PAL, SAUCE } from './palette';
+import { DISPLAY_COLOR } from './shaderUtil';
 
 type Part = [THREE.BufferGeometry, number | THREE.Material];
 
@@ -37,10 +38,34 @@ function assemble(parts: Part[], mat?: THREE.Material): THREE.Group {
 const glow = (hex: number) => new THREE.MeshBasicMaterial({ color: hex, toneMapped: false });
 
 /**
+ * High / Ultra: swap a freshly built model's Lambert / Phong materials for physically based ones that
+ * pick up the sky's reflections (scene.environment). Only for materials the model owns.
+ */
+function pbrify(root: THREE.Object3D, o: { roughness: number; metalness: number }) {
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const conv = (m: THREE.Material): THREE.Material => {
+      if (!(m instanceof THREE.MeshLambertMaterial || m instanceof THREE.MeshPhongMaterial)) return m;
+      const shiny = m instanceof THREE.MeshPhongMaterial ? m.shininess : 0;
+      const std = new THREE.MeshStandardMaterial({
+        color: m.color, map: m.map, vertexColors: m.vertexColors, emissive: m.emissive, emissiveMap: m.emissiveMap, emissiveIntensity: m.emissiveIntensity,
+        transparent: m.transparent, opacity: m.opacity, side: m.side, flatShading: m.flatShading,
+        roughness: shiny ? Math.min(0.8, Math.max(0.12, 1 - shiny / 140)) : o.roughness,
+        metalness: o.metalness,
+      });
+      m.dispose();
+      return std;
+    };
+    mesh.material = Array.isArray(mesh.material) ? mesh.material.map(conv) : conv(mesh.material);
+  });
+}
+
+/**
  * Weapon models share one convention: barrel points toward -Z, origin at the grip,
  * muzzle position stored in userData.muzzle.
  */
-export function buildWeaponModel(id: WeaponId): THREE.Group {
+export function buildWeaponModel(id: WeaponId, pbr = false): THREE.Group {
   const dark = 0x3a4148, mid = 0x5c6670, light = 0x8a949d;
   let g: THREE.Group;
   let muzzle = new THREE.Vector3(0, 0.05, -0.9);
@@ -173,6 +198,7 @@ export function buildWeaponModel(id: WeaponId): THREE.Group {
       break;
   }
   g.userData.muzzle = muzzle;
+  if (pbr) pbrify(g, { roughness: 0.42, metalness: 0.55 });
   return g;
 }
 
@@ -194,12 +220,13 @@ const shellMaterial = (hex: number) =>
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: /* glsl */ `
+      ${DISPLAY_COLOR}
       uniform vec3 color; uniform float strength; uniform float time;
       varying vec3 vN; varying vec3 vV; varying vec3 vP;
       void main(){
         float f = pow(1.0 - abs(dot(vN, vV)), 2.2);
         float bands = 0.75 + 0.25 * sin(vP.y * 40.0 - time * 6.0);
-        gl_FragColor = vec4(color * (f * 1.6 + 0.08) * bands * strength, 1.0);
+        gl_FragColor = displayColor(vec4(color * (f * 1.6 + 0.08) * bands * strength, 1.0));
       }`,
   });
 
@@ -209,20 +236,23 @@ export interface SpartanParts {
   aim: THREE.Group;
   head: THREE.Group;
   weaponHolder: THREE.Group;
-  mat: THREE.MeshLambertMaterial;
-  visor: THREE.MeshPhongMaterial;
+  mat: THREE.MeshLambertMaterial | THREE.MeshStandardMaterial;
+  visor: THREE.MeshPhongMaterial | THREE.MeshStandardMaterial;
   shell: THREE.Mesh;
   shellMat: THREE.ShaderMaterial;
   catHat: THREE.Group;
   materials: THREE.Material[];
 }
 
-export function buildSpartan(color: number): SpartanParts {
+export function buildSpartan(color: number, pbr = false): SpartanParts {
   const armorC = color;
   const accentC = new THREE.Color(color).multiplyScalar(0.62).getHex();
   const suitC = PAL.undersuit;
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
-  const visor = new THREE.MeshPhongMaterial({ color: 0x9a6410, specular: 0xffe8a8, shininess: 120, emissive: 0x3a2200 });
+  // High / Ultra: satin armour and a mirrored gold visor that reflect the sky
+  const mat = pbr ? new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.18 }) : new THREE.MeshLambertMaterial({ vertexColors: true });
+  const visor = pbr
+    ? new THREE.MeshStandardMaterial({ color: 0xc08a20, metalness: 0.9, roughness: 0.18, emissive: 0x2a1800 })
+    : new THREE.MeshPhongMaterial({ color: 0x9a6410, specular: 0xffe8a8, shininess: 120, emissive: 0x3a2200 });
   const root = new THREE.Group();
   const mk = (parts: Part[]) => {
     const g = assemble(parts, mat);
@@ -312,8 +342,8 @@ const share = <T>(x: T): T => (SHARED.add(x), x);
 /** Pitre Mode energy drink can: radius and height (m). It fits inside the power-up's hit sphere (ORB_R). */
 export const CAN_R = 0.3;
 export const CAN_H = 1.44;
-let canParts: { metal: THREE.BufferGeometry; metalMat: THREE.Material; body: THREE.BufferGeometry; aura: THREE.BufferGeometry } | null = null;
-const canLabels = new Map<number, THREE.Material>();
+let canParts: { metal: THREE.BufferGeometry; metalMat: THREE.Material; metalPbr: THREE.Material; body: THREE.BufferGeometry; aura: THREE.BufferGeometry } | null = null;
+const canLabels = new Map<string, THREE.Material>();
 
 /** Tiny seeded random, so a can's scratches look the same every time. */
 function seeded(seed: number) {
@@ -346,8 +376,9 @@ function drawClaws(ctx: CanvasRenderingContext2D, cx: number, top: number, botto
 }
 
 /** The can's wrap-around label (and a glow map so the scratches light up), in the power-up's colour. */
-function canLabel(color: number): THREE.Material {
-  let mat = canLabels.get(color);
+function canLabel(color: number, pbr: boolean): THREE.Material {
+  const key = `${color}:${pbr}`;
+  let mat = canLabels.get(key);
   if (mat) return mat;
   const W = 512, H = 328;
   const css = `#${color.toString(16).padStart(6, '0')}`;
@@ -384,13 +415,18 @@ function canLabel(color: number): THREE.Material {
     tex.anisotropy = 4;
     return tex;
   };
-  mat = share(new THREE.MeshPhongMaterial({ map: make(false), emissiveMap: make(true), emissive: 0xffffff, emissiveIntensity: 0.75, specular: 0x8a8f96, shininess: 70 }));
-  canLabels.set(color, mat);
+  const map = make(false), emissiveMap = make(true);
+  mat = share(
+    pbr
+      ? new THREE.MeshStandardMaterial({ map, emissiveMap, emissive: 0xffffff, emissiveIntensity: 0.75, roughness: 0.32, metalness: 0.55 })
+      : new THREE.MeshPhongMaterial({ map, emissiveMap, emissive: 0xffffff, emissiveIntensity: 0.75, specular: 0x8a8f96, shininess: 70 }),
+  );
+  canLabels.set(key, mat);
   return mat;
 }
 
 /** Pitre Mode power-up: a tall energy drink can — black, silver ends, claw scratches in the power-up's colour. */
-export function buildCan(color: number): THREE.Group {
+export function buildCan(color: number, pbr = false): THREE.Group {
   if (!canParts) {
     const r = CAN_R, h = CAN_H / 2;
     const v = (pts: number[][]) => pts.map(([x, y]) => new THREE.Vector2(x!, y!));
@@ -405,14 +441,15 @@ export function buildCan(color: number): THREE.Group {
     canParts = {
       metal: share(mergeGeometries(parts)!),
       metalMat: share(new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 110 })),
+      metalPbr: share(new THREE.MeshStandardMaterial({ color: 0xd4d8dd, metalness: 1, roughness: 0.28 })),
       // the painted wall between the ends: label u runs once around, v bottom to top
       body: share(new THREE.CylinderGeometry(r, r, CAN_H - 0.23, 32, 1, true).translate(0, -0.015, 0)),
       aura: share(new THREE.SphereGeometry(1, 18, 12)),
     };
   }
   const g = new THREE.Group();
-  const metal = new THREE.Mesh(canParts.metal, canParts.metalMat);
-  const body = new THREE.Mesh(canParts.body, canLabel(color));
+  const metal = new THREE.Mesh(canParts.metal, pbr ? canParts.metalPbr : canParts.metalMat);
+  const body = new THREE.Mesh(canParts.body, canLabel(color, pbr));
   const aura = new THREE.Mesh(canParts.aura, shellMaterial(color));
   aura.scale.set(0.5, 0.98, 0.5);
   (aura.material as THREE.ShaderMaterial).uniforms.strength!.value = 0.9;
@@ -422,7 +459,7 @@ export function buildCan(color: number): THREE.Group {
   return g;
 }
 
-export function buildOrb(color: number): THREE.Group {
+export function buildOrb(color: number, pbr = false): THREE.Group {
   const g = new THREE.Group();
   const R = 0.62;
   const top = new THREE.Mesh(new THREE.SphereGeometry(R, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshPhongMaterial({ color: 0xe0282e, shininess: 80, specular: 0xffffff }));
@@ -437,6 +474,7 @@ export function buildOrb(color: number): THREE.Group {
   g.add(top, bottom, band, btnOuter, btn, aura);
   g.userData.aura = aura;
   g.userData.kind = 'ball';
+  if (pbr) pbrify(g, { roughness: 0.6, metalness: 0 });
   return g;
 }
 

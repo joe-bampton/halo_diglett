@@ -1,4 +1,5 @@
 import { clamp } from '../shared/vec';
+import { isQualityLevel, sanitizeGfx, type GfxOverrides, type QualityLevel } from '../render/quality';
 
 export interface InputState {
   yaw: number;
@@ -38,16 +39,38 @@ export interface Options {
   invertY: boolean;
   standMode: 'hold' | 'toggle';
   fov: number;
-  quality: 'auto' | 'low' | 'medium' | 'high';
+  quality: 'auto' | QualityLevel;
+  /** Options → Graphics → Advanced (anything left out follows the quality preset) */
+  gfx: GfxOverrides;
+  fpsCounter: boolean;
 }
 
-export const DEFAULT_OPTIONS: Options = { mouseSens: 1, padSens: 1, touchSens: 1, invertY: false, standMode: 'hold', fov: 78, quality: 'auto' };
+export const DEFAULT_OPTIONS: Options = { mouseSens: 1, padSens: 1, touchSens: 1, invertY: false, standMode: 'hold', fov: 78, quality: 'auto', gfx: {}, fpsCounter: false };
+
+/** Saved options, with anything missing or invalid back at its default. */
+export function sanitizeOptions(raw: unknown): Options {
+  const src = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const o: Options = { ...DEFAULT_OPTIONS, gfx: sanitizeGfx(src.gfx) };
+  const num = (k: 'mouseSens' | 'padSens' | 'touchSens' | 'fov', lo: number, hi: number) => {
+    const v = src[k];
+    if (typeof v === 'number' && Number.isFinite(v)) o[k] = Math.min(hi, Math.max(lo, v));
+  };
+  num('mouseSens', 0.05, 10);
+  num('padSens', 0.05, 10);
+  num('touchSens', 0.05, 10);
+  num('fov', 50, 120);
+  if (typeof src.invertY === 'boolean') o.invertY = src.invertY;
+  if (src.standMode === 'hold' || src.standMode === 'toggle') o.standMode = src.standMode;
+  if (src.quality === 'auto' || isQualityLevel(src.quality)) o.quality = src.quality;
+  if (typeof src.fpsCounter === 'boolean') o.fpsCounter = src.fpsCounter;
+  return o;
+}
 
 export function loadOptions(): Options {
   try {
-    return { ...DEFAULT_OPTIONS, ...JSON.parse(localStorage.getItem('hd.options') ?? '{}') };
+    return sanitizeOptions(JSON.parse(localStorage.getItem('hd.options') ?? '{}'));
   } catch {
-    return { ...DEFAULT_OPTIONS };
+    return { ...DEFAULT_OPTIONS, gfx: {} };
   }
 }
 export function saveOptions(o: Options) {

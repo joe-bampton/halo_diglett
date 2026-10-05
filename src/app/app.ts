@@ -10,7 +10,7 @@ import type { LobbyState } from '../net/protocol';
 import { MuxHostNet, loopbackPair, type ClientNet, type HostNet, type VoiceLink } from '../net/transport';
 import { Backdrop } from '../render/backdrop';
 import { Game } from '../render/game';
-import { QUALITY, detectQuality, type QualityLevel } from '../render/quality';
+import { GFX_FIELDS, QUALITY, QUALITY_LABEL, QUALITY_LEVELS, autoQuality, detectQuality, presetChoice, resolveQuality, type GfxOverrides, type QualityLevel } from '../render/quality';
 import { MAX_BOTS, MAX_HUMANS } from '../sim/constants';
 import { DEFAULT_SETTINGS, migrateSavedSettings, sanitizeSettings, settingsForStorage, type Settings } from '../sim/settings';
 import type { BotDifficulty } from '../sim/types';
@@ -161,7 +161,7 @@ export class App {
     if (this.game || this.backdrop) return;
     if (params.has('test') ? !params.has('backdrop') : params.has('nobackdrop')) return;
     try {
-      this.backdrop = new Backdrop(this.gameLayer, QUALITY[this.quality === 'high' ? 'medium' : this.quality]);
+      this.backdrop = new Backdrop(this.gameLayer, QUALITY[this.quality === 'high' || this.quality === 'ultra' ? 'medium' : this.quality]);
       this.backdrop.start();
     } catch (e) {
       console.warn('backdrop unavailable', e);
@@ -546,9 +546,10 @@ export class App {
     this.stopGame();
     this.clearScreen();
     this.killBackdrop();
-    const q = QUALITY[this.quality];
-    this.game = new Game(this.gameLayer, s, q, { onMenu: () => this.toggleMenu(), isMenuOpen: () => !!this.menuEl });
+    const opts = loadOptions();
+    this.game = new Game(this.gameLayer, s, resolveQuality(this.quality, opts.gfx), { onMenu: () => this.toggleMenu(), isMenuOpen: () => !!this.menuEl });
     this.game.input.opts = { ...this.game.input.opts };
+    this.game.setFpsCounter(opts.fpsCounter);
     audio.hrtf = this.quality !== 'low';
     if (this.host && params.has('timescale')) this.host.timescale = Number(params.get('timescale')) || 1;
     this.game.start();
@@ -715,7 +716,12 @@ export class App {
         <div class="field"><label>Invert look</label><div class="val"><input type="checkbox" data-k="invertY" ${opts.invertY ? 'checked' : ''}></div></div>
         <div class="field"><label>Stand up (Space)</label><select data-k="standMode"><option value="hold" ${opts.standMode === 'hold' ? 'selected' : ''}>Hold</option><option value="toggle" ${opts.standMode === 'toggle' ? 'selected' : ''}>Toggle</option></select></div>
         <h3 style="margin-top:14px">Graphics</h3>
-        <div class="field"><label>Quality</label><select data-k="quality">${['auto', 'low', 'medium', 'high'].map((q) => `<option value="${q}" ${opts.quality === q ? 'selected' : ''}>${q}</option>`).join('')}</select><div class="help">Takes effect next match. Auto picks Low on phones.</div></div>
+        <div class="field"><label>Quality</label><select data-k="quality">${(['auto', ...QUALITY_LEVELS] as const).map((q) => `<option value="${q}" ${opts.quality === q ? 'selected' : ''}>${QUALITY_LABEL[q]}${q === 'auto' ? ` (${QUALITY_LABEL[autoQuality()]})` : ''}</option>`).join('')}</select><div class="help">Changes right away, even mid-match. Laggy? Try Low. Auto picks Low on phones.</div></div>
+        <div class="field"><label>Show FPS</label><div class="val"><input type="checkbox" data-fps ${opts.fpsCounter ? 'checked' : ''}></div></div>
+        <details class="gfx-adv" ${Object.keys(opts.gfx).length ? 'open' : ''}><summary>Advanced graphics</summary>
+          ${GFX_FIELDS.map((f) => `<div class="field"><label>${f.label}</label><select data-gfx="${f.key}"><option value="">Preset (${presetChoice(f.key, this.quality)})</option>${f.options.map(([v, l]) => `<option value="${v}" ${opts.gfx[f.key] === v ? 'selected' : ''}>${l}</option>`).join('')}</select>${f.help ? `<div class="help">${f.help}</div>` : ''}</div>`).join('')}
+          <div class="row" style="margin-top:6px"><button class="btn small reset-gfx">Reset to the preset</button></div>
+        </details>
         ${slider('fov', 'Field of view', 60, 100, 1, opts.fov)}
         <h3 style="margin-top:14px">Audio</h3>
         ${VOLUME_META.map((m) => slider(`v.${m.key}`, m.label, 0, m.max, 0.05, v[m.key], m.help)).join('')}
@@ -729,13 +735,23 @@ export class App {
     const save = () => {
       saveOptions(opts);
       if (this.game) this.game.input.opts = { ...opts };
-      if (opts.quality !== 'auto') this.quality = opts.quality;
       try {
         if (opts.quality === 'auto') localStorage.removeItem('hd.quality');
         else localStorage.setItem('hd.quality', opts.quality);
       } catch {
         /* ignore */
       }
+      // "Auto" goes back to what this device gets by default
+      this.quality = opts.quality === 'auto' ? detectQuality() : opts.quality;
+      audio.hrtf = this.quality !== 'low';
+      // applied live, mid-match too
+      this.game?.applyGraphics(resolveQuality(this.quality, opts.gfx));
+      this.game?.setFpsCounter(opts.fpsCounter);
+    };
+    const redraw = () => {
+      const top = this.screen?.scrollTop ?? 0;
+      this.showOptions(back);
+      if (this.screen) this.screen.scrollTop = top;
     };
     scr.querySelectorAll<HTMLInputElement>('input[type=range]').forEach((inp) => {
       const out = inp.parentElement!.querySelector('output')!;
@@ -755,8 +771,30 @@ export class App {
       sel.addEventListener('change', () => {
         (opts as unknown as Record<string, string>)[sel.dataset.k!] = sel.value;
         save();
+        // the Advanced "Preset (…)" labels follow the new preset
+        if (sel.dataset.k === 'quality') redraw();
       }),
     );
+    scr.querySelectorAll<HTMLSelectElement>('select[data-gfx]').forEach((sel) =>
+      sel.addEventListener('change', () => {
+        const key = sel.dataset.gfx as keyof GfxOverrides;
+        const choice = GFX_FIELDS.find((f) => f.key === key)!.options.find(([v]) => String(v) === sel.value);
+        const gfx: Record<string, unknown> = { ...opts.gfx };
+        if (choice) gfx[key] = choice[0];
+        else delete gfx[key];
+        opts.gfx = gfx as GfxOverrides;
+        save();
+      }),
+    );
+    scr.querySelector<HTMLInputElement>('[data-fps]')!.addEventListener('change', (e) => {
+      opts.fpsCounter = (e.target as HTMLInputElement).checked;
+      save();
+    });
+    scr.querySelector('.reset-gfx')!.addEventListener('click', () => {
+      opts.gfx = {};
+      save();
+      redraw();
+    });
     scr.querySelector<HTMLTextAreaElement>('.turn')!.addEventListener('change', (e) => {
       const val = (e.target as HTMLTextAreaElement).value.trim();
       try {

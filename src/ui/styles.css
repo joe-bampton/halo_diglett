@@ -108,6 +108,8 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 .settings { display: flex; flex-direction: column; gap: 4px; }
 .settings .group { margin-top: 10px; font-size: 13px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--hud-dim); border-bottom: 1px solid var(--line); padding-bottom: 3px; }
 .field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: center; padding: 5px 0; }
+.gfx-adv { margin: 6px 0 2px; border: 1px solid var(--line); border-radius: 4px; padding: 0 10px 8px; background: rgba(13, 27, 42, 0.35); }
+.gfx-adv > summary { cursor: pointer; padding: 8px 0; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; font-size: 13px; color: var(--hud); }
 .field label { font-size: 16px; font-weight: 600; }
 .field .help { grid-column: 1 / -1; font-size: 13px; color: var(--muted); margin-top: -4px; }
 .field .val { display: flex; align-items: center; gap: 8px; }
@@ -281,6 +283,7 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 @media (orientation: portrait) and (pointer: coarse) { .rotate.ingame { display: grid; } }
 .toast { position: absolute; left: 50%; top: 20px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); padding: 10px 16px; border-radius: 4px; z-index: 50; font-size: 16px; }
 .perf { position: absolute; left: 6px; bottom: 6px; font: 11px monospace; color: #9fe7ff; z-index: 40; pointer-events: none; text-shadow: 0 0 2px #000; }
+.fps { position: absolute; right: max(16px, env(safe-area-inset-right)); top: calc(max(14px, env(safe-area-inset-top)) + 38px); font: 600 12px monospace; color: #9fe7ff; z-index: 40; pointer-events: none; text-shadow: 0 0 2px #000, 0 0 4px #000; }
 @media (max-width: 700px), (max-height: 500px) {
   .hud .ammo .count { font-size: 34px; }
   .hud .score { width: 170px; bottom: calc(max(16px, env(safe-area-inset-bottom)) + 70px); }

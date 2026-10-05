@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { Rng, hash01 } from '../shared/rng';
 import { MOUTH_R, RIM_H, RIM_OUT, WELL_DEPTH, type Arena } from '../sim/arena';
 import { PAL } from './palette';
+import { DISPLAY_COLOR } from './shaderUtil';
 import type { QualityPreset } from './quality';
 
 const col = (hex: number) => new THREE.Color(hex);
@@ -71,6 +72,7 @@ export function buildSky(): THREE.Mesh {
         gl_Position = p.xyww;
       }`,
     fragmentShader: /* glsl */ `
+      ${DISPLAY_COLOR}
       uniform vec3 top; uniform vec3 mid; uniform vec3 horizon; uniform vec3 sunDir; uniform vec3 sunCol; uniform float time;
       varying vec3 vDir;
       float h(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
@@ -90,7 +92,7 @@ export function buildSky(): THREE.Mesh {
         float s = max(dot(d, sunDir), 0.0);
         c += sunCol * (pow(s, 900.0) * 3.0 + pow(s, 12.0) * 0.18);
         if (d.y < 0.0) c = horizon;
-        gl_FragColor = vec4(c, 1.0);
+        gl_FragColor = displayColor(vec4(c, 1.0));
       }`,
   });
   const m = new THREE.Mesh(geo, mat);
