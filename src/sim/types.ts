@@ -89,6 +89,8 @@ export interface PlayerState {
   /** Gerry Sauce: when it hit (-1 never) and when it's gone */
   saucedAt: number;
   saucedUntil: number;
+  /** last time a shot whizzed past them (Pitre "Bitch please"; host only) */
+  nearAt: number;
   pressAt: number;
   powerups: ActivePowerup[];
   underdogUntil: number;
@@ -127,6 +129,8 @@ export interface Projectile {
   bounces: number;
   target: number;
   fuseAt: number;
+  /** players it has already whizzed past (bitmask by slot; Pitre near misses) */
+  near?: number;
 }
 
 export interface Orb {
@@ -199,4 +203,6 @@ export type SimEvent =
   /** a Super Soaker squirt — the sauce lands on everyone else `at` */
   | { k: 'sauce'; t: number; id: number; p: number; at: number }
   /** someone got covered in Gerry Sauce until `until` */
-  | { k: 'sauced'; t: number; v: number; a: number; until: number };
+  | { k: 'sauced'; t: number; v: number; a: number; until: number }
+  /** a shot whizzed past `v` without hitting them (Pitre Mode voices only) */
+  | { k: 'near'; t: number; a: number; v: number; w: WeaponId };

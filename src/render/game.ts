@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { audio, type SoundHandle } from '../audio/audio';
-import { PITRE_SLOT, PitreVoiceThrottle, pitreCues, type PitreCue } from '../audio/pitre';
+import { PITRE_SLOT, PitreHitTracker, PitreVoiceThrottle, pitreCues, type PitreCue } from '../audio/pitre';
 import type { SfxId } from '../audio/synth';
 import { InputManager, type AssistInfo } from '../input/input';
 import type { ClientSession, ViewPlayer } from '../net/client';
@@ -18,7 +18,7 @@ import type { Projectile, SimEvent } from '../sim/types';
 import { WEAPONS, weaponByIndex, type WeaponId } from '../sim/weapons';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
 import { Decals, FlashLights, Particles, Ribbons } from './fx';
-import { buildOrb, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
+import { SHARED, buildCan, buildOrb, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
 import { PAL, SAUCE } from './palette';
 import { QUALITY, type QualityPreset } from './quality';
 import { Grass, buildFence, buildFlowers, buildHoles, buildSky, buildTerrain, buildTrees } from './world';
@@ -91,7 +91,6 @@ function disposeTree(obj: THREE.Object3D) {
   });
 }
 
-const SHARED = new Set<unknown>();
 const projCache = new Map<string, () => THREE.Object3D>();
 /** Projectile visuals share geometry & materials (cheap to spawn dozens per second). */
 function projMesh(kind: string): THREE.Object3D | null {
@@ -158,6 +157,8 @@ export class Game {
   readonly hud: Hud;
   readonly input: InputManager;
   private pitre = new PitreVoiceThrottle();
+  /** hits in a row without a kill, per shooter ("How many bullets?!") */
+  private pitreHits = new PitreHitTracker();
   private raf = 0;
   private last = 0;
   private time = 0;
@@ -760,7 +761,15 @@ export class Game {
           const ov = this.orbs.get(e.id);
           if (ov) {
             const p = ov.group.position.clone();
-            if (e.p >= 0) {
+            if (e.p >= 0 && this.cans()) {
+              // Pitre: the can bursts open — black and silver shards, a fizzing fountain of energy drink
+              this.fxAdd.emit({ pos: p, count: 18, speed: [1, 4], life: [0.3, 0.6], size: [0.45, 0.08], color: 0xffffff, color1: ov.color });
+              this.fxNorm.emit({ pos: p, count: 14, speed: [2, 7], life: [0.8, 1.4], size: [0.2, 0.12], color: 0x15161a, color1: 0x2a2c31, gravity: 9.8, alpha: [1, 0.7] });
+              this.fxNorm.emit({ pos: p, count: 8, speed: [2, 6], life: [0.8, 1.4], size: [0.16, 0.1], color: 0xd9dde2, gravity: 9.8, alpha: [1, 0.7] });
+              this.fxNorm.emit({ pos: p, count: 36, speed: [3, 9], dir: new THREE.Vector3(0, 1, 0), spread: 0.55, life: [0.6, 1.2], size: [0.17, 0.06], color: ov.color, color1: 0xffffff, gravity: 9.8, alpha: [0.95, 0.2] });
+              audio.play('canOpen', { pos: p, reverb: 0.2 });
+              audio.play('fizz', { pos: p, gain: 0.8, delay: 0.06 });
+            } else if (e.p >= 0) {
               this.fxAdd.emit({ pos: p, count: 40, speed: [2, 9], life: [0.4, 1], size: [0.4, 0.05], color: 0xffffff, color1: ov.color });
               this.fxNorm.emit({ pos: p, count: 20, speed: [1, 5], life: [0.8, 1.4], size: [0.25, 0.1], color: 0xe0282e, gravity: 6, alpha: [1, 0.2] });
               audio.play('orbPop', { pos: p, reverb: 0.2 });
@@ -839,6 +848,9 @@ export class Game {
           else this.hud.message('Gerry Sauce incoming!', 1600, 'warn');
           break;
         }
+        case 'near':
+          // a shot whizzed past someone: only a Pitre voice line (below)
+          break;
         case 'sauced':
           this.onSauced(e.v);
           break;
@@ -852,7 +864,7 @@ export class Game {
     }
     // Pitre Mode voice lines
     if (settings?.pitre) {
-      for (const cue of pitreCues(events, settings)) {
+      for (const cue of pitreCues(events, settings, this.pitreHits)) {
         // own predicted shots already triggered their brap
         if (cue.line === 'brap' && cue.speaker === mySlot) {
           const fe = events.find((x) => x.k === 'fire' && x.p === mySlot);
@@ -914,6 +926,12 @@ export class Game {
   private lastSprings = 0;
   /** Spring Jumps in progress (pop-out spring, sounds, landing) */
   private springViews = new Map<number, { at: number; launched: boolean; mesh: THREE.Group | null }>();
+
+  /** Pitre Mode: power-ups come in energy drink cans instead of Poké Balls. */
+  private cans(): boolean {
+    const st = this.session.start?.settings;
+    return !!st?.pitre && st.pitreCans;
+  }
 
   private brapMode(): boolean {
     const st = this.session.start?.settings;
@@ -1307,7 +1325,7 @@ export class Game {
       if (!v) {
         const def = POWERUPS[o.type as PowerUpId];
         const color = def?.color ?? 0xffffff;
-        const group = buildOrb(color);
+        const group = this.cans() ? buildCan(color) : buildOrb(color);
         const label = textSprite(`${def?.icon ?? '?'} ${def?.name ?? ''}`, '#ffffff', 36);
         group.add(label);
         label.position.y = 1.25;

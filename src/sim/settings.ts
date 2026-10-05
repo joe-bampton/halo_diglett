@@ -38,6 +38,7 @@ export interface Settings {
   pitreCatHat: boolean;
   pitreVoices: boolean;
   pitreBrap: boolean;
+  pitreCans: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -73,6 +74,7 @@ export const DEFAULT_SETTINGS: Settings = {
   pitreCatHat: true,
   pitreVoices: true,
   pitreBrap: true,
+  pitreCans: true,
 };
 
 export type FieldGroup = 'Match' | 'Map' | 'Weapons' | 'Damage' | 'Ammo' | 'Respawn' | 'Power-ups' | 'Pitre Mode' | 'Skulls' | 'Advanced';
@@ -143,8 +145,9 @@ export const SETTINGS_SCHEMA: Field[] = [
   { key: 'powerupDurationMult', label: 'Power-up duration', group: 'Power-ups', kind: 'number', min: 0.25, max: 4, step: 0.25, unit: '×', visibleIf: (s) => s.orbRate !== 'off' },
   { key: 'pitre', label: 'Pitre Mode', group: 'Pitre Mode', kind: 'bool', help: 'The leader becomes the Cat in the Hat and everyone gets… voice lines.' },
   { key: 'pitreCatHat', label: 'Leader wears the Cat in the Hat costume', group: 'Pitre Mode', kind: 'bool', visibleIf: (s) => s.pitre },
-  { key: 'pitreVoices', label: 'Voice lines (mama / bye byeee / prank ’em John…)', group: 'Pitre Mode', kind: 'bool', visibleIf: (s) => s.pitre },
+  { key: 'pitreVoices', label: 'Voice lines (mama / bye byeee / prank ’em John / bitch please…)', group: 'Pitre Mode', kind: 'bool', visibleIf: (s) => s.pitre },
   { key: 'pitreBrap', label: 'Gunshots go “brap brap brappp”', group: 'Pitre Mode', kind: 'bool', visibleIf: (s) => s.pitre },
+  { key: 'pitreCans', label: 'Power-ups come in energy drink cans', group: 'Pitre Mode', kind: 'bool', visibleIf: (s) => s.pitre },
   { key: 'skulls', label: 'Skulls', group: 'Skulls', kind: 'multi', options: SKULLS.map((s) => ({ value: s.value, label: s.label })) },
   { key: 'aimAssist', label: 'Aim assist (controller & touch)', group: 'Advanced', kind: 'enum', options: [{ value: 'off', label: 'Off' }, { value: 'low', label: 'Low' }, { value: 'normal', label: 'Normal' }] },
   { key: 'maxRewindMs', label: 'Lag compensation', group: 'Advanced', kind: 'number', min: 0, max: 250, step: 25, unit: 'ms', help: 'How far back the host rewinds to honour a laggy player’s shot.' },
@@ -156,7 +159,7 @@ export const PRESETS: Record<string, { label: string; settings: Partial<Settings
   needlers: { label: 'Needler Party', settings: { weaponMode: 'fixed', weapon: 'needler', ammoMode: 'noReload', orbRate: 'normal' } },
   gungame: { label: 'Gun Game', settings: { weaponMode: 'gunGame', orbRate: 'low' } },
   chaos: { label: 'Chaos Orbs', settings: { weaponMode: 'randomLife', orbRate: 'chaos', powerupDurationMult: 1.5, skulls: ['gruntbday'] } },
-  pitre: { label: 'Pitre Party', settings: { pitre: true, pitreCatHat: true, pitreVoices: true, pitreBrap: true, orbRate: 'normal' } },
+  pitre: { label: 'Pitre Party', settings: { pitre: true, pitreCatHat: true, pitreVoices: true, pitreBrap: true, pitreCans: true, orbRate: 'normal' } },
   hundred: { label: 'First to 100', settings: { scoreLimit: 100, timeLimitMin: 0, ammoMode: 'noReload', respawnSec: 1 } },
 };
 

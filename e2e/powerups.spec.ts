@@ -4,7 +4,7 @@ type HD = {
   state(): { phase: string; slot: number; me: { al: boolean; pu: [string, number][]; sa: number; su: number } | null; players: { slot: number }[] };
   grant(id: string, slot?: number): void;
   session: { slot: number; hostTick: number; players: ({ springAt: number } | null)[] };
-  game: { camera: { position: { y: number } }; input: { s: { springs: number } } } | null;
+  game: { camera: { position: { y: number } }; input: { s: { springs: number } }; orbs: Map<number, { group: { userData: { kind?: string } } }> } | null;
 };
 const W = (page: Page) => page.evaluate(() => (window as unknown as { __hd: HD }).__hd.state());
 
@@ -58,5 +58,18 @@ test('Gerry Sauce: a bot squirts, my screen gets covered in custard, then clears
   await expect(page.locator('.hud .sauce.on .blob')).toHaveCount(13);
   // five seconds later it's all cleaned up
   await expect(page.locator('.hud .sauce.on')).toHaveCount(0, { timeout: 12_000 });
+  expect(errors).toEqual([]);
+});
+
+test('Pitre Mode: power-ups come in energy drink cans', async ({ page }) => {
+  const errors = watchErrors(page);
+  const kinds = (pitre: string) => async () => {
+    await page.goto(`/?test=1&autostart=offline&bots=1&botdiff=jerry&quality=low&respawn=auto&orbs=chaos&pitre=${pitre}`);
+    await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd?.state().phase === 'live', null, { timeout: 60_000 });
+    await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.game?.orbs.size ?? 0) > 0, null, { timeout: 30_000 });
+    return page.evaluate(() => [...(window as unknown as { __hd: HD }).__hd.game!.orbs.values()].map((v) => v.group.userData.kind));
+  };
+  expect(new Set(await kinds('1')())).toEqual(new Set(['can']));
+  expect(new Set(await kinds('0')())).toEqual(new Set(['ball']));
   expect(errors).toEqual([]);
 });

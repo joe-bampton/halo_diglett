@@ -378,6 +378,41 @@ const splat: Gen = (sr) => {
   );
 };
 
+/** Pitre Mode: cracking open a can — the tab clicks, the seal cracks, the pressure goes "pssht". */
+const canOpen: Gen = (sr) => {
+  const h1 = hp(2200, sr), l1 = lp(9000, sr);
+  let ph = 0;
+  return normalize(
+    buf(sr, 0.6, (t) => {
+      ph += (TAU * 3100) / sr;
+      const click = (Math.sin(ph) * 0.6 + noise() * 0.5) * env(t, 0.0005, 0.005);
+      const crack = t > 0.03 ? noise() * env(t - 0.03, 0.0006, 0.008) : 0;
+      const hiss = t > 0.035 ? h1(l1(noise())) * env(t - 0.035, 0.008, 0.15) * 0.9 : 0;
+      return click + crack + hiss;
+    }),
+    0.7,
+  );
+};
+
+/** Pitre Mode: the can fizzes over — a hiss full of tiny bubble pops. */
+const fizz: Gen = (sr) => {
+  const h1 = hp(3000, sr), l1 = lp(8000, sr);
+  let ph = 0, f = 3000, a = 0;
+  return normalize(
+    buf(sr, 1.3, (t) => {
+      const e = env(t, 0.04, 0.45);
+      if (rnd() < 0.0035) {
+        a = 0.4 + rnd() * 0.6;
+        f = 1800 + rnd() * 3800;
+      }
+      ph += (TAU * f) / sr;
+      a *= 0.996;
+      return (h1(l1(noise())) * 0.45 + Math.sin(ph) * a * 0.5) * e;
+    }),
+    0.5,
+  );
+};
+
 export const SFX = {
   sniper,
   rifle,
@@ -413,6 +448,8 @@ export const SFX = {
   pump,
   squirt,
   splat,
+  canOpen,
+  fizz,
 } satisfies Record<string, Gen>;
 
 export type SfxId = keyof typeof SFX;

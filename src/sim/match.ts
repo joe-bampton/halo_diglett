@@ -140,6 +140,7 @@ function newPlayer(m: MatchState, r: RosterEntry, hole: number): PlayerState {
     springAt: -1,
     saucedAt: -1,
     saucedUntil: 0,
+    nearAt: -999,
     pressAt: -1,
     powerups: [],
     underdogUntil: 0,
@@ -711,11 +712,13 @@ function rewindTickFor(m: MatchState, p: PlayerState): number {
 
 function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx: StepContext) {
   const t = m.tick;
-  const { hits, world } = traceRay(m, ctx.arena, p, o, d, w.range, rewindTickFor(m, p));
+  const rewind = rewindTickFor(m, p);
+  const { hits, world } = traceRay(m, ctx.arena, p, o, d, w.range, rewind);
   let pierceLeft = w.pierce ?? 1;
   let end = world;
   let hitKind: HitKind = world < w.range ? 'world' : 'none';
   let anyHit = false;
+  const struck = new Set<number>();
   for (const h of hits) {
     if (h.kind === 'orb') {
       claimOrb(m, ctx, h.orb!, p);
@@ -725,6 +728,7 @@ function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx:
       continue;
     }
     const q = m.players[h.slot!]!;
+    struck.add(q.slot);
     if (!w.strike) {
       if (!anyHit) p.hits++;
       anyHit = true;
@@ -735,6 +739,7 @@ function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx:
     if (--pierceLeft <= 0) break;
   }
   if (w.pierce && pierceLeft > 0) end = world;
+  if (wantNearMisses(m, w)) nearMisses(m, ctx, p, w, o, d, end, struck, rewind);
   const endPt = { x: o.x + d.x * end, y: o.y + d.y * end, z: o.z + d.z * end };
   if (w.strike) {
     // orbital designator: strike the aimed point
@@ -745,6 +750,44 @@ function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx:
     p.weaponUntil = t + 1;
   }
   ctx.events.push({ k: 'fire', t, p: p.slot, w: w.id, o: V(o), e: V(endPt), hit: hitKind });
+}
+
+/** Pitre Mode "Bitch please": how close (m) a shot must pass by someone it doesn't hit. */
+export const NEAR_R = 0.3;
+/** at most one near miss per victim per half second */
+const NEAR_GAP = TICK_RATE / 2;
+/** ducking under a shot this soon before it arrives still counts as a near miss */
+const DUCK_GRACE = Math.round(0.6 * TICK_RATE);
+/** sprays, beams and strikes don't whizz past anyone */
+const NO_NEAR_MISS = new Set<WeaponId>(['flamethrower', 'needler', 'hyperbeam', 'orbital', 'soaker']);
+
+function wantNearMisses(m: MatchState, w: WeaponDef): boolean {
+  return m.settings.pitre && m.settings.pitreVoices && !NO_NEAR_MISS.has(w.id);
+}
+
+/** Was the player up (able to fire) at some point in the DUCK_GRACE ticks before `tick`? */
+function justDucked(m: MatchState, slot: number, tick: number): boolean {
+  for (let k = 4; k <= DUCK_GRACE; k += 4) {
+    const at = tick - k;
+    if (m.tick - at >= HISTORY - 1) break; // older than the exposure history
+    if (exposureAt(m, slot, at) >= FIRE_EXPOSURE) return true;
+  }
+  return false;
+}
+
+/** A shot from `o` along `d` (stopping at distance `end`) that passed within NEAR_R of someone it didn't hit — or of where their head was, if they had just ducked. */
+function nearMisses(m: MatchState, ctx: StepContext, p: PlayerState, w: WeaponDef, o: V3, d: V3, end: number, struck: Set<number>, rewind: number) {
+  const t = m.tick;
+  for (const q of m.players) {
+    if (!q || q === p || !q.alive || struck.has(q.slot) || t - q.nearAt < NEAR_GAP) continue;
+    const e = exposureAt(m, q.slot, rewind);
+    let near = rayHitbox(o, d, playerHitbox(m, ctx.arena, q, e, p, rewind), NEAR_R);
+    if (!near && e < 1 && justDucked(m, q.slot, rewind)) near = rayHitbox(o, d, playerHitbox(m, ctx.arena, q, 1, p, rewind), NEAR_R);
+    if (near && near.t < end) {
+      q.nearAt = t;
+      ctx.events.push({ k: 'near', t, a: p.slot, v: q.slot, w: w.id });
+    }
+  }
 }
 
 function beamTick(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext, sec: number) {
@@ -845,6 +888,17 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
       hitOrb = -1;
     }
     const at = { x: prev.x + d.x * bestT, y: prev.y + d.y * bestT, z: prev.z + d.z * bestT };
+    if (owner && wantNearMisses(m, w)) {
+      for (const q of m.players) {
+        if (!q || q === owner || !q.alive || q.slot === hitPlayer?.slot || ((pr.near ?? 0) & (1 << q.slot)) !== 0 || t - q.nearAt < NEAR_GAP) continue;
+        const h = rayHitbox(prev, d, playerHitbox(m, arena, q, q.exposure, owner), def.radius + NEAR_R);
+        if (h && h.t <= bestT) {
+          pr.near = (pr.near ?? 0) | (1 << q.slot);
+          q.nearAt = t;
+          ctx.events.push({ k: 'near', t, a: owner.slot, v: q.slot, w: w.id });
+        }
+      }
+    }
     // grenade dropping into a hole mouth
     const hole = arena.nearestHole(at.x, at.z);
     const inMouth = hole && Math.hypot(hole.x - at.x, hole.z - at.z) < MOUTH_R && at.y < hole.rim;

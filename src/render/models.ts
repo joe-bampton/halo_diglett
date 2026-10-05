@@ -305,6 +305,123 @@ export function buildCatHat(): THREE.Group {
 // Power-up orb (capture-ball style capsule)
 // ------------------------------------------------------------------------------------------------
 
+/** Geometry / materials used by many objects at once: never disposed with any one of them (see disposeTree). */
+export const SHARED = new Set<unknown>();
+const share = <T>(x: T): T => (SHARED.add(x), x);
+
+/** Pitre Mode energy drink can: radius and height (m). It fits inside the power-up's hit sphere (ORB_R). */
+export const CAN_R = 0.3;
+export const CAN_H = 1.44;
+let canParts: { metal: THREE.BufferGeometry; metalMat: THREE.Material; body: THREE.BufferGeometry; aura: THREE.BufferGeometry } | null = null;
+const canLabels = new Map<number, THREE.Material>();
+
+/** Tiny seeded random, so a can's scratches look the same every time. */
+function seeded(seed: number) {
+  let x = seed >>> 0 || 1;
+  return () => ((x = (Math.imul(x, 1664525) + 1013904223) >>> 0) / 4294967296);
+}
+
+/** Three jagged claw scratches (an original design — no real logos), centred at x = cx. */
+function drawClaws(ctx: CanvasRenderingContext2D, cx: number, top: number, bottom: number, rnd: () => number) {
+  for (let i = -1; i <= 1; i++) {
+    const x0 = cx + i * 40 + 26, x1 = cx + i * 40 - 26;
+    const y0 = top + (i === 0 ? 0 : 14), y1 = bottom - (i === 0 ? 0 : 18);
+    const n = 22;
+    const left: [number, number][] = [], right: [number, number][] = [];
+    for (let k = 0; k <= n; k++) {
+      const s = k / n;
+      const x = x0 + (x1 - x0) * s + Math.sin(s * Math.PI * 2.2 + i) * 4;
+      const y = y0 + (y1 - y0) * s;
+      const w = 12 * Math.pow(Math.sin(Math.PI * s), 0.6) + 0.8;
+      left.push([x - w - rnd() * 5, y]);
+      right.push([x + w + rnd() * 5, y]);
+    }
+    ctx.beginPath();
+    ctx.moveTo(left[0]![0], left[0]![1]);
+    for (const [x, y] of left) ctx.lineTo(x, y);
+    for (const [x, y] of right.reverse()) ctx.lineTo(x, y);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+/** The can's wrap-around label (and a glow map so the scratches light up), in the power-up's colour. */
+function canLabel(color: number): THREE.Material {
+  let mat = canLabels.get(color);
+  if (mat) return mat;
+  const W = 512, H = 328;
+  const css = `#${color.toString(16).padStart(6, '0')}`;
+  const make = (glow: boolean) => {
+    const c = document.createElement('canvas');
+    c.width = W;
+    c.height = H;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = glow ? '#000' : '#0b0c0e';
+    ctx.fillRect(0, 0, W, H);
+    const rnd = seeded(color);
+    if (!glow) {
+      // brushed metal under the black paint
+      for (let i = 0; i < 260; i++) {
+        ctx.fillStyle = `rgba(255,255,255,${0.015 + rnd() * 0.035})`;
+        ctx.fillRect(rnd() * W, 0, 1, H);
+      }
+    }
+    ctx.fillStyle = css;
+    ctx.shadowColor = css;
+    ctx.shadowBlur = glow ? 10 : 18;
+    // one set of scratches on each side
+    for (const cx of [W * 0.25, W * 0.75]) drawClaws(ctx, cx, 26, 252, seeded(color + cx));
+    ctx.shadowBlur = 0;
+    if (!glow) {
+      ctx.font = '800 34px "Segoe UI", system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#f2f2f2';
+      for (const cx of [W * 0.25, W * 0.75]) ctx.fillText('E N E R G Y', cx, 294);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    return tex;
+  };
+  mat = share(new THREE.MeshPhongMaterial({ map: make(false), emissiveMap: make(true), emissive: 0xffffff, emissiveIntensity: 0.75, specular: 0x8a8f96, shininess: 70 }));
+  canLabels.set(color, mat);
+  return mat;
+}
+
+/** Pitre Mode power-up: a tall energy drink can — black, silver ends, claw scratches in the power-up's colour. */
+export function buildCan(color: number): THREE.Group {
+  if (!canParts) {
+    const r = CAN_R, h = CAN_H / 2;
+    const v = (pts: number[][]) => pts.map(([x, y]) => new THREE.Vector2(x!, y!));
+    // aluminium ends (lathe profiles, bottom to top): domed base on a standing ring; shoulder, rolled rim, recessed lid
+    const base = new THREE.LatheGeometry(v([[0, -h + 0.05], [0.2, -h + 0.06], [0.24, -h], [0.27, -h + 0.004], [0.293, -h + 0.045], [r, -h + 0.1]]), 32);
+    const lid = new THREE.LatheGeometry(v([[r, h - 0.13], [0.287, h - 0.075], [0.256, h - 0.035], [0.263, h - 0.01], [0.255, h], [0.236, h - 0.012], [0.226, h - 0.03], [0, h - 0.03]]), 32);
+    // pull tab and rivet on the lid
+    const tab = new THREE.TorusGeometry(0.06, 0.014, 6, 18).rotateX(Math.PI / 2).scale(1, 1, 1.35).translate(0, h - 0.02, 0.06);
+    const rivet = new THREE.CylinderGeometry(0.024, 0.024, 0.02, 10).translate(0, h - 0.024, 0);
+    const parts = [base, lid, tab, rivet].map((g) => (g.index ? g.toNonIndexed() : g));
+    for (const g of parts) g.deleteAttribute('uv');
+    canParts = {
+      metal: share(mergeGeometries(parts)!),
+      metalMat: share(new THREE.MeshPhongMaterial({ color: 0xc9cdd2, specular: 0xffffff, shininess: 110 })),
+      // the painted wall between the ends: label u runs once around, v bottom to top
+      body: share(new THREE.CylinderGeometry(r, r, CAN_H - 0.23, 32, 1, true).translate(0, -0.015, 0)),
+      aura: share(new THREE.SphereGeometry(1, 18, 12)),
+    };
+  }
+  const g = new THREE.Group();
+  const metal = new THREE.Mesh(canParts.metal, canParts.metalMat);
+  const body = new THREE.Mesh(canParts.body, canLabel(color));
+  const aura = new THREE.Mesh(canParts.aura, shellMaterial(color));
+  aura.scale.set(0.5, 0.98, 0.5);
+  (aura.material as THREE.ShaderMaterial).uniforms.strength!.value = 0.9;
+  g.add(metal, body, aura);
+  g.userData.aura = aura;
+  g.userData.kind = 'can';
+  return g;
+}
+
 export function buildOrb(color: number): THREE.Group {
   const g = new THREE.Group();
   const R = 0.62;
@@ -319,6 +436,7 @@ export function buildOrb(color: number): THREE.Group {
   (aura.material as THREE.ShaderMaterial).uniforms.strength!.value = 0.9;
   g.add(top, bottom, band, btnOuter, btn, aura);
   g.userData.aura = aura;
+  g.userData.kind = 'ball';
   return g;
 }
 
