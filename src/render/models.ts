@@ -1,0 +1,335 @@
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import type { WeaponId } from '../sim/weapons';
+import { PAL } from './palette';
+
+type Part = [THREE.BufferGeometry, number | THREE.Material];
+
+/** Bake a solid colour into a geometry's vertex colours (non-indexed). */
+function tint(geo: THREE.BufferGeometry, hex: number): THREE.BufferGeometry {
+  const g = geo.index ? geo.toNonIndexed() : geo;
+  const n = g.getAttribute('position').count;
+  const c = new THREE.Color(hex);
+  const arr = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) arr.set([c.r, c.g, c.b], i * 3);
+  g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+  if (g.getAttribute('uv')) g.deleteAttribute('uv');
+  if (!g.getAttribute('normal')) g.computeVertexNormals();
+  return g;
+}
+
+/** Merge coloured parts into a single vertex-coloured mesh; material parts stay separate. */
+function assemble(parts: Part[], mat?: THREE.Material): THREE.Group {
+  const g = new THREE.Group();
+  const solid = parts.filter((p) => typeof p[1] === 'number').map(([geo, c]) => tint(geo, c as number));
+  if (solid.length) {
+    const mesh = new THREE.Mesh(mergeGeometries(solid)!, mat ?? new THREE.MeshLambertMaterial({ vertexColors: true }));
+    mesh.castShadow = true;
+    g.add(mesh);
+  }
+  for (const [geo, m] of parts) {
+    if (typeof m === 'number') continue;
+    g.add(new THREE.Mesh(geo, m));
+  }
+  return g;
+}
+
+const glow = (hex: number) => new THREE.MeshBasicMaterial({ color: hex, toneMapped: false });
+
+/**
+ * Weapon models share one convention: barrel points toward -Z, origin at the grip,
+ * muzzle position stored in userData.muzzle.
+ */
+export function buildWeaponModel(id: WeaponId): THREE.Group {
+  const dark = 0x3a4148, mid = 0x5c6670, light = 0x8a949d;
+  let g: THREE.Group;
+  let muzzle = new THREE.Vector3(0, 0.05, -0.9);
+  switch (id) {
+    case 'sniper':
+      g = assemble([
+        [new THREE.BoxGeometry(0.09, 0.12, 0.7).translate(0, 0.02, -0.15), dark],
+        [new THREE.CylinderGeometry(0.025, 0.03, 0.75, 8).rotateX(Math.PI / 2).translate(0, 0.05, -0.85), mid],
+        [new THREE.CylinderGeometry(0.045, 0.05, 0.34, 10).rotateX(Math.PI / 2).translate(0, 0.14, -0.2), dark],
+        [new THREE.CylinderGeometry(0.038, 0.038, 0.02, 10).rotateX(Math.PI / 2).translate(0, 0.14, -0.38), glow(0x6ad8ff)],
+        [new THREE.BoxGeometry(0.07, 0.14, 0.26).translate(0, -0.01, 0.28), mid],
+        [new THREE.BoxGeometry(0.05, 0.14, 0.07).translate(0, -0.1, 0.05), dark],
+        [new THREE.BoxGeometry(0.06, 0.11, 0.08).translate(0, -0.08, -0.12), light],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.05, -1.23);
+      break;
+    case 'br':
+      g = assemble([
+        [new THREE.BoxGeometry(0.1, 0.14, 0.62).translate(0, 0.02, -0.12), 0x4b5a3c],
+        [new THREE.CylinderGeometry(0.025, 0.025, 0.25, 8).rotateX(Math.PI / 2).translate(0, 0.04, -0.52), dark],
+        [new THREE.BoxGeometry(0.06, 0.07, 0.18).translate(0, 0.12, -0.12), dark],
+        [new THREE.BoxGeometry(0.05, 0.14, 0.08).translate(0, -0.1, 0.04), dark],
+        [new THREE.BoxGeometry(0.05, 0.12, 0.1).translate(0, -0.08, -0.12), mid],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.04, -0.66);
+      break;
+    case 'crossbow':
+      g = assemble([
+        [new THREE.BoxGeometry(0.08, 0.1, 0.7).translate(0, 0.02, -0.15), 0x5a3f2a],
+        [new THREE.BoxGeometry(0.7, 0.03, 0.05).translate(0, 0.05, -0.45), dark],
+        [new THREE.BoxGeometry(0.03, 0.03, 0.55).translate(0.0, 0.07, -0.3), glow(0x9fe8ff)],
+        [new THREE.BoxGeometry(0.05, 0.14, 0.07).translate(0, -0.09, 0.03), dark],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.07, -0.6);
+      break;
+    case 'rpg':
+      g = assemble([
+        [new THREE.CylinderGeometry(0.1, 0.1, 1.1, 12).rotateX(Math.PI / 2).translate(0, 0.08, -0.3), 0x5f6b3a],
+        [new THREE.CylinderGeometry(0.12, 0.1, 0.12, 12).rotateX(Math.PI / 2).translate(0, 0.08, -0.86), dark],
+        [new THREE.BoxGeometry(0.08, 0.1, 0.18).translate(0, 0.2, -0.3), dark],
+        [new THREE.BoxGeometry(0.05, 0.14, 0.07).translate(0, -0.06, 0.0), dark],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.08, -0.95);
+      break;
+    case 'grenade':
+      g = assemble([
+        [new THREE.CylinderGeometry(0.07, 0.07, 0.5, 10).rotateX(Math.PI / 2).translate(0, 0.05, -0.3), mid],
+        [new THREE.CylinderGeometry(0.13, 0.13, 0.16, 12).rotateX(Math.PI / 2).translate(0, 0.0, -0.08), 0x3d5a2e],
+        [new THREE.BoxGeometry(0.05, 0.14, 0.07).translate(0, -0.1, 0.05), dark],
+        [new THREE.TorusGeometry(0.07, 0.012, 6, 12).translate(0, 0.05, -0.55), glow(0x7cff6b)],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.05, -0.58);
+      break;
+    case 'railgun':
+      g = assemble([
+        [new THREE.BoxGeometry(0.12, 0.12, 0.8).translate(0, 0.03, -0.25), 0x2e3440],
+        [new THREE.BoxGeometry(0.03, 0.14, 0.7).translate(0.07, 0.03, -0.3), glow(0x6ad8ff)],
+        [new THREE.BoxGeometry(0.03, 0.14, 0.7).translate(-0.07, 0.03, -0.3), glow(0x6ad8ff)],
+        [new THREE.BoxGeometry(0.05, 0.14, 0.07).translate(0, -0.1, 0.05), dark],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.03, -0.68);
+      break;
+    case 'hyperbeam':
+      g = assemble([
+        [new THREE.CylinderGeometry(0.12, 0.16, 0.7, 10).rotateX(Math.PI / 2).translate(0, 0.05, -0.25), 0x5b2a6e],
+        [new THREE.SphereGeometry(0.11, 12, 8).translate(0, 0.05, -0.64), glow(0xff4df0)],
+        [new THREE.TorusGeometry(0.15, 0.025, 6, 16).translate(0, 0.05, -0.45), glow(0xffa0ff)],
+        [new THREE.BoxGeometry(0.05, 0.14, 0.07).translate(0, -0.1, 0.05), dark],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.05, -0.72);
+      break;
+    case 'needler': {
+      const parts: Part[] = [
+        [new THREE.BoxGeometry(0.12, 0.14, 0.45).translate(0, 0.02, -0.15), 0x5b2b6b],
+        [new THREE.BoxGeometry(0.05, 0.14, 0.07).translate(0, -0.1, 0.05), dark],
+      ];
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 0.9 - 0.45 * Math.PI;
+        parts.push([new THREE.ConeGeometry(0.018, 0.2, 4).translate(Math.sin(a) * 0.05, 0.14 + Math.cos(a) * 0.02, -0.12 - i * 0.04).rotateX(-0.4), glow(0xff5fd2)]);
+      }
+      g = assemble(parts);
+      muzzle = new THREE.Vector3(0, 0.05, -0.4);
+      break;
+    }
+    case 'flamethrower':
+      g = assemble([
+        [new THREE.CylinderGeometry(0.05, 0.05, 0.65, 8).rotateX(Math.PI / 2).translate(0, 0.05, -0.35), mid],
+        [new THREE.CylinderGeometry(0.1, 0.1, 0.3, 10).translate(0, -0.05, -0.05), 0xc0392b],
+        [new THREE.ConeGeometry(0.07, 0.12, 8).rotateX(-Math.PI / 2).translate(0, 0.05, -0.72), dark],
+        [new THREE.SphereGeometry(0.03, 6, 4).translate(0, 0.05, -0.8), glow(0x6ab0ff)],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.05, -0.8);
+      break;
+    case 'minigun': {
+      const parts: Part[] = [
+        [new THREE.BoxGeometry(0.22, 0.2, 0.3).translate(0, 0, 0.05), 0x5a5f55],
+        [new THREE.BoxGeometry(0.05, 0.16, 0.08).translate(0, -0.15, 0.1), dark],
+      ];
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        parts.push([new THREE.CylinderGeometry(0.02, 0.02, 0.8, 6).rotateX(Math.PI / 2).translate(Math.cos(a) * 0.06, Math.sin(a) * 0.06, -0.45), dark]);
+      }
+      g = assemble(parts);
+      muzzle = new THREE.Vector3(0, 0, -0.88);
+      break;
+    }
+    case 'orbital':
+      g = assemble([
+        [new THREE.BoxGeometry(0.1, 0.12, 0.35).translate(0, 0.02, -0.1), 0x3a3f45],
+        [new THREE.CylinderGeometry(0.03, 0.03, 0.2, 8).rotateX(Math.PI / 2).translate(0, 0.05, -0.35), dark],
+        [new THREE.SphereGeometry(0.03, 8, 6).translate(0, 0.05, -0.46), glow(0xff2020)],
+        [new THREE.BoxGeometry(0.05, 0.14, 0.07).translate(0, -0.1, 0.05), dark],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.05, -0.48);
+      break;
+  }
+  g.userData.muzzle = muzzle;
+  return g;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Spartan
+// ------------------------------------------------------------------------------------------------
+
+const shellMaterial = (hex: number) =>
+  new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: { color: { value: new THREE.Color(hex) }, strength: { value: 0 }, time: { value: 0 } },
+    vertexShader: /* glsl */ `
+      varying vec3 vN; varying vec3 vV; varying vec3 vP;
+      void main(){
+        vec4 mv = modelViewMatrix * vec4(position,1.0);
+        vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); vP = position;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform vec3 color; uniform float strength; uniform float time;
+      varying vec3 vN; varying vec3 vV; varying vec3 vP;
+      void main(){
+        float f = pow(1.0 - abs(dot(vN, vV)), 2.2);
+        float bands = 0.75 + 0.25 * sin(vP.y * 40.0 - time * 6.0);
+        gl_FragColor = vec4(color * (f * 1.6 + 0.08) * bands * strength, 1.0);
+      }`,
+  });
+
+export interface SpartanParts {
+  root: THREE.Group;
+  body: THREE.Group;
+  aim: THREE.Group;
+  head: THREE.Group;
+  weaponHolder: THREE.Group;
+  mat: THREE.MeshLambertMaterial;
+  visor: THREE.MeshPhongMaterial;
+  shell: THREE.Mesh;
+  shellMat: THREE.ShaderMaterial;
+  catHat: THREE.Group;
+  materials: THREE.Material[];
+}
+
+export function buildSpartan(color: number): SpartanParts {
+  const armorC = color;
+  const accentC = new THREE.Color(color).multiplyScalar(0.62).getHex();
+  const suitC = PAL.undersuit;
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  const visor = new THREE.MeshPhongMaterial({ color: 0x9a6410, specular: 0xffe8a8, shininess: 120, emissive: 0x3a2200 });
+  const root = new THREE.Group();
+  const mk = (parts: Part[]) => {
+    const g = assemble(parts, mat);
+    return g;
+  };
+  const T = (geo: THREE.BufferGeometry, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => {
+    const m = new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)), new THREE.Vector3(1, 1, 1));
+    return geo.applyMatrix4(m);
+  };
+  const body = mk([
+    [T(new THREE.CylinderGeometry(0.26, 0.24, 1.3, 10), 0, -0.55, 0), suitC],
+    [T(new THREE.CapsuleGeometry(0.3, 0.32, 4, 10).scale(1.05, 1, 0.72), 0, 0.32, 0), armorC],
+    [T(new THREE.BoxGeometry(0.5, 0.32, 0.12), 0, 0.42, -0.2), accentC],
+    [T(new THREE.BoxGeometry(0.2, 0.06, 0.05), 0, 0.5, -0.27), 0x8fe3ff],
+    [T(new THREE.CylinderGeometry(0.28, 0.3, 0.14, 10), 0, 0.05, 0), suitC],
+    [T(new THREE.CylinderGeometry(0.1, 0.12, 0.16, 8), 0, 0.7, 0), suitC],
+  ]);
+  root.add(body);
+  const aimParts: Part[] = [];
+  for (const sx of [-1, 1]) {
+    aimParts.push([T(new THREE.SphereGeometry(0.17, 10, 8).scale(1.1, 0.85, 1.05), sx * 0.38, 0, 0, 0, 0, sx * 0.3), armorC]);
+    aimParts.push([T(new THREE.BoxGeometry(0.2, 0.08, 0.28), sx * 0.4, 0.1, 0), accentC]);
+  }
+  aimParts.push([T(new THREE.CapsuleGeometry(0.075, 0.34, 3, 6), -0.3, -0.15, -0.18, 1.1, 0, 0.35), suitC]);
+  aimParts.push([T(new THREE.CapsuleGeometry(0.075, 0.34, 3, 6), 0.32, -0.18, -0.08, 1.3, 0, -0.35), suitC]);
+  aimParts.push([T(new THREE.SphereGeometry(0.075, 8, 6), -0.12, -0.2, -0.42), armorC]);
+  aimParts.push([T(new THREE.SphereGeometry(0.075, 8, 6), 0.14, -0.22, -0.22), armorC]);
+  const aim = mk(aimParts);
+  aim.position.set(0, 0.58, 0);
+  body.add(aim);
+  const headParts: Part[] = [
+    [new THREE.SphereGeometry(0.22, 16, 12).scale(0.95, 1.05, 1.08), armorC],
+    [T(new THREE.BoxGeometry(0.1, 0.1, 0.28), 0, 0.17, 0.02), accentC],
+  ];
+  for (const sx of [-1, 1]) headParts.push([T(new THREE.CylinderGeometry(0.06, 0.06, 0.05, 8), sx * 0.2, -0.02, 0.02, 0, 0, Math.PI / 2), accentC]);
+  const head = mk(headParts);
+  head.position.set(0, 0.37, 0);
+  aim.add(head);
+  const vis = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 10, Math.PI * 0.62, Math.PI * 0.76, Math.PI * 0.32, Math.PI * 0.3).scale(1.02, 1.05, 1.12), visor);
+  vis.position.set(0, -0.01, -0.012);
+  head.add(vis);
+  const weaponHolder = new THREE.Group();
+  weaponHolder.position.set(0.05, -0.2, -0.3);
+  aim.add(weaponHolder);
+  const shellMat = shellMaterial(0x40ff70);
+  const shell = new THREE.Mesh(new THREE.CapsuleGeometry(0.46, 0.72, 4, 12), shellMat);
+  shell.position.set(0, 0.46, 0);
+  shell.visible = false;
+  body.add(shell);
+  const catHat = buildCatHat();
+  catHat.visible = false;
+  head.add(catHat);
+  return { root, body, aim, head, weaponHolder, mat, visor, shell, shellMat, catHat, materials: [mat, visor] };
+}
+
+/** Original Seuss-inspired costume: tall red/white striped hat, bow tie, cat ears & whiskers. */
+export function buildCatHat(): THREE.Group {
+  const RED = 0xd8202a, WHITE = 0xfafafa, BLACK = 0x151515, PINK = 0xff9ab8;
+  const parts: Part[] = [];
+  const hatM = new THREE.Matrix4().compose(new THREE.Vector3(0, 0.19, 0.02), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, 0.12)), new THREE.Vector3(1, 1, 1));
+  const H = (g: THREE.BufferGeometry) => g.applyMatrix4(hatM);
+  parts.push([H(new THREE.CylinderGeometry(0.28, 0.28, 0.035, 20)), RED]);
+  for (let i = 0; i < 6; i++) {
+    const h = 0.11;
+    const r0 = 0.16 + i * 0.006, r1 = 0.16 + (i + 1) * 0.006;
+    parts.push([H(new THREE.CylinderGeometry(r1, r0, h, 18).translate(0, 0.02 + h / 2 + i * h, 0)), i % 2 ? WHITE : RED]);
+  }
+  for (const sx of [-1, 1]) {
+    parts.push([new THREE.ConeGeometry(0.08, 0.16, 4).rotateZ((sx * Math.PI) / 2).translate(sx * 0.075, -0.28, -0.16), RED]);
+    parts.push([new THREE.ConeGeometry(0.075, 0.16, 4).rotateZ(-sx * 0.35).translate(sx * 0.15, 0.2, 0.02), BLACK]);
+    parts.push([new THREE.ConeGeometry(0.04, 0.1, 4).rotateZ(-sx * 0.35).translate(sx * 0.15, 0.19, -0.02), PINK]);
+    for (let w = 0; w < 3; w++) parts.push([new THREE.BoxGeometry(0.2, 0.008, 0.008).rotateZ(sx * (w - 1) * 0.18).translate(sx * 0.2, -0.07 + w * 0.03, -0.18), WHITE]);
+  }
+  parts.push([new THREE.SphereGeometry(0.035, 8, 6).translate(0, -0.28, -0.16), RED]);
+  parts.push([new THREE.SphereGeometry(0.025, 8, 6).translate(0, -0.05, -0.23), PINK]);
+  return assemble(parts);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Power-up orb (capture-ball style capsule)
+// ------------------------------------------------------------------------------------------------
+
+export function buildOrb(color: number): THREE.Group {
+  const g = new THREE.Group();
+  const R = 0.62;
+  const top = new THREE.Mesh(new THREE.SphereGeometry(R, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshPhongMaterial({ color: 0xe0282e, shininess: 80, specular: 0xffffff }));
+  const bottom = new THREE.Mesh(new THREE.SphereGeometry(R, 24, 12, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), new THREE.MeshPhongMaterial({ color: 0xf8f8f8, shininess: 80, specular: 0xffffff }));
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(R * 1.005, R * 1.005, 0.1, 24, 1, true), new THREE.MeshLambertMaterial({ color: 0x1a1a1a, side: THREE.DoubleSide }));
+  const btnOuter = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.08, 18).rotateX(Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0x1a1a1a }));
+  btnOuter.position.z = -R + 0.02;
+  const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.1, 18).rotateX(Math.PI / 2), new THREE.MeshBasicMaterial({ color }));
+  btn.position.z = -R;
+  const aura = new THREE.Mesh(new THREE.SphereGeometry(R * 1.35, 18, 12), shellMaterial(color));
+  (aura.material as THREE.ShaderMaterial).uniforms.strength!.value = 0.9;
+  g.add(top, bottom, band, btnOuter, btn, aura);
+  g.userData.aura = aura;
+  return g;
+}
+
+/** Canvas sprite with text (names, orb icons). */
+export function textSprite(text: string, color = '#ffffff', size = 48, bg = 'rgba(0,0,0,0)'): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d')!;
+  ctx.font = `700 ${size}px "Segoe UI", system-ui, sans-serif`;
+  const w = Math.ceil(ctx.measureText(text).width) + size;
+  canvas.width = w;
+  canvas.height = Math.ceil(size * 1.5);
+  ctx.font = `700 ${size}px "Segoe UI", system-ui, sans-serif`;
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = size / 8;
+  ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+  ctx.strokeText(text, w / 2, canvas.height / 2);
+  ctx.fillStyle = color;
+  ctx.fillText(text, w / 2, canvas.height / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true });
+  const s = new THREE.Sprite(mat);
+  s.scale.set((w / canvas.height) * 0.4, 0.4, 1);
+  s.renderOrder = 10;
+  return s;
+}

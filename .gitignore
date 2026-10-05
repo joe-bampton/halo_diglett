@@ -1,0 +1,11 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+.vercel/
+*.log
+.DS_Store
+tools/voices/.venv/
+tools/voices/models/
+tools/voices/out/
+__pycache__/

@@ -1,0 +1,267 @@
+{
+  "version": 1,
+  "slots": {
+    "pitre.prank": {
+      "files": [
+        "audio/pitre/prank_em_john_1.mp3",
+        "audio/pitre/prank_em_john_2.mp3",
+        "audio/pitre/prank_em_john_3.mp3"
+      ],
+      "gain": 1.0
+    },
+    "pitre.byebye": {
+      "files": [
+        "audio/pitre/bye_bye_1.mp3",
+        "audio/pitre/bye_bye_2.mp3",
+        "audio/pitre/bye_bye_3.mp3"
+      ],
+      "gain": 1.0
+    },
+    "pitre.pussy": {
+      "files": [
+        "audio/pitre/oh_look_a_pussy_1.mp3",
+        "audio/pitre/oh_look_a_pussy_2.mp3",
+        "audio/pitre/oh_look_a_pussy_3.mp3"
+      ],
+      "gain": 1.0
+    },
+    "pitre.mama": {
+      "files": [
+        "audio/pitre/mama_1.mp3",
+        "audio/pitre/mama_2.mp3",
+        "audio/pitre/mama_3.mp3"
+      ],
+      "gain": 0.85
+    },
+    "pitre.brap": {
+      "files": [
+        "audio/pitre/brap_1.mp3",
+        "audio/pitre/brap_2.mp3",
+        "audio/pitre/brap_3.mp3"
+      ],
+      "gain": 1.0
+    },
+    "pitre.pufferfish": {
+      "files": [
+        "audio/pitre/pufferfish.mp3"
+      ],
+      "gain": 0.9
+    },
+    "ann.slay": {
+      "files": [
+        "audio/announcer/slay_your_enemies.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.double": {
+      "files": [
+        "audio/announcer/double_kill.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.triple": {
+      "files": [
+        "audio/announcer/triple_kill.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.overkill": {
+      "files": [
+        "audio/announcer/overkill.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.killtacular": {
+      "files": [
+        "audio/announcer/killtacular.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.killtrocity": {
+      "files": [
+        "audio/announcer/killtrocity.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.spree": {
+      "files": [
+        "audio/announcer/killing_spree.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.frenzy": {
+      "files": [
+        "audio/announcer/killing_frenzy.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.riot": {
+      "files": [
+        "audio/announcer/running_riot.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.rampage": {
+      "files": [
+        "audio/announcer/rampage.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.untouchable": {
+      "files": [
+        "audio/announcer/untouchable.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.headshot": {
+      "files": [
+        "audio/announcer/headshot.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.killjoy": {
+      "files": [
+        "audio/announcer/killjoy.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.revenge": {
+      "files": [
+        "audio/announcer/revenge.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.perfection": {
+      "files": [
+        "audio/announcer/perfection.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.lead_taken": {
+      "files": [
+        "audio/announcer/lead_taken.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.lead_lost": {
+      "files": [
+        "audio/announcer/lead_lost.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.one_minute": {
+      "files": [
+        "audio/announcer/one_minute.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.ten_kills": {
+      "files": [
+        "audio/announcer/ten_kills.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.five_kills": {
+      "files": [
+        "audio/announcer/five_kills.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.game_over": {
+      "files": [
+        "audio/announcer/game_over.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.victory": {
+      "files": [
+        "audio/announcer/victory.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.defeat": {
+      "files": [
+        "audio/announcer/defeat.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.overshield": {
+      "files": [
+        "audio/announcer/overshield.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.camo": {
+      "files": [
+        "audio/announcer/active_camo.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.damage_boost": {
+      "files": [
+        "audio/announcer/damage_boost.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.invincible": {
+      "files": [
+        "audio/announcer/invincibility.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.flamethrower": {
+      "files": [
+        "audio/announcer/flamethrower.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.minigun": {
+      "files": [
+        "audio/announcer/minigun.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.homing": {
+      "files": [
+        "audio/announcer/homing_rounds.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.xray": {
+      "files": [
+        "audio/announcer/xray_vision.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.bighead": {
+      "files": [
+        "audio/announcer/big_heads.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.orbital": {
+      "files": [
+        "audio/announcer/orbital_strike.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.quickhands": {
+      "files": [
+        "audio/announcer/quick_hands.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.gungame_level": {
+      "files": [
+        "audio/announcer/weapon_upgraded.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.cat_hat": {
+      "files": [
+        "audio/announcer/cat_in_the_hat.mp3"
+      ],
+      "gain": 1.0
+    }
+  }
+}

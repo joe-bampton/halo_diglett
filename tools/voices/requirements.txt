@@ -1,0 +1,12 @@
+# Voice-line generator for Halo Diglett (tools/voices/generate.py).
+# Pinned so a re-run reproduces the shipped MP3s byte for byte.
+kokoro-onnx==0.6.1
+onnxruntime==1.30.0
+phonemizer==3.4.0
+espeakng-loader==0.2.4
+numpy==2.4.6
+scipy==1.17.1
+soundfile==0.14.0
+pyworld==0.3.5
+lameenc==1.8.4
+pyloudnorm==0.2.0
