@@ -2,7 +2,7 @@ import type { PowerUpId } from './powerups';
 import type { Settings } from './settings';
 import type { WeaponId } from './weapons';
 
-export type BotDifficulty = 'recruit' | 'normal' | 'heroic' | 'legendary';
+export type BotDifficulty = 'jerry' | 'recruit' | 'normal' | 'heroic' | 'legendary' | 'topover';
 
 export interface RosterEntry {
   slot: number;
@@ -181,4 +181,6 @@ export type SimEvent =
   | { k: 'ann'; t: number; key: string; p: number }
   | { k: 'medal'; t: number; p: number; id: string }
   | { k: 'end'; t: number; winner: number }
-  | { k: 'forced'; t: number; p: number };
+  | { k: 'forced'; t: number; p: number }
+  /** a player yells a voice line (e.g. a Jerry bot's "Suppressing fire!") */
+  | { k: 'callout'; t: number; p: number; key: string };

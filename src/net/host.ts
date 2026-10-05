@@ -403,6 +403,11 @@ export class HostSession {
     }
     for (const [slot, b] of this.bots) if (m.players[slot]) cmds[slot] = b.think(m, this.arena);
     const events = stepMatch(m, cmds, this.arena);
+    for (const [slot, b] of this.bots) {
+      if (!b.callout) continue;
+      events.push({ k: 'callout', t: m.tick, p: slot, key: b.callout });
+      b.callout = null;
+    }
     if (events.length) {
       for (const b of this.bots.values()) b.onEvents(events);
       for (const c of this.conns.values()) c.pending.push(...events);

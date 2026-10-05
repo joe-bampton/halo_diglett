@@ -2,6 +2,7 @@ import './ui/styles.css';
 import { App } from './app/app';
 import { audio } from './audio/audio';
 import { voice } from './audio/voice';
+import { BOT_PROFILES } from './bots/brain';
 import type { BotDifficulty } from './sim/types';
 import type { Settings } from './sim/settings';
 import type { WeaponId } from './sim/weapons';
@@ -35,7 +36,10 @@ if (!webglOk()) {
   if (params.get('respawn')) settings.respawnMode = params.get('respawn') === 'auto' ? 'auto' : 'manual';
   if (auto === 'offline') {
     const bots = Number(params.get('bots') ?? 3);
-    const diffs: BotDifficulty[] = Array.from({ length: Math.min(6, bots) }, (_, i) => (['normal', 'heroic', 'legendary', 'recruit'] as const)[i % 4]);
+    // botdiff=jerry or botdiff=jerry,topover (cycled); default mixes normal → recruit
+    const picked = (params.get('botdiff') ?? '').split(',').filter((d): d is BotDifficulty => d in BOT_PROFILES);
+    const cycle: BotDifficulty[] = picked.length ? picked : ['normal', 'heroic', 'legendary', 'recruit'];
+    const diffs = Array.from({ length: Math.min(6, bots) }, (_, i) => cycle[i % cycle.length]!);
     app.startOffline({ bots: diffs, settings, autostart: true });
   } else if (auto === 'host') {
     void app.hostOnline(params.get('code') ?? undefined, settings);

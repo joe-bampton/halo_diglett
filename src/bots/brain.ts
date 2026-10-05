@@ -1,8 +1,8 @@
 import { Rng } from '../shared/rng';
-import { angleDiff, clamp, dist, yawPitchOf, type V3 } from '../shared/vec';
+import { angleDiff, clamp, dirFromYawPitch, dist, sub, yawPitchOf, type V3 } from '../shared/vec';
 import type { Arena } from '../sim/arena';
-import { DT, FIRE_EXPOSURE, TICK_RATE, secToTicks } from '../sim/constants';
-import { eyePos, isExposed } from '../sim/hitbox';
+import { DT, FIRE_EXPOSURE, LOWER_TIME, RISE_TIME, TICK_RATE, secToTicks } from '../sim/constants';
+import { eyePos, isExposed, rayHitbox } from '../sim/hitbox';
 import { clipSize, isCamo, playerHitbox } from '../sim/match';
 import { orbPos } from '../sim/orbs';
 import type { BotDifficulty, MatchState, PlayerCommand, PlayerState, SimEvent } from '../sim/types';
@@ -24,13 +24,22 @@ export interface BotProfile {
   orbInterest: number; // per second
   camoDetect: number; // per second
   fovDeg: number;
+  /** highest aim pitch (rad) */
+  pitchMax: number;
+  /** jerry: never aims at anyone — pops up and hoses the sky yelling "suppressing fire!" */
+  mode?: 'jerry';
+  /** sees through walls, knows who is about to pop up and fires the first tick a head can be hit */
+  wallhack?: boolean;
 }
 
+/** Record order is the order of the difficulty dropdowns. */
 export const BOT_PROFILES: Record<BotDifficulty, BotProfile> = {
-  recruit: { label: 'Recruit', reaction: 0.85, aimSigma0: 5, aimTau: 0.6, aimSigmaMin: 1.4, turnRate: 120, headChance: 0.15, fireTol: 2.0, stand: [2.5, 4.5], duck: [1.5, 4], duckOnShieldBreak: 0.25, leadSkill: 0.4, orbInterest: 0.05, camoDetect: 0.2, fovDeg: 100 },
-  normal: { label: 'Normal', reaction: 0.55, aimSigma0: 3.5, aimTau: 0.4, aimSigmaMin: 0.7, turnRate: 200, headChance: 0.35, fireTol: 1.4, stand: [2, 3.5], duck: [1.2, 3], duckOnShieldBreak: 0.55, leadSkill: 0.7, orbInterest: 0.15, camoDetect: 0.35, fovDeg: 120 },
-  heroic: { label: 'Heroic', reaction: 0.38, aimSigma0: 2.5, aimTau: 0.28, aimSigmaMin: 0.35, turnRate: 300, headChance: 0.6, fireTol: 1.1, stand: [1.5, 3], duck: [0.8, 2.2], duckOnShieldBreak: 0.85, leadSkill: 0.9, orbInterest: 0.3, camoDetect: 0.5, fovDeg: 140 },
-  legendary: { label: 'Legendary', reaction: 0.24, aimSigma0: 1.8, aimTau: 0.18, aimSigmaMin: 0.15, turnRate: 420, headChance: 0.85, fireTol: 0.9, stand: [1, 2.5], duck: [0.6, 1.6], duckOnShieldBreak: 1, leadSkill: 1, orbInterest: 0.5, camoDetect: 0.7, fovDeg: 160 },
+  jerry: { label: 'Jerry', reaction: 1, aimSigma0: 8, aimTau: 1, aimSigmaMin: 4, turnRate: 90, headChance: 0, fireTol: 2, stand: [1.5, 3], duck: [2, 5], duckOnShieldBreak: 0.2, leadSkill: 0, orbInterest: 0, camoDetect: 0, fovDeg: 90, pitchMax: 1.4, mode: 'jerry' },
+  recruit: { label: 'Recruit', reaction: 0.85, aimSigma0: 5, aimTau: 0.6, aimSigmaMin: 1.4, turnRate: 120, headChance: 0.15, fireTol: 2.0, stand: [2.5, 4.5], duck: [1.5, 4], duckOnShieldBreak: 0.25, leadSkill: 0.4, orbInterest: 0.05, camoDetect: 0.2, fovDeg: 100, pitchMax: 1.2 },
+  normal: { label: 'Normal', reaction: 0.55, aimSigma0: 3.5, aimTau: 0.4, aimSigmaMin: 0.7, turnRate: 200, headChance: 0.35, fireTol: 1.4, stand: [2, 3.5], duck: [1.2, 3], duckOnShieldBreak: 0.55, leadSkill: 0.7, orbInterest: 0.15, camoDetect: 0.35, fovDeg: 120, pitchMax: 1.2 },
+  heroic: { label: 'Heroic', reaction: 0.38, aimSigma0: 2.5, aimTau: 0.28, aimSigmaMin: 0.35, turnRate: 300, headChance: 0.6, fireTol: 1.1, stand: [1.5, 3], duck: [0.8, 2.2], duckOnShieldBreak: 0.85, leadSkill: 0.9, orbInterest: 0.3, camoDetect: 0.5, fovDeg: 140, pitchMax: 1.2 },
+  legendary: { label: 'Legendary', reaction: 0.24, aimSigma0: 1.8, aimTau: 0.18, aimSigmaMin: 0.15, turnRate: 420, headChance: 0.85, fireTol: 0.9, stand: [1, 2.5], duck: [0.6, 1.6], duckOnShieldBreak: 1, leadSkill: 1, orbInterest: 0.5, camoDetect: 0.7, fovDeg: 160, pitchMax: 1.2 },
+  topover: { label: 'Top/Over', reaction: 0, aimSigma0: 0, aimTau: 0.01, aimSigmaMin: 0, turnRate: 1e5, headChance: 1, fireTol: 0.9, stand: [4, 8], duck: [0.3, 0.6], duckOnShieldBreak: 0, leadSkill: 1, orbInterest: 0, camoDetect: 99, fovDeg: 360, pitchMax: 1.45, wallhack: true },
 };
 
 export const BOT_NAMES = [
@@ -73,6 +82,11 @@ export class BotBrain {
   private threatAt = -9999;
   private reloadedThisDuck = false;
   private spawnTick = -1;
+  private skyYaw = 0;
+  private skyPitch = 1.2;
+  private lastYell = -9999;
+  /** a voice line this bot wants to say (the host turns it into a 'callout' event) */
+  callout: string | null = null;
 
   constructor(slot: number, difficulty: BotDifficulty, seed: number) {
     this.slot = slot;
@@ -119,6 +133,8 @@ export class BotBrain {
       this.phaseUntil = t + secToTicks(this.rng.range(0.4, 1.4));
       this.target = -1;
     }
+    if (pr.mode === 'jerry') return this.thinkJerry(m, me, cmd);
+    if (pr.wallhack) return this.thinkHacker(m, arena, me, cmd);
     const w = WEAPONS[me.weapon];
     const infinite = m.settings.ammoMode === 'noReload' || w.clip <= 0;
     const needReload = !infinite && me.clip < clipSize(m, w);
@@ -208,7 +224,7 @@ export class BotBrain {
     const dyaw = angleDiff(wantYaw, this.yaw);
     this.yaw += clamp(dyaw, -maxTurn, maxTurn);
     this.pitch += clamp(wantPitch - this.pitch, -maxTurn, maxTurn);
-    this.pitch = clamp(this.pitch, -1.2, 1.2);
+    this.pitch = clamp(this.pitch, -pr.pitchMax, pr.pitchMax);
 
     // --- firing -----------------------------------------------------------------------------
     let trigger = false;
@@ -239,6 +255,137 @@ export class BotBrain {
     cmd.reloads = this.reloads;
     cmd.zoom = w.zoom.length && this.target >= 0 && this.up ? 1 : 0;
     return cmd;
+  }
+
+  /** Press (semi/burst) or hold (auto/charge/beam) the trigger. */
+  private pull(cmd: PlayerCommand, me: PlayerState, t: number) {
+    const w = WEAPONS[me.weapon];
+    if (w.trigger === 'semi' || w.trigger === 'burst') {
+      if (t - this.lastPressAt > secToTicks(Math.max(0.12, w.interval))) {
+        this.presses++;
+        this.lastPressAt = t;
+      }
+    } else cmd.trigger = !(w.trigger === 'charge' && me.needRelease);
+  }
+
+  /** Jerry: never acts against anyone — stands up and sprays the sky ("Suppressing fire!"). */
+  private thinkJerry(m: MatchState, me: PlayerState, cmd: PlayerCommand): PlayerCommand {
+    const t = m.tick;
+    const pr = this.profile;
+    const w = WEAPONS[me.weapon];
+    const infinite = m.settings.ammoMode === 'noReload' || w.clip <= 0;
+    const reloading = me.reloadUntil > t;
+    if (t >= this.phaseUntil) {
+      if (this.up) {
+        this.up = false;
+        this.reloadedThisDuck = false;
+        this.phaseUntil = t + secToTicks(this.rng.range(pr.duck[0], pr.duck[1]));
+      } else if (!reloading) {
+        this.up = true;
+        this.phaseUntil = t + secToTicks(this.rng.range(pr.stand[0], pr.stand[1]));
+        this.skyYaw = this.yaw + this.rng.range(-1.2, 1.2);
+        this.skyPitch = this.rng.range(1.0, 1.35);
+        this.lastPressAt = t; // the first shot comes once the gun is up
+      }
+    }
+    if (!infinite && me.clip === 0) this.up = false;
+    if (m.settings.antiTurtleSec > 0 && me.duckedSince >= 0 && t - me.duckedSince > secToTicks(m.settings.antiTurtleSec - 1)) this.up = true;
+    if (!this.up && !infinite && me.clip < clipSize(m, w) && !reloading && !this.reloadedThisDuck && me.exposure < 0.5) {
+      this.reloads++;
+      this.reloadedThisDuck = true;
+    }
+    // drift around a patch of sky
+    const maxTurn = pr.turnRate * (Math.PI / 180) * DT;
+    const wantYaw = this.skyYaw + Math.sin(t * 0.05 + this.slot) * 0.25;
+    const wantPitch = this.skyPitch + Math.sin(t * 0.083 + this.slot * 2) * 0.08;
+    this.yaw += clamp(angleDiff(wantYaw, this.yaw), -maxTurn, maxTurn);
+    this.pitch = clamp(this.pitch + clamp(wantPitch - this.pitch, -maxTurn, maxTurn), -pr.pitchMax, pr.pitchMax);
+    if (this.up && me.exposure >= FIRE_EXPOSURE && this.pitch > 0.8 && !reloading && (infinite || me.clip > 0)) {
+      if (t - this.lastYell >= secToTicks(5)) {
+        this.callout = 'jerry.suppress';
+        this.lastYell = t;
+      }
+      this.pull(cmd, me, t);
+    }
+    cmd.yaw = this.yaw;
+    cmd.pitch = this.pitch;
+    cmd.stand = this.up;
+    cmd.presses = this.presses;
+    cmd.reloads = this.reloads;
+    return cmd;
+  }
+
+  /** Top/Over: wallhack + aimbot. Pre-aims where a head will appear and fires the first tick it can be hit. */
+  private thinkHacker(m: MatchState, arena: Arena, me: PlayerState, cmd: PlayerCommand): PlayerCommand {
+    const t = m.tick;
+    const pr = this.profile;
+    const w = WEAPONS[me.weapon];
+    const infinite = m.settings.ammoMode === 'noReload' || w.clip <= 0;
+    const reloading = me.reloadUntil > t;
+    const loaded = infinite || me.clip > 0;
+    // stay up unless reloading; reload the moment the clip runs dry
+    this.up = !reloading && loaded;
+    if (!loaded && !reloading) this.reloads++;
+    const eye = eyePos(arena.holes[me.hole]!, 1);
+    if (t >= this.nextScan) {
+      this.nextScan = t + 6;
+      this.target = this.pickWallhack(m, arena, me, eye);
+    }
+    const q = this.target >= 0 ? m.players[this.target] : null;
+    if (q?.alive) {
+      // stance updates before weapons fire, so aim at where they will be next tick
+      const rising = q.wantStand || q.forcedStandUntil > t;
+      const e1 = clamp(q.exposure + (rising ? DT / RISE_TIME : -DT / LOWER_TIME), 0, 1);
+      const hb = playerHitbox(m, arena, q, e1, me);
+      const aim: V3 = w.splash
+        ? w.projectile?.bounce
+          ? { x: hb.head.x, y: hb.rim - 0.2, z: hb.head.z }
+          : { x: hb.torsoA.x, y: Math.max(hb.rim + 0.1, hb.torsoA.y + 0.2), z: hb.torsoA.z }
+        : { x: hb.head.x, y: Math.max(hb.head.y, hb.rim + 0.06), z: hb.head.z };
+      const to = sub(aim, eye);
+      const ang = yawPitchOf(to);
+      let pitch = ang.pitch;
+      const proj = w.projectile;
+      if (proj && proj.gravity > 0) pitch = ballisticPitch(Math.hypot(to.x, to.z), to.y, proj.speed, proj.gravity) ?? pitch;
+      this.yaw = ang.yaw;
+      this.pitch = clamp(pitch, -pr.pitchMax, pr.pitchMax);
+      if (me.exposure >= FIRE_EXPOSURE && !reloading && loaded && t + 1 >= me.nextFireAt) {
+        let shoot: boolean;
+        if (w.fireKind === 'projectile') shoot = w.splash ? true : isExposed(e1);
+        else {
+          // only pull the trigger if this exact shot hits their head with nothing in the way
+          const d = dirFromYawPitch(this.yaw, this.pitch);
+          const h = rayHitbox(eye, d, hb);
+          shoot = !!h?.head && arena.raycast(eye, d, h.t) === Infinity;
+        }
+        if (shoot) this.pull(cmd, me, t);
+      }
+    }
+    cmd.yaw = this.yaw;
+    cmd.pitch = this.pitch;
+    cmd.stand = this.up;
+    cmd.presses = this.presses;
+    cmd.reloads = this.reloads;
+    cmd.zoom = w.zoom.length && q ? 1 : 0;
+    return cmd;
+  }
+
+  /** Every enemy whose head would be visible once they stand: exposed first, then about to pop up, then nearest. */
+  private pickWallhack(m: MatchState, arena: Arena, me: PlayerState, eye: V3): number {
+    let best = -1;
+    let bestScore = Infinity;
+    for (const q of m.players) {
+      if (!q || q === me || !q.alive) continue;
+      const head = playerHitbox(m, arena, q, 1, me).head;
+      if (!arena.lineClear(eye, head, 0.4)) continue;
+      const rising = q.wantStand || q.forcedStandUntil > m.tick;
+      const sc = dist(eye, head) * 0.01 + (isExposed(q.exposure) ? 0 : rising ? 10 : 20) - (m.leader === q.slot ? 0.5 : 0);
+      if (sc < bestScore) {
+        bestScore = sc;
+        best = q.slot;
+      }
+    }
+    return best;
   }
 
   private get leads(): boolean {

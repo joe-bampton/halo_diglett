@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 type HD = { state(): { phase: string; frames: number; me: { al: boolean } | null }; game: { input: { s: { yaw: number; stand: boolean }; device: string } } | null };
 
 test('touch controls: stand toggle and drag-to-aim', async ({ page }) => {
-  await page.goto('/?test=1&autostart=offline&bots=2&quality=low&respawn=auto');
+  await page.goto('/?test=1&autostart=offline&bots=2&quality=low&respawn=auto&botdiff=jerry');
   await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd?.state().frames > 2, null, { timeout: 40_000 });
   await expect(page.locator('.touch.on')).toBeVisible();
   await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().phase === 'live', null, { timeout: 60_000 });

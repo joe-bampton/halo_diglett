@@ -16,7 +16,7 @@ test('controller: right stick aims, A stands, RT fires', async ({ page }) => {
     (window as unknown as { __pad: typeof pad }).__pad = pad;
     Object.defineProperty(navigator, 'getGamepads', { value: () => [pad, null, null, null] });
   });
-  await page.goto('/?test=1&autostart=offline&bots=1&quality=low&respawn=auto');
+  await page.goto('/?test=1&autostart=offline&bots=1&quality=low&respawn=auto&botdiff=jerry');
   await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd?.state().phase === 'live', null, { timeout: 60_000 });
   const read = () => page.evaluate(() => ({ ...(window as unknown as { __hd: HD }).__hd.game!.input.s, device: (window as unknown as { __hd: HD }).__hd.game!.input.device }));
   const before = await read();

@@ -927,7 +927,8 @@ export function damagePlayer(m: MatchState, ctx: StepContext, attacker: number, 
   if (a && a !== v && hasPowerup(a, 'damage', t)) amt *= 2;
   let lethalHead = false;
   if (o.head && o.kind === 'direct') {
-    if (o.headshotKills && v.overshield <= 0) lethalHead = true;
+    // Top/Over bots "hack": every head hit kills
+    if ((o.headshotKills || a?.bot === 'topover') && v.overshield <= 0) lethalHead = true;
     else if (v.shield <= 0 && o.headMult) amt *= o.headMult;
   }
   if (lethalHead) amt = Math.max(amt, v.shield + v.health + 1);

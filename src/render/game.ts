@@ -40,7 +40,13 @@ interface SpartanView {
   beamSound: SoundHandle | null;
   voice: SoundHandle | null;
   headScale: number;
+  /** speech bubble for callouts ("SUPPRESSING FIRE!") */
+  bubble: THREE.Sprite | null;
+  bubbleUntil: number;
 }
+
+/** On-screen text for voice callouts. */
+const CALLOUT_TEXT: Record<string, string> = { 'jerry.suppress': 'SUPPRESSING FIRE!' };
 
 interface ProjView {
   pr: Projectile;
@@ -274,7 +280,7 @@ export class Game {
       this.renderer.render(this.scene, this.camera);
     }
     const slots = Object.values(PITRE_SLOT);
-    audio.preload(['ann.slay', 'ann.double', 'ann.triple', 'ann.headshot', 'ann.spree', 'ann.lead_taken', 'ann.lead_lost', 'ann.game_over', 'ann.victory', 'ann.defeat']);
+    audio.preload(['ann.slay', 'ann.double', 'ann.triple', 'ann.headshot', 'ann.spree', 'ann.lead_taken', 'ann.lead_lost', 'ann.game_over', 'ann.victory', 'ann.defeat', ...Object.keys(CALLOUT_TEXT)]);
     if (session.start?.settings.pitre) audio.preload(slots);
   }
 
@@ -775,6 +781,9 @@ export class Game {
           this.input.unlock();
           break;
         }
+        case 'callout':
+          this.playCallout(e.p, e.key);
+          break;
         case 'forced':
           if (e.p === mySlot) {
             this.hud.message('Get up!', 1500, 'warn');
@@ -816,6 +825,31 @@ export class Game {
     if (mine) this.myVoice = h;
     else if (sv) sv.voice = h;
   }
+  /** A player yells a line (not Pitre-gated): positional voice + a speech bubble over their head. */
+  private playCallout(slot: number, key: string) {
+    const now = performance.now();
+    if (now - (this.calloutAt.get(slot) ?? -1e9) < 3000) return;
+    this.calloutAt.set(slot, now);
+    const mine = slot === this.session.slot;
+    const sv = this.spartans.get(slot);
+    const h = audio.playVoice(key, { pos: mine ? null : this.posOf(slot), gain: mine ? 0.9 : 1.3 });
+    if (h) {
+      (mine ? this.myVoice : sv?.voice)?.stop(0.03);
+      if (mine) this.myVoice = h;
+      else if (sv) sv.voice = h;
+    }
+    const text = CALLOUT_TEXT[key];
+    if (sv && text && !mine) {
+      if (sv.bubble) {
+        this.scene.remove(sv.bubble);
+        disposeTree(sv.bubble);
+      }
+      sv.bubble = textSprite(text, '#ffe36a', 44);
+      sv.bubbleUntil = this.time + 1.8;
+      this.scene.add(sv.bubble);
+    }
+  }
+  private calloutAt = new Map<number, number>();
   private myVoice: SoundHandle | null = null;
   private lastStand = false;
   private lastRespawns = 0;
@@ -994,7 +1028,7 @@ export class Game {
     if (!sv) {
       const parts = buildSpartan(p.color);
       this.scene.add(parts.root);
-      sv = { slot: p.slot, parts, color: p.color, weapon: '', weaponModel: null, alive: p.alive, deathT: 0, deathDir: 1, flare: 0, flareColor: 0x6ad8ff, estShield: SHIELD_MAX, lastHitAt: -99, name: '', tag: null, tagFor: '', beamSound: null, voice: null, headScale: 1 };
+      sv = { slot: p.slot, parts, color: p.color, weapon: '', weaponModel: null, alive: p.alive, deathT: 0, deathDir: 1, flare: 0, flareColor: 0x6ad8ff, estShield: SHIELD_MAX, lastHitAt: -99, name: '', tag: null, tagFor: '', beamSound: null, voice: null, headScale: 1, bubble: null, bubbleUntil: 0 };
       this.spartans.set(p.slot, sv);
     }
     return sv;
@@ -1127,6 +1161,19 @@ export class Game {
         sv.tagFor = tagText;
         this.scene.add(sv.tag);
       }
+      if (sv.bubble) {
+        if (this.time > sv.bubbleUntil) {
+          this.scene.remove(sv.bubble);
+          disposeTree(sv.bubble);
+          sv.bubble = null;
+        } else {
+          const dist = head.distanceTo(eye);
+          const k = (0.9 + dist * 0.05) * (this.camera.fov / this.input.opts.fov);
+          const aspect = sv.bubble.userData.aspect ?? (sv.bubble.userData.aspect = sv.bubble.scale.x / sv.bubble.scale.y);
+          sv.bubble.position.copy(head).add(new THREE.Vector3(0, 0.75 + dist * 0.02, 0));
+          sv.bubble.scale.set(k * aspect * 0.5, k * 0.5, 1);
+        }
+      }
       if (sv.tag) {
         sv.tag.visible = showTag;
         if (showTag) {
@@ -1142,9 +1189,10 @@ export class Game {
       if (!seen.has(slot)) {
         this.scene.remove(sv.parts.root);
         disposeTree(sv.parts.root);
-        if (sv.tag) {
-          this.scene.remove(sv.tag);
-          disposeTree(sv.tag);
+        for (const sp of [sv.tag, sv.bubble]) {
+          if (!sp) continue;
+          this.scene.remove(sp);
+          disposeTree(sp);
         }
         sv.beamSound?.stop();
         this.spartans.delete(slot);
