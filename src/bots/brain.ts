@@ -103,7 +103,7 @@ export class BotBrain {
     const me = m.players[this.slot]!;
     const t = m.tick;
     const pr = this.profile;
-    const cmd: PlayerCommand = { yaw: this.yaw, pitch: this.pitch, stand: false, trigger: false, presses: this.presses, reloads: this.reloads, zoom: 0, vt: t };
+    const cmd: PlayerCommand = { yaw: this.yaw, pitch: this.pitch, stand: false, trigger: false, presses: this.presses, reloads: this.reloads, respawns: 0, zoom: 0, vt: t };
     if (!me.alive) {
       this.up = false;
       this.target = -1;

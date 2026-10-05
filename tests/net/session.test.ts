@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { ClientSession } from '../../src/net/client';
 import { HostSession } from '../../src/net/host';
 import { loopbackPair } from '../../src/net/transport';
+import { Rng } from '../../src/shared/rng';
 import { yawPitchOf } from '../../src/shared/vec';
 import { eyePos, hitboxOf } from '../../src/sim/hitbox';
+import { damagePlayer } from '../../src/sim/match';
 import { FakeWorld, LagHub } from './laglink';
 
 function flush() {
@@ -44,6 +46,37 @@ describe('loopback session', () => {
   });
 });
 
+describe('manual respawn over the wire', () => {
+  it('a dead player stays down until they press Jump', async () => {
+    const { host: hn, client: cn } = loopbackPair();
+    let now = 0;
+    const host = new HostSession(hn, 'LOCAL', false);
+    host.clock = () => now;
+    const client = new ClientSession(cn, { name: 'Me', color: 0x3d7bff, token: 'tok' });
+    client.clock = () => now;
+    await flush();
+    host.setSettings({ ...host.lobby.settings, orbRate: 'off', antiTurtleSec: 0, respawnMode: 'manual', respawnSec: 1 });
+    host.startMatch(5);
+    const step = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        now += 1000 / 60;
+        host.update(now);
+        client.update(now);
+        client.drainEvents();
+      }
+    };
+    step(host.match!.liveAt + 10);
+    const m = host.match!;
+    damagePlayer(m, { arena: host.arena, rng: new Rng(1), events: [] }, -1, m.players[client.slot]!, 9999, { head: false, weapon: 'sniper', kind: 'direct' });
+    step(150);
+    expect(client.me?.al).toBe(false);
+    expect(client.me?.rq).toBe(false);
+    client.input.respawns++;
+    step(4);
+    expect(client.me?.al).toBe(true);
+  });
+});
+
 function lagMatch(oneWay: number, jitter: number, maxRewindMs: number) {
   const w = new FakeWorld();
   const hub = new LagHub(w);
@@ -57,7 +90,7 @@ function lagMatch(oneWay: number, jitter: number, maxRewindMs: number) {
   const A = mk('A');
   const B = mk('B');
   w.advance(500);
-  host.setSettings({ ...host.lobby.settings, orbRate: 'off', antiTurtleSec: 0, maxRewindMs, respawnSec: 1 });
+  host.setSettings({ ...host.lobby.settings, orbRate: 'off', antiTurtleSec: 0, maxRewindMs, respawnSec: 1, respawnMode: 'auto' });
   // put A and B in facing holes
   host.startMatch(7);
   const m = host.match!;

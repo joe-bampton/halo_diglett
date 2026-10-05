@@ -2,7 +2,7 @@ import type { Settings } from '../sim/settings';
 import type { BotDifficulty, MatchPhase, PlayerCommand, RosterEntry, SimEvent } from '../sim/types';
 import type { WeaponId } from '../sim/weapons';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const BUILD_ID: string = (import.meta.env?.VITE_BUILD_ID as string | undefined) ?? 'dev';
 
 export interface SlotInfo {
@@ -115,6 +115,7 @@ export interface PrivateState {
   ds: number; // ducked since
   al: boolean;
   hole: number;
+  rq: boolean; // respawn requested (manual respawn)
 }
 
 export interface SnapshotMsg {

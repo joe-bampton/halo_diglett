@@ -55,6 +55,7 @@ export interface LocalInput {
   trigger: boolean;
   presses: number;
   reloads: number;
+  respawns: number;
   zoom: number;
   pick?: WeaponId;
 }
@@ -79,7 +80,7 @@ export class ClientSession {
   events: SimEvent[] = [];
   latestTick = 0;
 
-  input: LocalInput = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, zoom: 0 };
+  input: LocalInput = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, respawns: 0, zoom: 0 };
   myExposure = 0;
   /** host tick currently displayed for remote players */
   renderTick = 0;
@@ -359,7 +360,7 @@ export class ClientSession {
   private maybeSendInput(now: number) {
     if (this.state !== 'match') return;
     const i = this.input;
-    const key = `${i.stand}|${i.trigger}|${i.presses}|${i.reloads}|${i.zoom}|${i.pick ?? ''}`;
+    const key = `${i.stand}|${i.trigger}|${i.presses}|${i.reloads}|${i.respawns}|${i.zoom}|${i.pick ?? ''}`;
     const edge = key !== this.lastKey;
     const interval = this.local ? 0 : 1000 / 30;
     if (!edge && now - this.lastSend < interval) return;
@@ -372,6 +373,7 @@ export class ClientSession {
       trigger: i.trigger,
       presses: i.presses,
       reloads: i.reloads,
+      respawns: i.respawns,
       zoom: i.zoom,
       vt: Math.round(this.renderTick * 100) / 100,
       pick: i.pick,

@@ -301,6 +301,7 @@ export class HostSession {
       trigger: !!k.trigger,
       presses: num(k.presses) | 0,
       reloads: num(k.reloads) | 0,
+      respawns: num(k.respawns) | 0,
       zoom: num(k.zoom) | 0,
       vt: num(k.vt),
       pick: typeof k.pick === 'string' && k.pick in WEAPONS ? k.pick : undefined,
@@ -398,7 +399,7 @@ export class HostSession {
     }
     for (const s of this.lobby.slots) {
       const p = m.players[s.slot];
-      if (s.kind === 'human' && !s.connected && p) cmds[s.slot] = { yaw: p.yaw, pitch: p.pitch, stand: false, trigger: false, presses: p.presses, reloads: p.reloads, zoom: 0, vt: m.tick };
+      if (s.kind === 'human' && !s.connected && p) cmds[s.slot] = { yaw: p.yaw, pitch: p.pitch, stand: false, trigger: false, presses: p.presses, reloads: p.reloads, respawns: p.respawns, zoom: 0, vt: m.tick };
     }
     for (const [slot, b] of this.bots) if (m.players[slot]) cmds[slot] = b.think(m, this.arena);
     const events = stepMatch(m, cmds, this.arena);
@@ -557,6 +558,7 @@ export function privateState(m: MatchState, me: PlayerState): PrivateState {
     ds: me.duckedSince,
     al: me.alive,
     hole: me.hole,
+    rq: me.respawnRequested,
   };
 }
 

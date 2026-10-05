@@ -249,7 +249,7 @@ export class App {
     this.startHostLoop();
   }
 
-  async hostOnline(forceCode?: string) {
+  async hostOnline(forceCode?: string, settings: Partial<Settings> = {}) {
     this.cleanup();
     const code = forceCode ?? makeRoomCode();
     this.setScreen(`<div class="title-logo" style="margin-top:30vh"><div class="t1">CREATING LOBBY…</div></div>`);
@@ -269,7 +269,7 @@ export class App {
     const { host: hn, client: cn } = loopbackPair();
     mux.add(hn);
     for (const n of nets) mux.add(n);
-    this.host = new HostSession(mux, code, true, loadSettings());
+    this.host = new HostSession(mux, code, true, { ...loadSettings(), ...settings });
     this.host.onChange = () => this.persistSettings();
     this.attachClient(cn, mux.voice);
     history.replaceState(null, '', `${location.pathname}${location.search}#/host/${code}`);

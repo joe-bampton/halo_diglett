@@ -7,6 +7,8 @@ export interface InputState {
   trigger: boolean;
   presses: number;
   reloads: number;
+  /** cumulative respawn requests (Jump while dead) */
+  respawns: number;
   zoom: number;
 }
 
@@ -57,8 +59,10 @@ export interface InputHooks {
 
 /** Unified keyboard+mouse / gamepad / touch input. */
 export class InputManager {
-  readonly s: InputState = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, zoom: 0 };
+  readonly s: InputState = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, respawns: 0, zoom: 0 };
   opts: Options = loadOptions();
+  /** 'spectate' while dead: Jump asks for a respawn instead of standing */
+  mode: 'play' | 'spectate' = 'play';
   device: 'kbm' | 'pad' | 'touch' = matchMedia('(pointer: coarse)').matches ? 'touch' : 'kbm';
   enabled = false;
   /** test hooks */
@@ -123,7 +127,8 @@ export class InputManager {
         case 'KeyW':
           e.preventDefault();
           if (e.repeat) break;
-          if (this.opts.standMode === 'toggle') this.toggleStand = !this.toggleStand;
+          if (this.mode === 'spectate') this.s.respawns++;
+          else if (this.opts.standMode === 'toggle') this.toggleStand = !this.toggleStand;
           else this.keysStand = true;
           break;
         case 'ControlLeft':
@@ -310,7 +315,10 @@ export class InputManager {
     this.padFire = (gp.buttons[7]?.value ?? 0) > 0.35;
     if ((gp.buttons[7]?.value ?? 0) > 0.35 && !this.prevPad[7]) this.press();
     if (edge(6)) this.cycleZoom();
-    this.padStandHold = b(0);
+    if (this.mode === 'spectate') {
+      if (edge(0)) this.s.respawns++;
+      this.padStandHold = false;
+    } else this.padStandHold = b(0);
     if (edge(4) || edge(10)) this.padStandToggle = !this.padStandToggle;
     if (edge(1)) this.padStandToggle = false;
     if (edge(2)) this.reload();
@@ -349,7 +357,8 @@ export class InputManager {
             this.press();
             break;
           case 'stand':
-            this.touchStandHold = true;
+            if (this.mode === 'spectate') this.s.respawns++;
+            else this.touchStandHold = true;
             break;
           case 'zoom':
             this.cycleZoom();
@@ -376,7 +385,7 @@ export class InputManager {
         btn.classList.remove('down');
         last = null;
         if (act === 'fire') this.touchFire = false;
-        if (act === 'stand') {
+        if (act === 'stand' && this.touchStandHold) {
           this.touchStandHold = false;
           // quick tap toggles, long hold is momentary
           if (performance.now() - downAt < 220) this.touchStandToggle = !this.touchStandToggle;
@@ -391,8 +400,9 @@ export class InputManager {
   updateTouchLabels() {
     const b = this.touchRoot?.querySelector<HTMLButtonElement>('.tstand');
     if (b) {
-      b.textContent = this.s.stand ? 'DUCK' : 'STAND';
-      b.classList.toggle('on', this.touchStandToggle);
+      const label = this.mode === 'spectate' ? 'RESPAWN' : this.s.stand ? 'DUCK' : 'STAND';
+      if (b.textContent !== label) b.textContent = label;
+      b.classList.toggle('on', this.mode === 'play' && this.touchStandToggle);
     }
   }
 

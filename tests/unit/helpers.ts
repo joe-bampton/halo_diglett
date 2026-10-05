@@ -12,12 +12,12 @@ export function roster(n: number): RosterEntry[] {
 }
 
 export function makeMatch(n = 2, s: Partial<Settings> = {}): MatchState {
-  const m = createMatch(sanitizeSettings({ orbRate: 'off', antiTurtleSec: 0, ...s }), roster(n), 1234, arena);
+  const m = createMatch(sanitizeSettings({ orbRate: 'off', antiTurtleSec: 0, respawnMode: 'auto', ...s }), roster(n), 1234, arena);
   return m;
 }
 
 export function cmd(over: Partial<PlayerCommand> = {}): PlayerCommand {
-  return { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, zoom: 0, vt: 0, ...over };
+  return { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, respawns: 0, zoom: 0, vt: 0, ...over };
 }
 
 export function run(m: MatchState, ticks: number, cmds: (PlayerCommand | undefined)[] = []): SimEvent[] {

@@ -20,6 +20,7 @@ export interface Settings {
   reloadMult: number;
   respawnSec: number;
   respawnHole: 'same' | 'random';
+  respawnMode: 'manual' | 'auto';
   antiTurtleSec: number; // 0 = off
   splashHitsDucked: boolean;
   underdogCamo: boolean;
@@ -52,6 +53,7 @@ export const DEFAULT_SETTINGS: Settings = {
   reloadMult: 1,
   respawnSec: 3,
   respawnHole: 'random',
+  respawnMode: 'manual',
   antiTurtleSec: 8,
   splashHitsDucked: false,
   underdogCamo: true,
@@ -117,6 +119,11 @@ export const SETTINGS_SCHEMA: Field[] = [
   { key: 'clipMult', label: 'Clip size', group: 'Ammo', kind: 'number', min: 0.5, max: 5, step: 0.5, unit: '×', visibleIf: (s) => s.ammoMode === 'normal' },
   { key: 'reloadMult', label: 'Reload time', group: 'Ammo', kind: 'number', min: 0.25, max: 3, step: 0.25, unit: '×', visibleIf: (s) => s.ammoMode === 'normal' },
   { key: 'respawnSec', label: 'Respawn time', group: 'Respawn', kind: 'number', min: 0, max: 10, step: 1, unit: 's', zeroLabel: 'Instant' },
+  {
+    key: 'respawnMode', label: 'Respawn', group: 'Respawn', kind: 'enum',
+    options: [{ value: 'manual', label: 'When you press Jump (spectate while dead)' }, { value: 'auto', label: 'Automatically' }],
+    help: 'Respawn time is the minimum wait. Bots always respawn automatically.',
+  },
   { key: 'respawnHole', label: 'Respawn in', group: 'Respawn', kind: 'enum', options: [{ value: 'random', label: 'Random hole' }, { value: 'same', label: 'Same hole' }] },
   { key: 'antiTurtleSec', label: 'Anti-turtle (max time ducked)', group: 'Respawn', kind: 'number', min: 0, max: 20, step: 1, unit: 's', zeroLabel: 'Off', help: 'Stay ducked too long and you pop up for 2 seconds.' },
   { key: 'underdogCamo', label: 'Underdog camo', group: 'Respawn', kind: 'bool', help: 'Players who are doing badly respawn with active camo.' },

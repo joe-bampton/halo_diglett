@@ -25,17 +25,19 @@ if (!webglOk()) {
   const app = new App(root);
   const params = new URLSearchParams(location.search);
   const auto = params.get('autostart');
+  // match settings from the URL (quick testing): weapon, orbs, pitre, mode, respawn
+  const settings: Partial<Settings> = {};
+  if (params.get('weapon')) settings.weapon = params.get('weapon') as WeaponId;
+  if (params.get('orbs')) settings.orbRate = params.get('orbs') as Settings['orbRate'];
+  if (params.get('pitre')) settings.pitre = params.get('pitre') !== '0';
+  if (params.get('mode')) settings.weaponMode = params.get('mode') as Settings['weaponMode'];
+  if (params.get('respawn')) settings.respawnMode = params.get('respawn') === 'auto' ? 'auto' : 'manual';
   if (auto === 'offline') {
     const bots = Number(params.get('bots') ?? 3);
     const diffs: BotDifficulty[] = Array.from({ length: Math.min(6, bots) }, (_, i) => (['normal', 'heroic', 'legendary', 'recruit'] as const)[i % 4]);
-    const settings: Partial<Settings> = {};
-    if (params.get('weapon')) settings.weapon = params.get('weapon') as WeaponId;
-    if (params.get('orbs')) settings.orbRate = params.get('orbs') as Settings['orbRate'];
-    if (params.get('pitre')) settings.pitre = true;
-    if (params.get('mode')) settings.weaponMode = params.get('mode') as Settings['weaponMode'];
     app.startOffline({ bots: diffs, settings, autostart: true });
   } else if (auto === 'host') {
-    void app.hostOnline(params.get('code') ?? undefined);
+    void app.hostOnline(params.get('code') ?? undefined, settings);
   } else app.route();
 
   if (params.has('test')) {
@@ -73,6 +75,10 @@ if (!webglOk()) {
         g.input.s.yaw = a.yaw;
         g.input.s.pitch = a.pitch;
         return t.exposure > 0.9 && s.myExposure > 0.95;
+      },
+      /** press Jump while dead (manual respawn) */
+      respawn() {
+        if (app.game) app.game.input.s.respawns++;
       },
       fire() {
         const g = app.game;

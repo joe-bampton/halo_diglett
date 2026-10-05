@@ -37,7 +37,7 @@ test('offline bot match renders and plays', async ({ page }) => {
 
 test('player can stand, aim and kill a bot', async ({ page }) => {
   const errors = watchErrors(page);
-  await page.goto('/?test=1&autostart=offline&bots=1&quality=low&timescale=1');
+  await page.goto('/?test=1&autostart=offline&bots=1&quality=low&timescale=1&respawn=auto');
   await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd?.state().phase === 'live', null, { timeout: 60_000 });
   await page.evaluate(() => (window as unknown as { __hd: HD }).__hd.stand(true));
   const killed = await page.waitForFunction(

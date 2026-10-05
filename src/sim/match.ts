@@ -132,6 +132,8 @@ function newPlayer(m: MatchState, r: RosterEntry, hole: number): PlayerState {
     trigger: false,
     presses: 0,
     reloads: 0,
+    respawns: 0,
+    respawnRequested: false,
     pressAt: -1,
     powerups: [],
     underdogUntil: 0,
@@ -259,6 +261,7 @@ function spawnPlayer(m: MatchState, p: PlayerState, hole: number, events: SimEve
   const rng = new Rng(m.rng);
   p.hole = hole;
   p.alive = true;
+  p.respawnRequested = false;
   p.spawnTick = m.tick;
   p.exposure = 0;
   p.wantStand = false;
@@ -329,7 +332,7 @@ export function stepMatch(m: MatchState, cmds: (PlayerCommand | undefined)[], ar
     const c = cmds[p.slot];
     if (c) applyCommand(m, p, c);
     if (!p.alive) {
-      if (!frozen && t >= p.respawnAt && p.connected) {
+      if (!frozen && t >= p.respawnAt && p.connected && (p.kind === 'bot' || m.settings.respawnMode === 'auto' || p.respawnRequested)) {
         const hole = pickHole(m, arena, rng, m.settings.respawnHole === 'same' ? p.hole : -1);
         m.rng = rng.state;
         spawnPlayer(m, p, hole, events);
@@ -369,6 +372,9 @@ function applyCommand(m: MatchState, p: PlayerState, c: PlayerCommand) {
   const newReloads = (c.reloads | 0) - p.reloads;
   p.reloads = c.reloads | 0;
   if (newReloads > 0 && newReloads < 1000 && p.alive) requestReload(m, p);
+  const newRespawns = (c.respawns | 0) - p.respawns;
+  p.respawns = c.respawns | 0;
+  if (newRespawns > 0 && newRespawns < 1000 && !p.alive) p.respawnRequested = true;
   p.trigger = !!c.trigger;
 }
 
@@ -957,6 +963,7 @@ function killPlayer(m: MatchState, ctx: StepContext, attacker: number, v: Player
   const wasLeader = a !== null && m.leader === a.slot;
   // an environment/self kill credited to the last attacker if recent
   v.alive = false;
+  v.respawnRequested = false;
   v.health = 0;
   v.deaths++;
   const victimStreak = v.streak;

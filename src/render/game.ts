@@ -446,7 +446,8 @@ export class Game {
     this.time += dt;
     this.frames++;
     const s = this.session;
-    // input
+    // input (while dead, Jump asks for a respawn instead of standing)
+    this.input.mode = s.me && !s.me.al && s.phase !== 'ended' ? 'spectate' : 'play';
     this.input.update(dt);
     const inp = this.input.s;
     if (!s.me?.al || s.phase === 'ended') {
@@ -457,8 +458,11 @@ export class Game {
       this.lastStand = inp.stand;
       if (s.me?.al) audio.play('rustle', { gain: 0.35, rate: inp.stand ? 1.2 : 0.9 });
     }
-    Object.assign(s.input, { yaw: inp.yaw, pitch: inp.pitch, stand: inp.stand, trigger: inp.trigger, presses: inp.presses, reloads: inp.reloads, zoom: inp.zoom });
-    if (this.pred.pending) s.flushInput();
+    Object.assign(s.input, { yaw: inp.yaw, pitch: inp.pitch, stand: inp.stand, trigger: inp.trigger, presses: inp.presses, reloads: inp.reloads, respawns: inp.respawns, zoom: inp.zoom });
+    if (this.pred.pending || inp.respawns !== this.lastRespawns) {
+      this.lastRespawns = inp.respawns;
+      s.flushInput();
+    }
     s.update(now);
     // events
     const events = s.drainEvents();
@@ -787,6 +791,7 @@ export class Game {
   }
   private myVoice: SoundHandle | null = null;
   private lastStand = false;
+  private lastRespawns = 0;
 
   private brapMode(): boolean {
     const st = this.session.start?.settings;
@@ -1409,9 +1414,12 @@ export class Game {
       if (me.ud > s.hostTick) pus.push({ id: 'camo', frac: (me.ud - s.hostTick) / (20 * TICK_RATE) });
       hud.powerups(pus);
       // respawn / warnings
-      if (!me.al && me.ra > 0 && s.phase !== 'ended') {
-        const left = Math.max(0, Math.ceil((me.ra - s.hostTick) / TICK_RATE));
-        hud.sub(left > 0 ? `Respawn in ${left}` : 'Respawning…');
+      if (!me.al && s.phase !== 'ended') {
+        const left = me.ra > 0 ? Math.max(0, Math.ceil((me.ra - s.hostTick) / TICK_RATE)) : 0;
+        const key = this.respawnKey();
+        if (settings.respawnMode !== 'manual') hud.sub(left > 0 ? `Respawn in ${left}` : 'Respawning…');
+        else if (me.rq) hud.sub(left > 0 ? `Respawning in ${left}…` : 'Respawning…');
+        else hud.sub(left > 0 ? `Respawn in ${left} · press ${key} when ready` : `Press ${key} to respawn`);
       } else if (me.al && settings.antiTurtleSec > 0 && me.ds >= 0 && s.phase === 'live') {
         const left = settings.antiTurtleSec - (s.hostTick - me.ds) / TICK_RATE;
         hud.sub(left < 3 ? `Pop up in ${Math.max(0, left).toFixed(1)}s` : '');
@@ -1442,6 +1450,10 @@ export class Game {
       if (this.scoreboardEl.innerHTML !== html) this.scoreboardEl.innerHTML = html;
     }
     this.input.updateTouchLabels();
+  }
+
+  private respawnKey() {
+    return this.input.device === 'pad' ? 'Ⓐ' : this.input.device === 'touch' ? 'RESPAWN' : 'SPACE';
   }
 
   static qualityFor(level: keyof typeof QUALITY) {

@@ -22,6 +22,8 @@ export interface PlayerCommand {
   presses: number;
   /** cumulative reload presses */
   reloads: number;
+  /** cumulative respawn requests (Jump while dead) */
+  respawns: number;
   zoom: number;
   /** host tick the client was rendering when it sampled this (lag compensation) */
   vt: number;
@@ -76,6 +78,9 @@ export interface PlayerState {
   trigger: boolean;
   presses: number;
   reloads: number;
+  respawns: number;
+  /** pressed Jump while dead (manual respawn) */
+  respawnRequested: boolean;
   pressAt: number;
   powerups: ActivePowerup[];
   underdogUntil: number;

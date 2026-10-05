@@ -17,7 +17,7 @@ test('host + friend over BroadcastChannel: join, kill, reload & rejoin', async (
   const host = await context.newPage();
   const errors: string[] = [];
   for (const p of [host]) p.on('pageerror', (e) => errors.push(e.message));
-  await host.goto(`/?test=1&net=bc&quality=low&autostart=host&code=${code}`);
+  await host.goto(`/?test=1&net=bc&quality=low&autostart=host&respawn=auto&code=${code}`);
   await host.waitForFunction(() => (window as unknown as { __hd: HD }).__hd?.state().state === 'lobby', null, { timeout: 30_000 });
 
   const friend = await context.newPage();
