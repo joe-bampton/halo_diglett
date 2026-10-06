@@ -1,5 +1,6 @@
 import { angleDiff, clamp } from '../shared/vec';
 import { LOWER_TIME, RISE_TIME, TICK_RATE } from '../sim/constants';
+import { inFlight } from '../sim/spring';
 import type { MatchPhase, PlayerCommand, RosterEntry, SimEvent } from '../sim/types';
 import { weaponByIndex, type WeaponId } from '../sim/weapons';
 import {
@@ -34,6 +35,8 @@ export interface ViewPlayer {
   weapon: WeaponId;
   beamLen: number;
   zoom: number;
+  /** tick of their current / last Spring Jump launch (-1 none) */
+  springAt: number;
   kills: number;
   deaths: number;
   gunLevel: number;
@@ -55,6 +58,8 @@ export interface LocalInput {
   trigger: boolean;
   presses: number;
   reloads: number;
+  respawns: number;
+  springs: number;
   zoom: number;
   pick?: WeaponId;
 }
@@ -79,7 +84,7 @@ export class ClientSession {
   events: SimEvent[] = [];
   latestTick = 0;
 
-  input: LocalInput = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, zoom: 0 };
+  input: LocalInput = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, respawns: 0, springs: 0, zoom: 0 };
   myExposure = 0;
   /** host tick currently displayed for remote players */
   renderTick = 0;
@@ -208,7 +213,7 @@ export class ClientSession {
   }
 
   private blankPlayer(r: RosterEntry): ViewPlayer {
-    return { slot: r.slot, name: r.name, color: r.color, kind: r.kind, hole: 0, alive: false, exposure: 0, yaw: 0, pitch: 0, flags: 0, weapon: 'sniper', beamLen: 0, zoom: 0, kills: 0, deaths: 0, gunLevel: 0, connected: true };
+    return { slot: r.slot, name: r.name, color: r.color, kind: r.kind, hole: 0, alive: false, exposure: 0, yaw: 0, pitch: 0, flags: 0, weapon: 'sniper', beamLen: 0, zoom: 0, springAt: -1, kills: 0, deaths: 0, gunLevel: 0, connected: true };
   }
 
   private onSnap(s: SnapshotMsg) {
@@ -297,12 +302,14 @@ export class ClientSession {
     }
     // own stance prediction
     const me = this.me;
+    const mine = this.players[this.slot];
     if (me && me.al) {
       const forced = me.fs > this.hostTick;
       const want = (this.input.stand || forced) && this.phase !== 'ended';
       this.myExposure = want ? Math.min(1, this.myExposure + dt / RISE_TIME) : Math.max(0, this.myExposure - dt / LOWER_TIME);
+      // airborne on a Spring Jump: fully up until landing
+      if (mine && inFlight(mine.springAt, this.hostTick)) this.myExposure = 1;
     } else this.myExposure = 0;
-    const mine = this.players[this.slot];
     if (mine) {
       mine.exposure = this.myExposure;
       mine.yaw = this.input.yaw;
@@ -336,6 +343,7 @@ export class ClientSession {
           v.alive = (pb[4] & F_ALIVE) !== 0;
           v.weapon = weaponByIndex(pb[5]);
           v.beamLen = pb[7] / 10;
+          v.springAt = pb[9] ?? -1;
         }
         continue;
       }
@@ -353,13 +361,14 @@ export class ClientSession {
       v.hole = pb[6];
       v.beamLen = pb[7] / 10;
       v.zoom = pb[8];
+      v.springAt = pb[9] ?? -1;
     }
   }
 
   private maybeSendInput(now: number) {
     if (this.state !== 'match') return;
     const i = this.input;
-    const key = `${i.stand}|${i.trigger}|${i.presses}|${i.reloads}|${i.zoom}|${i.pick ?? ''}`;
+    const key = `${i.stand}|${i.trigger}|${i.presses}|${i.reloads}|${i.respawns}|${i.springs}|${i.zoom}|${i.pick ?? ''}`;
     const edge = key !== this.lastKey;
     const interval = this.local ? 0 : 1000 / 30;
     if (!edge && now - this.lastSend < interval) return;
@@ -372,6 +381,8 @@ export class ClientSession {
       trigger: i.trigger,
       presses: i.presses,
       reloads: i.reloads,
+      respawns: i.respawns,
+      springs: i.springs,
       zoom: i.zoom,
       vt: Math.round(this.renderTick * 100) / 100,
       pick: i.pick,

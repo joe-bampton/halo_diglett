@@ -21,3 +21,6 @@ export const PAL = {
   undersuit: 0x2a2d31,
   visor: 0xf0b030,
 };
+
+/** Gerry Sauce: light white custard. One place to change its look (spray, splats, screen overlay). */
+export const SAUCE = { base: 0xfff4d6, shade: 0xe8d9a8, gloss: 0xffffff } as const;

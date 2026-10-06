@@ -9,10 +9,11 @@ export type WeaponId =
   | 'needler'
   | 'flamethrower'
   | 'minigun'
-  | 'orbital';
+  | 'orbital'
+  | 'soaker';
 
 export type Trigger = 'semi' | 'auto' | 'burst' | 'charge' | 'beam';
-export type FireKind = 'hitscan' | 'projectile' | 'beam';
+export type FireKind = 'hitscan' | 'projectile' | 'beam' | 'spray';
 
 export interface ProjectileDef {
   speed: number;
@@ -54,6 +55,8 @@ export interface WeaponDef {
   zoom: number[];
   /** orbital designator: delayed strike at the hit point */
   strike?: { delay: number; radius: number; damage: number };
+  /** Super Soaker: one squirt drenches every other player `delay` s later for `duration` s */
+  sauce?: { delay: number; duration: number };
   bot: { preferHead: number; skill: number };
   fx: {
     tracer: 'bullet' | 'bolt' | 'rocket' | 'plasma' | 'rail' | 'flame' | 'grenade' | 'needle' | 'laser' | 'none';
@@ -151,6 +154,14 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     clip: 0, reload: 0, zoom: [2],
     bot: { preferHead: 0, skill: 1 },
     fx: { tracer: 'laser', color: 0xff2020, recoil: 0.1 },
+  },
+  soaker: {
+    id: 'soaker', name: 'Super Soaker', short: 'SOAKER', powerupOnly: true, trigger: 'semi', fireKind: 'spray',
+    interval: 0.5, spreadDeg: 0, range: 400, damage: 0, headMult: 1,
+    sauce: { delay: 1, duration: 5 },
+    clip: 0, reload: 0, zoom: [],
+    bot: { preferHead: 0, skill: 1 },
+    fx: { tracer: 'none', color: 0xfff4d6, recoil: 0.7 },
   },
 };
 

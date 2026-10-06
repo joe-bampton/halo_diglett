@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { ClientSession } from '../../src/net/client';
 import { HostSession } from '../../src/net/host';
 import { loopbackPair } from '../../src/net/transport';
+import { Rng } from '../../src/shared/rng';
 import { yawPitchOf } from '../../src/shared/vec';
 import { eyePos, hitboxOf } from '../../src/sim/hitbox';
+import { damagePlayer } from '../../src/sim/match';
 import { FakeWorld, LagHub } from './laglink';
 
 function flush() {
@@ -44,6 +46,79 @@ describe('loopback session', () => {
   });
 });
 
+describe('manual respawn over the wire', () => {
+  it('a dead player stays down until they press Jump', async () => {
+    const { host: hn, client: cn } = loopbackPair();
+    let now = 0;
+    const host = new HostSession(hn, 'LOCAL', false);
+    host.clock = () => now;
+    const client = new ClientSession(cn, { name: 'Me', color: 0x3d7bff, token: 'tok' });
+    client.clock = () => now;
+    await flush();
+    host.setSettings({ ...host.lobby.settings, orbRate: 'off', antiTurtleSec: 0, respawnMode: 'manual', respawnSec: 1 });
+    host.startMatch(5);
+    const step = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        now += 1000 / 60;
+        host.update(now);
+        client.update(now);
+        client.drainEvents();
+      }
+    };
+    step(host.match!.liveAt + 10);
+    const m = host.match!;
+    damagePlayer(m, { arena: host.arena, rng: new Rng(1), events: [] }, -1, m.players[client.slot]!, 9999, { head: false, weapon: 'sniper', kind: 'direct' });
+    step(150);
+    expect(client.me?.al).toBe(false);
+    expect(client.me?.rq).toBe(false);
+    client.input.respawns++;
+    step(4);
+    expect(client.me?.al).toBe(true);
+  });
+});
+
+describe('custom hole layouts over the wire', () => {
+  it('sends the host-built field to clients, and seats latecomers when a hole frees up', async () => {
+    const w = new FakeWorld();
+    const hub = new LagHub(w);
+    const host = new HostSession(hub, 'MAP', true);
+    host.clock = () => w.now;
+    const mk = (peer: string) => {
+      const c = new ClientSession(hub.connect(peer, 20), { name: peer, color: peer.charCodeAt(0), token: peer });
+      c.clock = () => w.now;
+      return c;
+    };
+    const A = mk('A');
+    w.advance(300);
+    host.setSettings({ ...host.lobby.settings, holeCount: 4, holeSpacing: 9, orbRate: 'off' });
+    host.addBot('jerry');
+    host.addBot('jerry');
+    w.advance(100);
+    expect(A.lobby?.map?.holes.length).toBe(4);
+    host.startMatch(9);
+    w.advance(300);
+    expect(A.start?.arena).toEqual(host.arena.layout);
+    expect(host.arena.holes.length).toBe(4);
+    // a 4th player fills the field; a 5th has to wait
+    const B = mk('B');
+    w.advance(300);
+    expect(host.match!.players[B.slot]).toBeTruthy();
+    const C = mk('C');
+    w.advance(300);
+    expect(C.state).toBe('match');
+    expect(host.match!.players[C.slot]).toBeNull();
+    // a bot leaves → C gets its hole
+    host.removeSlot(host.lobby.slots.find((s) => s.kind === 'bot')!.slot);
+    for (let i = 0; i < 40; i++) {
+      w.advance(1000 / 60);
+      host.update(w.now);
+    }
+    expect(host.match!.players[C.slot]).toBeTruthy();
+    const holes = host.match!.players.filter(Boolean).map((p) => p!.hole);
+    expect(new Set(holes).size).toBe(holes.length);
+  });
+});
+
 function lagMatch(oneWay: number, jitter: number, maxRewindMs: number) {
   const w = new FakeWorld();
   const hub = new LagHub(w);
@@ -57,7 +132,7 @@ function lagMatch(oneWay: number, jitter: number, maxRewindMs: number) {
   const A = mk('A');
   const B = mk('B');
   w.advance(500);
-  host.setSettings({ ...host.lobby.settings, orbRate: 'off', antiTurtleSec: 0, maxRewindMs, respawnSec: 1 });
+  host.setSettings({ ...host.lobby.settings, orbRate: 'off', antiTurtleSec: 0, maxRewindMs, respawnSec: 1, respawnMode: 'auto' });
   // put A and B in facing holes
   host.startMatch(7);
   const m = host.match!;

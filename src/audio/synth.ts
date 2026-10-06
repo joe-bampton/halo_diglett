@@ -314,6 +314,105 @@ const spawn: Gen = (sr) => {
   );
 };
 
+/** Spring Jump launch: a springy "boing". */
+const boing: Gen = (sr) => {
+  let ph = 0;
+  return normalize(
+    buf(sr, 0.75, (t) => {
+      const f = 110 + 340 * Math.exp(-t * 4.5) * (1 + 0.45 * Math.sin(TAU * 15 * t));
+      ph += (TAU * f) / sr;
+      return (Math.sin(ph) + 0.3 * Math.sin(ph * 2.01)) * env(t, 0.003, 0.24);
+    }),
+    0.6,
+  );
+};
+
+/** Rushing air (Spring Jump flight). */
+const whoosh: Gen = (sr) => {
+  const l1 = lp(900, sr), h1 = hp(160, sr);
+  const dur = 1.2;
+  return normalize(
+    buf(sr, dur, (t) => {
+      const k = Math.sin(Math.PI * Math.min(1, t / dur));
+      return h1(l1(noise(), 350 + 2400 * k)) * k * k;
+    }),
+    0.45,
+  );
+};
+
+/** Super Soaker pump: two quick wheezes of air. */
+const pump: Gen = (sr) => {
+  const l1 = lp(1800, sr), h1 = hp(300, sr);
+  return normalize(
+    buf(sr, 0.5, (t) => {
+      const w = (t < 0.22 ? Math.sin((Math.PI * t) / 0.22) : 0) + (t > 0.26 && t < 0.48 ? Math.sin((Math.PI * (t - 0.26)) / 0.22) : 0);
+      return h1(l1(noise())) * w * w;
+    }),
+    0.5,
+  );
+};
+
+/** A big pressurised squirt. */
+const squirt: Gen = (sr) => {
+  const l1 = lp(2600, sr), l2 = lp(500, sr);
+  return normalize(
+    buf(sr, 1.0, (t) => {
+      const e = env(t, 0.02, 0.45);
+      const gurgle = 1 + 0.5 * Math.sin(TAU * (18 + 10 * t) * t);
+      return (l1(noise()) * 0.8 + l2(noise()) * 1.6 * gurgle) * e;
+    }),
+    0.6,
+  );
+};
+
+/** Gooey splat. */
+const splat: Gen = (sr) => {
+  const l1 = lp(1400, sr), l2 = lp(220, sr);
+  let ph = 0;
+  return normalize(
+    buf(sr, 0.45, (t) => {
+      ph += (TAU * (160 - t * 220)) / sr;
+      return l1(noise(), 2400 * Math.exp(-t * 12) + 300) * env(t, 0.002, 0.07) + l2(noise()) * env(t, 0.004, 0.12) * 1.5 + Math.sin(ph) * env(t, 0.003, 0.06) * 0.6;
+    }),
+    0.65,
+  );
+};
+
+/** Pitre Mode: cracking open a can — the tab clicks, the seal cracks, the pressure goes "pssht". */
+const canOpen: Gen = (sr) => {
+  const h1 = hp(2200, sr), l1 = lp(9000, sr);
+  let ph = 0;
+  return normalize(
+    buf(sr, 0.6, (t) => {
+      ph += (TAU * 3100) / sr;
+      const click = (Math.sin(ph) * 0.6 + noise() * 0.5) * env(t, 0.0005, 0.005);
+      const crack = t > 0.03 ? noise() * env(t - 0.03, 0.0006, 0.008) : 0;
+      const hiss = t > 0.035 ? h1(l1(noise())) * env(t - 0.035, 0.008, 0.15) * 0.9 : 0;
+      return click + crack + hiss;
+    }),
+    0.7,
+  );
+};
+
+/** Pitre Mode: the can fizzes over — a hiss full of tiny bubble pops. */
+const fizz: Gen = (sr) => {
+  const h1 = hp(3000, sr), l1 = lp(8000, sr);
+  let ph = 0, f = 3000, a = 0;
+  return normalize(
+    buf(sr, 1.3, (t) => {
+      const e = env(t, 0.04, 0.45);
+      if (rnd() < 0.0035) {
+        a = 0.4 + rnd() * 0.6;
+        f = 1800 + rnd() * 3800;
+      }
+      ph += (TAU * f) / sr;
+      a *= 0.996;
+      return (h1(l1(noise())) * 0.45 + Math.sin(ph) * a * 0.5) * e;
+    }),
+    0.5,
+  );
+};
+
 export const SFX = {
   sniper,
   rifle,
@@ -343,6 +442,14 @@ export const SFX = {
   whistle,
   empty,
   spawn,
+  // new sounds go last: they share one noise sequence with the ones above
+  boing,
+  whoosh,
+  pump,
+  squirt,
+  splat,
+  canOpen,
+  fizz,
 } satisfies Record<string, Gen>;
 
 export type SfxId = keyof typeof SFX;

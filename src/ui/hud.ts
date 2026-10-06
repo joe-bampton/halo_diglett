@@ -1,5 +1,6 @@
 import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import { WEAPONS, type WeaponId } from '../sim/weapons';
+import { SAUCE } from '../render/palette';
 import { esc, hex } from './dom';
 
 export const MEDALS: Record<string, { name: string; icon: string; color: string; ann?: string }> = {
@@ -33,7 +34,7 @@ const RETICLES: Record<string, string> = {
   ring: `<circle cx="40" cy="40" r="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 4"/><circle cx="40" cy="40" r="2" fill="currentColor"/>`,
 };
 const WEAPON_RETICLE: Record<WeaponId, string> = {
-  sniper: 'dot', br: 'br', crossbow: 'dot', rpg: 'bracket', grenade: 'arc', railgun: 'bracket', hyperbeam: 'ring', needler: 'needle', flamethrower: 'ring', minigun: 'br', orbital: 'bracket',
+  sniper: 'dot', br: 'br', crossbow: 'dot', rpg: 'bracket', grenade: 'arc', railgun: 'bracket', hyperbeam: 'ring', needler: 'needle', flamethrower: 'ring', minigun: 'br', orbital: 'bracket', soaker: 'ring',
 };
 
 export interface ScoreRow {
@@ -60,7 +61,7 @@ export class Hud {
     const r = document.createElement('div');
     r.className = 'hud';
     r.innerHTML = `
-      <div class="vignette"></div><div class="flash"></div>
+      <div class="vignette"></div><div class="flash"></div><canvas class="sauce"></canvas>
       <div class="scope"><div class="zl"></div></div>
       <div class="shield"><div class="bar"><div class="fill"></div><div class="os"></div></div><div class="hp"><div></div></div></div>
       <div class="cathat">🎩 YOU ARE THE CAT IN THE HAT</div>
@@ -75,11 +76,12 @@ export class Hud {
       <div class="killfeed"></div>
       <div class="medals"></div>
       <div class="powerups"></div>
+      <div class="spectate"></div>
       <div class="score"></div>
       <div class="ammo"><div class="wname"></div><div class="count"></div><div class="pips"></div></div>`;
     parent.appendChild(r);
     this.root = r;
-    for (const k of ['vignette', 'flash', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
+    for (const k of ['vignette', 'flash', 'sauce', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'spectate', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
       this.el[k] = r.querySelector(`.${k}`) as HTMLElement;
     }
   }
@@ -216,10 +218,62 @@ export class Hud {
     const html = list
       .map((p) => {
         const d = POWERUPS[p.id];
-        return `<div class="pu" style="--pc:${hex(d.color)}"><div class="ic">${d.icon}</div><div class="t" style="transform:scaleX(${p.frac.toFixed(3)})"></div></div>`;
+        return `<div class="pu${d.held ? ' held' : ''}" style="--pc:${hex(d.color)}"><div class="ic">${d.icon}</div><div class="t" style="transform:scaleX(${p.frac.toFixed(3)})"></div></div>`;
       })
       .join('');
     if (this.el.powerups!.innerHTML !== html) this.el.powerups!.innerHTML = html;
+  }
+
+  /**
+   * Covered in Gerry Sauce: custard blobs over the screen that drip, slide down and fade as `left` (1 → 0) runs
+   * out. Drawn into one half-resolution canvas 10 times a second: a single cheap layer even on weak phones.
+   */
+  sauce(left: number) {
+    const el = this.el.sauce as HTMLCanvasElement;
+    if (left <= 0) {
+      if (this.sauceBlobs) {
+        this.sauceBlobs = null;
+        el.classList.remove('on');
+        el.getContext('2d')?.clearRect(0, 0, el.width, el.height);
+      }
+      return;
+    }
+    const now = performance.now();
+    if (!this.sauceBlobs) {
+      this.sauceBlobs = makeSauceBlobs();
+      el.dataset.blobs = String(this.sauceBlobs.length);
+      el.classList.add('on');
+      this.sauceAt = -1e9;
+    }
+    if (now - this.sauceAt < 100) return;
+    this.sauceAt = now;
+    const w = Math.max(1, Math.round(this.root.clientWidth * 0.5)), h = Math.max(1, Math.round(this.root.clientHeight * 0.5));
+    if (el.width !== w || el.height !== h) {
+      el.width = w;
+      el.height = h;
+    }
+    const ctx = el.getContext('2d');
+    if (ctx) drawSauce(ctx, w, h, this.sauceBlobs, left);
+  }
+  private sauceAt = 0;
+  private sauceBlobs: SauceBlob[] | null = null;
+
+  /** Dead: hide vitals and ammo. */
+  dead(on: boolean) {
+    this.root.classList.toggle('dead', on);
+  }
+
+  /** Spectator panel (who you are watching), or null to hide it. */
+  spectate(info: { name: string; color: number; weapon: string; kills: number; deaths: number; view: 'first' | 'third'; tags: string[]; hint: string } | null) {
+    const el = this.el.spectate!;
+    this.root.classList.toggle('first', info?.view === 'first');
+    el.classList.toggle('on', !!info);
+    if (!info) return;
+    const html = `<div class="lbl">Spectating · ${info.view === 'first' ? '1st' : '3rd'} person</div>
+      <div class="who"><span class="arr">◀</span><span class="nm" style="color:${hex(info.color)}">${esc(info.name)}</span><span class="arr">▶</span></div>
+      <div class="info">${esc(info.weapon)} · ${info.kills} K / ${info.deaths} D${info.tags.length ? ` · ${info.tags.map(esc).join(' · ')}` : ''}</div>
+      <div class="hint">${esc(info.hint)}</div>`;
+    if (el.innerHTML !== html) el.innerHTML = html;
   }
 
   timer(text: string, mode: string) {
@@ -251,6 +305,89 @@ export class Hud {
       .join('');
     if (this.el.score!.innerHTML !== html) this.el.score!.innerHTML = html;
   }
+}
+
+/** A fresh, random set of custard blobs (with drips) covering the screen. */
+interface SauceBlob {
+  /** centre (fraction of the screen), radius (fraction of the short side) */
+  x: number;
+  y: number;
+  r: number;
+  /** clean-up order: higher fades first */
+  f: number;
+  /** how far it slides down while clearing (fraction of the height) */
+  drip: number;
+  /** wobble of the outline */
+  p1: number;
+  p2: number;
+  drips: { at: number; w: number; len: number }[];
+}
+
+function makeSauceBlobs(): SauceBlob[] {
+  const r = (a: number, b: number) => a + Math.random() * (b - a);
+  return Array.from({ length: 13 }, (_, i) => ({
+    // bigger blobs near the middle
+    x: i < 4 ? r(0.3, 0.7) : r(-0.05, 1.05),
+    y: i < 4 ? r(0.25, 0.65) : r(-0.05, 0.95),
+    r: i < 4 ? r(0.11, 0.17) : r(0.045, 0.12),
+    f: r(0, 0.85),
+    drip: r(0.04, 0.18),
+    p1: r(0, 6.28),
+    p2: r(0, 6.28),
+    drips: Array.from({ length: 1 + Math.floor(Math.random() * 3) }, () => ({ at: r(-0.55, 0.45), w: r(0.12, 0.26), len: r(0.5, 1.4) })),
+  }));
+}
+
+const css = (hexv: number, a = 1) => `rgba(${(hexv >> 16) & 255},${(hexv >> 8) & 255},${hexv & 255},${a})`;
+
+function drawSauce(ctx: CanvasRenderingContext2D, w: number, h: number, blobs: SauceBlob[], k: number) {
+  ctx.clearRect(0, 0, w, h);
+  // a thin custard film, thickest at the edges
+  const film = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.2, w / 2, h / 2, Math.hypot(w, h) * 0.55);
+  film.addColorStop(0, css(SAUCE.base, 0));
+  film.addColorStop(1, css(SAUCE.base, 0.6 * k));
+  ctx.fillStyle = film;
+  ctx.fillRect(0, 0, w, h);
+  const s = Math.min(w, h);
+  for (const b of blobs) {
+    const a = Math.min(1, Math.max(0, k * 1.9 - b.f));
+    if (a <= 0) continue;
+    const R = b.r * s;
+    const cx = b.x * w, cy = b.y * h + (1 - k) * b.drip * h;
+    ctx.globalAlpha = a;
+    // drips hang from the bottom and stretch as it clears
+    for (const d of b.drips) {
+      const dw = d.w * R, dl = d.len * R * (0.5 + (1 - k) * 1.3), dx = cx + d.at * R;
+      const g = ctx.createLinearGradient(dx - dw / 2, 0, dx + dw / 2, 0);
+      g.addColorStop(0, css(SAUCE.shade));
+      g.addColorStop(0.4, css(SAUCE.base));
+      g.addColorStop(1, css(SAUCE.shade));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(dx - dw / 2, cy);
+      ctx.lineTo(dx - dw / 2, cy + R * 0.5 + dl - dw / 2);
+      ctx.arc(dx, cy + R * 0.5 + dl - dw / 2, dw / 2, Math.PI, 0, true);
+      ctx.lineTo(dx + dw / 2, cy);
+      ctx.fill();
+    }
+    // the dollop: a wobbly ellipse, glossy top-left, darker rim
+    ctx.beginPath();
+    for (let i = 0; i <= 28; i++) {
+      const t = (i / 28) * Math.PI * 2;
+      const rr = R * (1 + 0.12 * Math.sin(3 * t + b.p1) + 0.07 * Math.sin(5 * t + b.p2));
+      ctx.lineTo(cx + Math.cos(t) * rr, cy + Math.sin(t) * rr * 0.82);
+    }
+    ctx.closePath();
+    const g = ctx.createRadialGradient(cx - R * 0.36, cy - R * 0.36, 0, cx, cy, R * 1.12);
+    g.addColorStop(0, css(SAUCE.gloss));
+    g.addColorStop(0.08, css(SAUCE.gloss));
+    g.addColorStop(0.24, css(SAUCE.base));
+    g.addColorStop(0.62, css(SAUCE.base));
+    g.addColorStop(0.95, css(SAUCE.shade));
+    ctx.fillStyle = g;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
 }
 
 export function scoreboardHtml(rows: ScoreRow[], gunGame: boolean): string {

@@ -108,6 +108,8 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 .settings { display: flex; flex-direction: column; gap: 4px; }
 .settings .group { margin-top: 10px; font-size: 13px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--hud-dim); border-bottom: 1px solid var(--line); padding-bottom: 3px; }
 .field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: center; padding: 5px 0; }
+.gfx-adv { margin: 6px 0 2px; border: 1px solid var(--line); border-radius: 4px; padding: 0 10px 8px; background: rgba(13, 27, 42, 0.35); }
+.gfx-adv > summary { cursor: pointer; padding: 8px 0; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; font-size: 13px; color: var(--hud); }
 .field label { font-size: 16px; font-weight: 600; }
 .field .help { grid-column: 1 / -1; font-size: 13px; color: var(--muted); margin-top: -4px; }
 .field .val { display: flex; align-items: center; gap: 8px; }
@@ -116,6 +118,14 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 .chip { font-size: 14px; padding: 6px 10px; border-radius: 16px; border: 1px solid var(--line); background: #0d1b2a; color: var(--muted); cursor: pointer; }
 .chip.on { background: rgba(63, 182, 255, 0.25); border-color: var(--accent); color: var(--text); }
 .chip .ord { font-weight: 700; color: var(--gold); margin-right: 4px; }
+.chip .ic { margin-right: 5px; display: inline-block; min-width: 1em; text-align: center; }
+.chip[style*="--cc"].on { border-color: var(--cc); box-shadow: inset 0 0 0 1px var(--cc), 0 0 6px color-mix(in srgb, var(--cc) 45%, transparent); }
+.chip[style*="--cc"].on .ic { color: var(--cc); }
+.field .bulk { display: flex; gap: 6px; justify-content: flex-end; }
+.mappreview svg { width: 100%; max-width: 280px; aspect-ratio: 1; display: block; margin: 0 auto; }
+.mappreview circle.on { fill: #d8dde2; stroke: #3a3f44; stroke-width: 0.4; }
+.mappreview circle.off { fill: #6d7378; opacity: 0.55; }
+.mappreview .cap { text-align: center; font-size: 13px; color: var(--muted); margin-top: 6px; }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .note { color: var(--muted); font-size: 14px; }
 .err { color: #ffb4b4; }
@@ -182,9 +192,14 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 .hud .vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 55%, rgba(255, 0, 0, 0.45)); opacity: 0; transition: opacity 0.2s; }
 .hud .flash { position: absolute; inset: 0; background: rgba(255, 255, 255, 0.4); opacity: 0; }
 .hud .flash.go { animation: dmgfade 0.35s ease-out; }
+/* Gerry Sauce on your screen: --k goes 1 → 0 as it clears; each blob fades at its own point (--f) and slides down (--drip) */
+.hud .sauce { position: absolute; inset: 0; width: 100%; height: 100%; display: none; pointer-events: none; }
+.hud .sauce.on { display: block; }
 .hud .powerups { position: absolute; left: 50%; transform: translateX(-50%); bottom: max(18px, env(safe-area-inset-bottom)); display: flex; gap: 10px; }
 .hud .pu { display: flex; flex-direction: column; align-items: center; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: #fff; }
 .hud .pu .ic { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 18px; border: 2px solid var(--pc); box-shadow: 0 0 10px var(--pc); background: rgba(0,0,0,0.35); }
+.hud .pu.held .ic { animation: puheld 1.1s ease-in-out infinite; }
+@keyframes puheld { 50% { box-shadow: 0 0 22px var(--pc); transform: scale(1.08); } }
 .hud .pu .t { height: 3px; width: 34px; background: var(--pc); margin-top: 3px; transform-origin: left; }
 .hud .scope { position: absolute; inset: 0; display: none; background: radial-gradient(circle at center, transparent 0, transparent min(34vh, 34vw), rgba(0, 0, 0, 0.94) calc(min(34vh, 34vw) + 2px)); }
 .hud .scope.on { display: block; }
@@ -204,6 +219,26 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 .scoreboard td { padding: 7px 10px; border-top: 1px solid var(--line); }
 .scoreboard tr.me td { background: rgba(63, 182, 255, 0.15); }
 .pip { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 8px; vertical-align: -1px; }
+
+/* spectating while dead */
+.hud.dead .shield, .hud.dead .ammo, .hud.dead .powerups, .hud.dead .charge, .hud.dead .vignette { display: none; }
+.hud.dead:not(.first) .reticle { visibility: hidden; }
+.hud .spectate { position: absolute; left: 50%; bottom: calc(max(16px, env(safe-area-inset-bottom)) + 12px); transform: translateX(-50%); text-align: center; display: none; padding: 8px 18px 10px; background: rgba(6, 20, 34, 0.55); border: 1px solid var(--hud-dim); border-radius: 4px; max-width: min(640px, 92vw); }
+.hud .spectate.on { display: block; }
+.hud .spectate .lbl { font-size: 12px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--hud-dim); }
+.hud .spectate .who { font-size: 24px; font-weight: 700; letter-spacing: 0.08em; display: flex; gap: 14px; justify-content: center; align-items: center; }
+.hud .spectate .arr { font-size: 16px; color: var(--hud-dim); }
+.hud .spectate .info { font-size: 14px; color: #fff; }
+.hud .spectate .hint { font-size: 12px; color: var(--hud-dim); margin-top: 3px; }
+.tspring { display: none; width: 72px; height: 72px; font-size: 26px; left: calc(max(16px, env(safe-area-inset-left)) + 130px); bottom: calc(max(16px, env(safe-area-inset-bottom)) + 120px); border-color: #3cffd0; box-shadow: 0 0 12px rgba(60, 255, 208, 0.5); }
+.touch.canspring .tspring { display: grid; }
+.tprev, .tnext, .tview { display: none; width: 64px; height: 64px; font-size: 22px; }
+.touch.spec .tfire, .touch.spec .tzoom, .touch.spec .treload { display: none; }
+.touch.spec .tprev, .touch.spec .tnext, .touch.spec .tview { display: grid; }
+.tprev { right: calc(max(16px, env(safe-area-inset-right)) + 170px); bottom: calc(max(16px, env(safe-area-inset-bottom)) + 120px); }
+.tnext { right: calc(max(16px, env(safe-area-inset-right)) + 20px); bottom: calc(max(16px, env(safe-area-inset-bottom)) + 120px); }
+.tview { right: calc(max(16px, env(safe-area-inset-right)) + 95px); bottom: calc(max(16px, env(safe-area-inset-bottom)) + 200px); }
+@media (pointer: coarse) { .hud .spectate { bottom: auto; top: calc(max(14px, env(safe-area-inset-top)) + 64px); } }
 
 /* pause menu */
 .pause { z-index: 30; justify-content: center; }
@@ -232,6 +267,7 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 @media (orientation: portrait) and (pointer: coarse) { .rotate.ingame { display: grid; } }
 .toast { position: absolute; left: 50%; top: 20px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); padding: 10px 16px; border-radius: 4px; z-index: 50; font-size: 16px; }
 .perf { position: absolute; left: 6px; bottom: 6px; font: 11px monospace; color: #9fe7ff; z-index: 40; pointer-events: none; text-shadow: 0 0 2px #000; }
+.fps { position: absolute; right: max(16px, env(safe-area-inset-right)); top: calc(max(14px, env(safe-area-inset-top)) + 38px); font: 600 12px monospace; color: #9fe7ff; z-index: 40; pointer-events: none; text-shadow: 0 0 2px #000, 0 0 4px #000; }
 @media (max-width: 700px), (max-height: 500px) {
   .hud .ammo .count { font-size: 34px; }
   .hud .score { width: 170px; bottom: calc(max(16px, env(safe-area-inset-bottom)) + 70px); }

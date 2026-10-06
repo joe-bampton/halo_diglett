@@ -2,7 +2,7 @@ import type { PowerUpId } from './powerups';
 import type { Settings } from './settings';
 import type { WeaponId } from './weapons';
 
-export type BotDifficulty = 'recruit' | 'normal' | 'heroic' | 'legendary';
+export type BotDifficulty = 'jerry' | 'recruit' | 'normal' | 'heroic' | 'legendary' | 'topover';
 
 export interface RosterEntry {
   slot: number;
@@ -22,6 +22,10 @@ export interface PlayerCommand {
   presses: number;
   /** cumulative reload presses */
   reloads: number;
+  /** cumulative respawn requests (Jump while dead) */
+  respawns: number;
+  /** cumulative Spring Jump launches (double-press Jump) */
+  springs: number;
   zoom: number;
   /** host tick the client was rendering when it sampled this (lag compensation) */
   vt: number;
@@ -76,6 +80,17 @@ export interface PlayerState {
   trigger: boolean;
   presses: number;
   reloads: number;
+  respawns: number;
+  /** pressed Jump while dead (manual respawn) */
+  respawnRequested: boolean;
+  springs: number;
+  /** tick of the current / last Spring Jump launch (-1 none) */
+  springAt: number;
+  /** Gerry Sauce: when it hit (-1 never) and when it's gone */
+  saucedAt: number;
+  saucedUntil: number;
+  /** last time a shot whizzed past them (Pitre "Bitch please"; host only) */
+  nearAt: number;
   pressAt: number;
   powerups: ActivePowerup[];
   underdogUntil: number;
@@ -114,6 +129,8 @@ export interface Projectile {
   bounces: number;
   target: number;
   fuseAt: number;
+  /** players it has already whizzed past (bitmask by slot; Pitre near misses) */
+  near?: number;
 }
 
 export interface Orb {
@@ -149,6 +166,8 @@ export interface MatchState {
   orbs: Orb[];
   nextOrbAt: number;
   strikes: Strike[];
+  /** Gerry Sauce squirts in the air: everyone but the owner gets drenched `at` */
+  sauces: { id: number; owner: number; at: number }[];
   history: Uint8Array;
   leader: number;
   winner: number;
@@ -176,4 +195,14 @@ export type SimEvent =
   | { k: 'ann'; t: number; key: string; p: number }
   | { k: 'medal'; t: number; p: number; id: string }
   | { k: 'end'; t: number; winner: number }
-  | { k: 'forced'; t: number; p: number };
+  | { k: 'forced'; t: number; p: number }
+  /** a player yells a voice line (e.g. a Jerry bot's "Suppressing fire!") */
+  | { k: 'callout'; t: number; p: number; key: string }
+  /** a Spring Jump launch (lands SPRING_TICKS later) */
+  | { k: 'spring'; t: number; p: number }
+  /** a Super Soaker squirt — the sauce lands on everyone else `at` */
+  | { k: 'sauce'; t: number; id: number; p: number; at: number }
+  /** someone got covered in Gerry Sauce until `until` */
+  | { k: 'sauced'; t: number; v: number; a: number; until: number }
+  /** a shot whizzed past `v` without hitting them (Pitre Mode voices only) */
+  | { k: 'near'; t: number; a: number; v: number; w: WeaponId };

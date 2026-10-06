@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Rng, hash01 } from '../shared/rng';
-import { FENCE_RADIUS, MOUTH_R, RIM_H, RIM_OUT, WELL_DEPTH, type Arena } from '../sim/arena';
+import { MOUTH_R, RIM_H, RIM_OUT, WELL_DEPTH, type Arena } from '../sim/arena';
 import { PAL } from './palette';
+import { DISPLAY_COLOR } from './shaderUtil';
 import type { QualityPreset } from './quality';
 
 const col = (hex: number) => new THREE.Color(hex);
@@ -29,7 +30,8 @@ function fbm(x: number, z: number, oct = 3, seed = 0): number {
 export function farHeight(arena: Arena, x: number, z: number): number {
   const r = Math.hypot(x, z);
   let y = arena.baseHeight(x, z);
-  if (r > 120) y += (fbm(x * 0.012, z * 0.012, 3, 5) - 0.5) * 30 * Math.min(1, (r - 120) / 80);
+  const r0 = Math.max(120, arena.fenceRadius + 40);
+  if (r > r0) y += (fbm(x * 0.012, z * 0.012, 3, 5) - 0.5) * 30 * Math.min(1, (r - r0) / 80);
   const t = (r - 430) / 420;
   if (t > 0) {
     const ang = Math.atan2(z, x);
@@ -43,7 +45,7 @@ export function farHeight(arena: Arena, x: number, z: number): number {
 
 export function terrainHeight(arena: Arena, x: number, z: number): number {
   const r = Math.hypot(x, z);
-  if (r < 100) return arena.groundAt(x, z);
+  if (r < Math.max(100, arena.fenceRadius + 20)) return arena.groundAt(x, z);
   return farHeight(arena, x, z);
 }
 
@@ -70,6 +72,7 @@ export function buildSky(): THREE.Mesh {
         gl_Position = p.xyww;
       }`,
     fragmentShader: /* glsl */ `
+      ${DISPLAY_COLOR}
       uniform vec3 top; uniform vec3 mid; uniform vec3 horizon; uniform vec3 sunDir; uniform vec3 sunCol; uniform float time;
       varying vec3 vDir;
       float h(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
@@ -89,7 +92,7 @@ export function buildSky(): THREE.Mesh {
         float s = max(dot(d, sunDir), 0.0);
         c += sunCol * (pow(s, 900.0) * 3.0 + pow(s, 12.0) * 0.18);
         if (d.y < 0.0) c = horizon;
-        gl_FragColor = vec4(c, 1.0);
+        gl_FragColor = displayColor(vec4(c, 1.0));
       }`,
   });
   const m = new THREE.Mesh(geo, mat);
@@ -101,10 +104,14 @@ export function buildSky(): THREE.Mesh {
 // --- terrain (single polar grid out to the mountains) ----------------------------------------
 export function buildTerrain(arena: Arena, q: QualityPreset): THREE.Mesh {
   const rings: number[] = [];
+  // fine rings across the fenced field, coarser out to the mountains
+  const dense = Math.max(55, arena.fenceRadius + 3);
+  const mid = dense + 65;
+  const fine = 0.7 * Math.min(1.6, Math.max(1, arena.scale * 0.7));
   let r = 0;
   while (r < 900) {
     rings.push(r);
-    r += r < 55 ? 0.7 : r < 120 ? 1.6 + (r - 55) * 0.03 : r < 400 ? 7 : 20;
+    r += r < dense ? fine : r < mid ? 1.6 + (r - dense) * 0.03 : r < 400 ? 7 : 20;
   }
   const segs = q.angularSegs;
   const verts: number[] = [];
@@ -152,7 +159,7 @@ export function buildTerrain(arena: Arena, q: QualityPreset): THREE.Mesh {
   const pushTri = (a: number, b: number, c: number) => {
     const cx = (verts[a * 3]! + verts[b * 3]! + verts[c * 3]!) / 3;
     const cz = (verts[a * 3 + 2]! + verts[b * 3 + 2]! + verts[c * 3 + 2]!) / 3;
-    if (Math.hypot(cx, cz) < 50 && holeCut(cx, cz)) return;
+    if (Math.hypot(cx, cz) < arena.fenceRadius - 2 && holeCut(cx, cz)) return;
     idx.push(a, c, b);
   };
   for (let j = 0; j < segs; j++) pushTri(0, vi(1, j), vi(1, j + 1));
@@ -274,7 +281,7 @@ export function buildFence(arena: Arena): THREE.Group {
   const tip = new THREE.ConeGeometry(0.072, 0.13, 4).rotateY(Math.PI / 4).translate(0, 1.0, 0);
   tip.scale(1, 1, 0.5);
   const pg = mergeGeometries([picket.toNonIndexed(), tip.toNonIndexed()])!;
-  const R = FENCE_RADIUS;
+  const R = arena.fenceRadius;
   const spacing = 0.2;
   const count = Math.floor((Math.PI * 2 * R) / spacing);
   const gaps = [0.3, 2.4, 4.3]; // radians where the fence has openings
@@ -297,7 +304,7 @@ export function buildFence(arena: Arena): THREE.Group {
   pickets.castShadow = true;
   g.add(pickets);
   // rails
-  const railSegs = 180;
+  const railSegs = Math.round(180 * Math.max(1, arena.scale));
   const rail = new THREE.BoxGeometry(1, 0.07, 0.03);
   const rails = new THREE.InstancedMesh(rail, mat, railSegs * 2);
   k = 0;
@@ -352,7 +359,7 @@ export function buildTrees(arena: Arena, q: QualityPreset): THREE.InstancedMesh 
   let guard = 0;
   while (k < q.trees && guard++ < 5000) {
     const a = rng.range(0, Math.PI * 2);
-    const r = FENCE_RADIUS + 5 + Math.pow(rng.next(), 0.8) * 90;
+    const r = arena.fenceRadius + 5 + Math.pow(rng.next(), 0.8) * 90;
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
     // clusters: skip some areas
     if (vnoise(x * 0.04, z * 0.04, 3) < 0.38) continue;
@@ -374,7 +381,7 @@ export function buildFlowers(arena: Arena): THREE.InstancedMesh {
   const petal = new THREE.CylinderGeometry(0.075, 0.03, 0.1, 6).translate(0, 0.24, 0);
   const stem = new THREE.CylinderGeometry(0.01, 0.01, 0.22, 3).translate(0, 0.11, 0);
   const g = mergeGeometries([petal.toNonIndexed(), stem.toNonIndexed()])!;
-  const count = 380;
+  const count = Math.round(380 * Math.min(3, Math.max(1, arena.scale)));
   const mesh = new THREE.InstancedMesh(g, new THREE.MeshLambertMaterial({ color: 0xffffff }), count);
   const rng = new Rng(11);
   const m4 = new THREE.Matrix4();
@@ -384,7 +391,7 @@ export function buildFlowers(arena: Arena): THREE.InstancedMesh {
     // cluster along the fence and near a few holes
     const nearFence = rng.chance(0.7);
     const a = rng.range(0, Math.PI * 2);
-    const r = nearFence ? FENCE_RADIUS - rng.range(0.4, 3) : rng.range(6, 46);
+    const r = nearFence ? arena.fenceRadius - rng.range(0.4, 3) : rng.range(6, arena.playRadius + 6);
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
     const h = arena.nearestHole(x, z);
     if (h && Math.hypot(h.x - x, h.z - z) < RIM_OUT + 0.3) continue;
@@ -475,7 +482,7 @@ export class Grass {
       const d = 1.6 + Math.pow(rng.next(), 1.7) * R;
       const a = rng.range(0, Math.PI * 2);
       const x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d;
-      if (Math.hypot(x, z) > FENCE_RADIUS + 12) continue;
+      if (Math.hypot(x, z) > this.arena.fenceRadius + 12) continue;
       const h = this.arena.nearestHole(x, z);
       if (h && Math.hypot(h.x - x, h.z - z) < RIM_OUT + 0.05) continue;
       const sc = rng.range(0.7, 1.15) * (1 + (d / R) * 0.5) * (d < 6 ? 0.7 : 1);

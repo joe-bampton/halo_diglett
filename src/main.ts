@@ -2,10 +2,14 @@ import './ui/styles.css';
 import { App } from './app/app';
 import { audio } from './audio/audio';
 import { voice } from './audio/voice';
+import { BOT_PROFILES } from './bots/brain';
 import type { BotDifficulty } from './sim/types';
 import type { Settings } from './sim/settings';
 import type { WeaponId } from './sim/weapons';
 import { eyePos, hitboxOf } from './sim/hitbox';
+import { damagePlayer, grantPowerup } from './sim/match';
+import type { PowerUpId } from './sim/powerups';
+import { springLift } from './sim/spring';
 import { yawPitchOf } from './shared/vec';
 
 const root = document.getElementById('app')!;
@@ -25,17 +29,24 @@ if (!webglOk()) {
   const app = new App(root);
   const params = new URLSearchParams(location.search);
   const auto = params.get('autostart');
+  // match settings from the URL (quick testing): weapon, orbs, pitre, mode, respawn
+  const settings: Partial<Settings> = {};
+  if (params.get('weapon')) settings.weapon = params.get('weapon') as WeaponId;
+  if (params.get('orbs')) settings.orbRate = params.get('orbs') as Settings['orbRate'];
+  if (params.get('pitre')) settings.pitre = params.get('pitre') !== '0';
+  if (params.get('mode')) settings.weaponMode = params.get('mode') as Settings['weaponMode'];
+  if (params.get('respawn')) settings.respawnMode = params.get('respawn') === 'auto' ? 'auto' : 'manual';
+  if (params.get('holes')) settings.holeCount = Number(params.get('holes'));
+  if (params.get('spacing')) settings.holeSpacing = Number(params.get('spacing'));
   if (auto === 'offline') {
     const bots = Number(params.get('bots') ?? 3);
-    const diffs: BotDifficulty[] = Array.from({ length: Math.min(6, bots) }, (_, i) => (['normal', 'heroic', 'legendary', 'recruit'] as const)[i % 4]);
-    const settings: Partial<Settings> = {};
-    if (params.get('weapon')) settings.weapon = params.get('weapon') as WeaponId;
-    if (params.get('orbs')) settings.orbRate = params.get('orbs') as Settings['orbRate'];
-    if (params.get('pitre')) settings.pitre = true;
-    if (params.get('mode')) settings.weaponMode = params.get('mode') as Settings['weaponMode'];
+    // botdiff=jerry or botdiff=jerry,topover (cycled); default mixes normal → recruit
+    const picked = (params.get('botdiff') ?? '').split(',').filter((d): d is BotDifficulty => d in BOT_PROFILES);
+    const cycle: BotDifficulty[] = picked.length ? picked : ['normal', 'heroic', 'legendary', 'recruit'];
+    const diffs = Array.from({ length: Math.min(6, bots) }, (_, i) => cycle[i % cycle.length]!);
     app.startOffline({ bots: diffs, settings, autostart: true });
   } else if (auto === 'host') {
-    void app.hostOnline(params.get('code') ?? undefined);
+    void app.hostOnline(params.get('code') ?? undefined, settings);
   } else app.route();
 
   if (params.has('test')) {
@@ -67,12 +78,32 @@ if (!webglOk()) {
         const me = s?.players[s.slot], t = s?.players[slot];
         if (!g || !s || !me || !t) return false;
         const ar = g.arena;
-        const eye = eyePos(ar.holes[me.hole]!, s.myExposure);
-        const hb = hitboxOf(ar.holes[t.hole]!, t.exposure);
+        const eye = eyePos(ar.holes[me.hole]!, s.myExposure, springLift(me.springAt, s.hostTick));
+        const hb = hitboxOf(ar.holes[t.hole]!, t.exposure, 1, springLift(t.springAt, s.renderTick));
         const a = yawPitchOf({ x: hb.head.x - eye.x, y: hb.head.y - eye.y, z: hb.head.z - eye.z });
         g.input.s.yaw = a.yaw;
         g.input.s.pitch = a.pitch;
         return t.exposure > 0.9 && s.myExposure > 0.95;
+      },
+      /** kill a player (default: me) on the host — offline / host only */
+      kill(slot?: number) {
+        const target = slot ?? app.session?.slot ?? -1;
+        app.host?.debugApply((m, ctx) => {
+          const p = m.players[target];
+          if (p?.alive) damagePlayer(m, ctx, -1, p, 9999, { head: false, weapon: 'sniper', kind: 'direct' });
+        });
+      },
+      /** give a power-up (default: to me) on the host — offline / host only */
+      grant(id: PowerUpId, slot?: number) {
+        const target = slot ?? app.session?.slot ?? -1;
+        app.host?.debugApply((m, ctx) => {
+          const p = m.players[target];
+          if (p?.alive) grantPowerup(m, ctx, p, id);
+        });
+      },
+      /** press Jump while dead (manual respawn) */
+      respawn() {
+        if (app.game) app.game.input.s.respawns++;
       },
       fire() {
         const g = app.game;
@@ -92,6 +123,8 @@ if (!webglOk()) {
           frames: app.game?.frames ?? 0,
           events: app.game?.eventCounts ?? {},
           render: app.game?.renderInfo(),
+          spec: app.game?.specState(),
+          mode: app.game?.input.mode,
           lobby: s?.lobby,
         };
       },

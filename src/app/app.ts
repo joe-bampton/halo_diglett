@@ -10,13 +10,14 @@ import type { LobbyState } from '../net/protocol';
 import { MuxHostNet, loopbackPair, type ClientNet, type HostNet, type VoiceLink } from '../net/transport';
 import { Backdrop } from '../render/backdrop';
 import { Game } from '../render/game';
-import { QUALITY, detectQuality, type QualityLevel } from '../render/quality';
+import { GFX_FIELDS, QUALITY, QUALITY_LABEL, QUALITY_LEVELS, autoQuality, detectQuality, presetChoice, resolveQuality, type GfxOverrides, type QualityLevel } from '../render/quality';
 import { MAX_BOTS, MAX_HUMANS } from '../sim/constants';
-import { DEFAULT_SETTINGS, sanitizeSettings, type Settings } from '../sim/settings';
+import { DEFAULT_SETTINGS, migrateSavedSettings, sanitizeSettings, settingsForStorage, type Settings } from '../sim/settings';
 import type { BotDifficulty } from '../sim/types';
 import { WEAPONS, type WeaponId } from '../sim/weapons';
 import { esc, hex, toast } from '../ui/dom';
 import { MEDALS } from '../ui/hud';
+import { mapPreviewHtml } from '../ui/mapPreview';
 import { renderSettings } from '../ui/settingsForm';
 
 interface Profile {
@@ -57,7 +58,7 @@ function token(): string {
 
 function loadSettings(): Settings {
   try {
-    return sanitizeSettings(JSON.parse(localStorage.getItem('hd.settings') ?? 'null') ?? DEFAULT_SETTINGS);
+    return migrateSavedSettings(JSON.parse(localStorage.getItem('hd.settings') ?? 'null') ?? DEFAULT_SETTINGS);
   } catch {
     return sanitizeSettings(DEFAULT_SETTINGS);
   }
@@ -160,7 +161,7 @@ export class App {
     if (this.game || this.backdrop) return;
     if (params.has('test') ? !params.has('backdrop') : params.has('nobackdrop')) return;
     try {
-      this.backdrop = new Backdrop(this.gameLayer, QUALITY[this.quality === 'high' ? 'medium' : this.quality]);
+      this.backdrop = new Backdrop(this.gameLayer, QUALITY[this.quality === 'high' || this.quality === 'ultra' ? 'medium' : this.quality]);
       this.backdrop.start();
     } catch (e) {
       console.warn('backdrop unavailable', e);
@@ -249,7 +250,7 @@ export class App {
     this.startHostLoop();
   }
 
-  async hostOnline(forceCode?: string) {
+  async hostOnline(forceCode?: string, settings: Partial<Settings> = {}) {
     this.cleanup();
     const code = forceCode ?? makeRoomCode();
     this.setScreen(`<div class="title-logo" style="margin-top:30vh"><div class="t1">CREATING LOBBY…</div></div>`);
@@ -269,7 +270,7 @@ export class App {
     const { host: hn, client: cn } = loopbackPair();
     mux.add(hn);
     for (const n of nets) mux.add(n);
-    this.host = new HostSession(mux, code, true, loadSettings());
+    this.host = new HostSession(mux, code, true, { ...loadSettings(), ...settings });
     this.host.onChange = () => this.persistSettings();
     this.attachClient(cn, mux.voice);
     history.replaceState(null, '', `${location.pathname}${location.search}#/host/${code}`);
@@ -355,7 +356,7 @@ export class App {
   private persistSettings() {
     if (!this.host) return;
     try {
-      localStorage.setItem('hd.settings', JSON.stringify(this.host.lobby.settings));
+      localStorage.setItem('hd.settings', JSON.stringify(settingsForStorage(this.host.lobby.settings)));
     } catch {
       /* ignore */
     }
@@ -397,6 +398,7 @@ export class App {
     if (!force && this.screen?.classList.contains('lobby-screen') && key === this.lastLobbyKey) {
       // only settings changed → refresh the form in place
       if (!isHost) this.settingsView?.update(lobby.settings);
+      this.renderMapPreview(lobby);
       return;
     }
     this.lastLobbyKey = key;
@@ -444,6 +446,7 @@ export class App {
             <div class="field"><label>Armor</label><div class="swatches">${PLAYER_COLORS.map((c) => `<span class="swatch ${c === (me?.color ?? this.profile.color) ? 'on' : ''}" data-c="${c}" style="background:${hex(c)}"></span>`).join('')}</div></div>
             ${choice ? `<div class="field"><label>Weapon</label><select class="pick">${lobby.settings.allowedWeapons.map((w) => `<option value="${w}" ${me?.pick === w ? 'selected' : ''}>${WEAPONS[w].name}</option>`).join('')}</select></div>` : ''}
           </div>
+          <div class="card"><h3>Map</h3><div class="mappreview"></div></div>
           <div class="row">
             ${isHost ? `<button class="btn primary start" style="flex:1">${lobby.phase === 'match' ? 'Match in progress' : 'Start match'}</button>` : `<div class="note" style="flex:1">Waiting for the host to start…</div>`}
             <button class="btn small leave">Leave</button>
@@ -454,6 +457,7 @@ export class App {
     const scr = this.setScreen(html, 'lobby-screen');
     scr.scrollTop = scrollTop;
     this.settingsView = renderSettings(scr.querySelector('.settings-root')!, lobby.settings, isHost, (ns) => this.host?.setSettings(ns));
+    this.renderMapPreview(lobby);
     scr.querySelector('.copy')?.addEventListener('click', () => {
       void navigator.clipboard?.writeText(link).then(
         () => toast('Invite link copied!'),
@@ -499,6 +503,16 @@ export class App {
     if (voice.available) this.watchVoice(() => this.refreshLobbyVoice(scr));
   }
 
+  private renderMapPreview(lobby: LobbyState) {
+    const el = this.screen?.querySelector<HTMLElement>('.mappreview');
+    if (!el) return;
+    const html = mapPreviewHtml(lobby.map, lobby.slots.length);
+    if (el.dataset.html !== html) {
+      el.dataset.html = html;
+      el.innerHTML = html;
+    }
+  }
+
   /** Update mute buttons and talking indicators in place (no re-render). */
   private refreshLobbyVoice(scr: HTMLElement) {
     const players = new Map(voice.players().map((p) => [p.slot, p]));
@@ -532,9 +546,10 @@ export class App {
     this.stopGame();
     this.clearScreen();
     this.killBackdrop();
-    const q = QUALITY[this.quality];
-    this.game = new Game(this.gameLayer, s, q, { onMenu: () => this.toggleMenu(), isMenuOpen: () => !!this.menuEl });
+    const opts = loadOptions();
+    this.game = new Game(this.gameLayer, s, resolveQuality(this.quality, opts.gfx), { onMenu: () => this.toggleMenu(), isMenuOpen: () => !!this.menuEl });
     this.game.input.opts = { ...this.game.input.opts };
+    this.game.setFpsCounter(opts.fpsCounter);
     audio.hrtf = this.quality !== 'low';
     if (this.host && params.has('timescale')) this.host.timescale = Number(params.get('timescale')) || 1;
     this.game.start();
@@ -701,7 +716,12 @@ export class App {
         <div class="field"><label>Invert look</label><div class="val"><input type="checkbox" data-k="invertY" ${opts.invertY ? 'checked' : ''}></div></div>
         <div class="field"><label>Stand up (Space)</label><select data-k="standMode"><option value="hold" ${opts.standMode === 'hold' ? 'selected' : ''}>Hold</option><option value="toggle" ${opts.standMode === 'toggle' ? 'selected' : ''}>Toggle</option></select></div>
         <h3 style="margin-top:14px">Graphics</h3>
-        <div class="field"><label>Quality</label><select data-k="quality">${['auto', 'low', 'medium', 'high'].map((q) => `<option value="${q}" ${opts.quality === q ? 'selected' : ''}>${q}</option>`).join('')}</select><div class="help">Takes effect next match. Auto picks Low on phones.</div></div>
+        <div class="field"><label>Quality</label><select data-k="quality">${(['auto', ...QUALITY_LEVELS] as const).map((q) => `<option value="${q}" ${opts.quality === q ? 'selected' : ''}>${QUALITY_LABEL[q]}${q === 'auto' ? ` (${QUALITY_LABEL[autoQuality()]})` : ''}</option>`).join('')}</select><div class="help">Changes right away, even mid-match. Laggy? Try Low. Auto picks Low on phones.</div></div>
+        <div class="field"><label>Show FPS</label><div class="val"><input type="checkbox" data-fps ${opts.fpsCounter ? 'checked' : ''}></div></div>
+        <details class="gfx-adv" ${Object.keys(opts.gfx).length ? 'open' : ''}><summary>Advanced graphics</summary>
+          ${GFX_FIELDS.map((f) => `<div class="field"><label>${f.label}</label><select data-gfx="${f.key}"><option value="">Preset (${presetChoice(f.key, this.quality)})</option>${f.options.map(([v, l]) => `<option value="${v}" ${opts.gfx[f.key] === v ? 'selected' : ''}>${l}</option>`).join('')}</select>${f.help ? `<div class="help">${f.help}</div>` : ''}</div>`).join('')}
+          <div class="row" style="margin-top:6px"><button class="btn small reset-gfx">Reset to the preset</button></div>
+        </details>
         ${slider('fov', 'Field of view', 60, 100, 1, opts.fov)}
         <h3 style="margin-top:14px">Audio</h3>
         ${VOLUME_META.map((m) => slider(`v.${m.key}`, m.label, 0, m.max, 0.05, v[m.key], m.help)).join('')}
@@ -715,13 +735,23 @@ export class App {
     const save = () => {
       saveOptions(opts);
       if (this.game) this.game.input.opts = { ...opts };
-      if (opts.quality !== 'auto') this.quality = opts.quality;
       try {
         if (opts.quality === 'auto') localStorage.removeItem('hd.quality');
         else localStorage.setItem('hd.quality', opts.quality);
       } catch {
         /* ignore */
       }
+      // "Auto" goes back to what this device gets by default
+      this.quality = opts.quality === 'auto' ? detectQuality() : opts.quality;
+      audio.hrtf = this.quality !== 'low';
+      // applied live, mid-match too
+      this.game?.applyGraphics(resolveQuality(this.quality, opts.gfx));
+      this.game?.setFpsCounter(opts.fpsCounter);
+    };
+    const redraw = () => {
+      const top = this.screen?.scrollTop ?? 0;
+      this.showOptions(back);
+      if (this.screen) this.screen.scrollTop = top;
     };
     scr.querySelectorAll<HTMLInputElement>('input[type=range]').forEach((inp) => {
       const out = inp.parentElement!.querySelector('output')!;
@@ -741,8 +771,30 @@ export class App {
       sel.addEventListener('change', () => {
         (opts as unknown as Record<string, string>)[sel.dataset.k!] = sel.value;
         save();
+        // the Advanced "Preset (…)" labels follow the new preset
+        if (sel.dataset.k === 'quality') redraw();
       }),
     );
+    scr.querySelectorAll<HTMLSelectElement>('select[data-gfx]').forEach((sel) =>
+      sel.addEventListener('change', () => {
+        const key = sel.dataset.gfx as keyof GfxOverrides;
+        const choice = GFX_FIELDS.find((f) => f.key === key)!.options.find(([v]) => String(v) === sel.value);
+        const gfx: Record<string, unknown> = { ...opts.gfx };
+        if (choice) gfx[key] = choice[0];
+        else delete gfx[key];
+        opts.gfx = gfx as GfxOverrides;
+        save();
+      }),
+    );
+    scr.querySelector<HTMLInputElement>('[data-fps]')!.addEventListener('change', (e) => {
+      opts.fpsCounter = (e.target as HTMLInputElement).checked;
+      save();
+    });
+    scr.querySelector('.reset-gfx')!.addEventListener('click', () => {
+      opts.gfx = {};
+      save();
+      redraw();
+    });
     scr.querySelector<HTMLTextAreaElement>('.turn')!.addEventListener('change', (e) => {
       const val = (e.target as HTMLTextAreaElement).value.trim();
       try {

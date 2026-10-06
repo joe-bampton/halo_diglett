@@ -1,8 +1,8 @@
 import { BotBrain, BOT_NAMES } from '../bots/brain';
 import { Rng } from '../shared/rng';
-import { Arena } from '../sim/arena';
+import { Arena, HOLE_SPACING, layoutForSettings } from '../sim/arena';
 import { MAX_BOTS, MAX_HUMANS, MAX_SLOTS, TICK_RATE, secToTicks } from '../sim/constants';
-import { addPlayer, clipSize, createMatch, hasPowerup, isCamo, removePlayer, score, stepMatch } from '../sim/match';
+import { addPlayer, clipSize, createMatch, hasPowerup, isCamo, removePlayer, score, stepMatch, type StepContext } from '../sim/match';
 import { sanitizeSettings, DEFAULT_SETTINGS, type Settings } from '../sim/settings';
 import type { BotDifficulty, MatchState, PlayerCommand, PlayerState, RosterEntry, SimEvent } from '../sim/types';
 import { WEAPONS, weaponIndex } from '../sim/weapons';
@@ -21,6 +21,7 @@ import {
   F_INVINCIBLE,
   F_OVERSHIELD,
   F_RELOAD,
+  F_SAUCED,
   PROTOCOL_VERSION,
   type Channel,
   type CtlMsg,
@@ -61,7 +62,7 @@ const REJOIN_MS = 120_000;
 const AFK_MS = 5000;
 
 export class HostSession {
-  readonly arena = new Arena();
+  arena = new Arena();
   lobby: LobbyState;
   match: MatchState | null = null;
   results: MatchResults | null = null;
@@ -102,6 +103,10 @@ export class HostSession {
 
   private bumpLobby() {
     this.lobby.slots.sort((a, b) => a.slot - b.slot);
+    if (this.lobby.phase === 'lobby') {
+      const s = this.lobby.settings;
+      this.lobby.map = s.holeCount > 0 || s.holeSpacing !== HOLE_SPACING ? layoutForSettings(s, this.lobby.slots.length) : undefined;
+    }
     for (const c of this.conns.values()) this.send(c.peer, CH_CTL, { t: 'lobby', lobby: this.lobby });
     this.onChange?.();
   }
@@ -117,6 +122,7 @@ export class HostSession {
     if (slot < 0) return;
     const used = new Set(this.lobby.slots.map((s) => s.name));
     const name = BOT_NAMES.find((n) => !used.has(n)) ?? `Bot ${slot}`;
+    if (this.match && !this.hasRoom()) return; // every hole is taken
     const info: SlotInfo = { slot, name, color: this.pickColor(), kind: 'bot', bot: difficulty, connected: true };
     this.lobby.slots.push(info);
     if (this.match) {
@@ -277,9 +283,10 @@ export class HostSession {
     this.conns.set(peer, conn);
     this.send(peer, CH_CTL, { t: 'welcome', slot, lobby: this.lobby });
     if (this.match && this.lobby.phase === 'match') {
+      // a full custom field: the newcomer watches until a hole frees up (admitWaiting)
       let p = this.match.players[slot];
-      if (!p) p = addPlayer(this.match, this.rosterEntry(info), this.arena);
-      p.connected = true;
+      if (!p && this.hasRoom()) p = addPlayer(this.match, this.rosterEntry(info), this.arena);
+      if (p) p.connected = true;
       this.send(peer, CH_CTL, { t: 'start', start: this.matchStart() });
     } else if (this.lobby.phase === 'results' && this.results) {
       this.send(peer, CH_CTL, { t: 'results', results: this.results });
@@ -301,6 +308,8 @@ export class HostSession {
       trigger: !!k.trigger,
       presses: num(k.presses) | 0,
       reloads: num(k.reloads) | 0,
+      respawns: num(k.respawns) | 0,
+      springs: num(k.springs) | 0,
       zoom: num(k.zoom) | 0,
       vt: num(k.vt),
       pick: typeof k.pick === 'string' && k.pick in WEAPONS ? k.pick : undefined,
@@ -313,6 +322,7 @@ export class HostSession {
 
   startMatch(seed = this.rng.int(1, 2 ** 30)) {
     const roster = this.lobby.slots.filter((s) => s.connected).map((s) => this.rosterEntry(s));
+    this.arena = new Arena(layoutForSettings(this.lobby.settings, roster.length));
     this.match = createMatch(this.lobby.settings, roster, seed, this.arena);
     for (const s of this.lobby.slots) {
       const p = this.match.players[s.slot];
@@ -347,7 +357,25 @@ export class HostSession {
       phase: m.phase,
       leader: m.leader,
       orbs: m.orbs.map((o) => ({ ...o })),
+      arena: this.arena.layout,
     };
+  }
+
+  /** A free hole for one more player? (Custom fields have exactly their hole count.) */
+  private hasRoom(): boolean {
+    const m = this.match;
+    return !m || m.players.filter(Boolean).length < this.arena.holes.length;
+  }
+
+  /** Bring in humans who joined a full field once a hole frees up. */
+  private admitWaiting() {
+    const m = this.match!;
+    for (const s of this.lobby.slots) {
+      if (s.kind !== 'human' || !s.connected || m.players[s.slot]) continue;
+      if (!this.hasRoom()) return;
+      const p = addPlayer(m, this.rosterEntry(s), this.arena);
+      if (s.pick) p.pick = s.pick;
+    }
   }
 
   backToLobby() {
@@ -398,15 +426,21 @@ export class HostSession {
     }
     for (const s of this.lobby.slots) {
       const p = m.players[s.slot];
-      if (s.kind === 'human' && !s.connected && p) cmds[s.slot] = { yaw: p.yaw, pitch: p.pitch, stand: false, trigger: false, presses: p.presses, reloads: p.reloads, zoom: 0, vt: m.tick };
+      if (s.kind === 'human' && !s.connected && p) cmds[s.slot] = { yaw: p.yaw, pitch: p.pitch, stand: false, trigger: false, presses: p.presses, reloads: p.reloads, respawns: p.respawns, springs: p.springs, zoom: 0, vt: m.tick };
     }
     for (const [slot, b] of this.bots) if (m.players[slot]) cmds[slot] = b.think(m, this.arena);
     const events = stepMatch(m, cmds, this.arena);
+    for (const [slot, b] of this.bots) {
+      if (!b.callout) continue;
+      events.push({ k: 'callout', t: m.tick, p: slot, key: b.callout });
+      b.callout = null;
+    }
     if (events.length) {
       for (const b of this.bots.values()) b.onEvents(events);
       for (const c of this.conns.values()) c.pending.push(...events);
       if (events.some((e) => e.k === 'end')) this.resultsAt = nowMs + 3500;
     }
+    if (m.tick % 30 === 0) this.admitWaiting();
     for (const c of this.conns.values()) {
       const every = c.local ? 1 : 3;
       if (m.tick - c.lastSnapTick >= every) this.sendSnapshot(c);
@@ -421,6 +455,19 @@ export class HostSession {
       }
       this.bumpLobby();
     }
+  }
+
+  /** Test hook: change the running match between ticks and send out the events it produced. */
+  debugApply(fn: (m: MatchState, ctx: StepContext) => void) {
+    const m = this.match;
+    if (!m) return;
+    const rng = new Rng(m.rng);
+    const events: SimEvent[] = [];
+    fn(m, { arena: this.arena, rng, events });
+    m.rng = rng.state;
+    if (!events.length) return;
+    for (const b of this.bots.values()) b.onEvents(events);
+    for (const c of this.conns.values()) c.pending.push(...events);
   }
 
   private flushSnapshot(c: Conn) {
@@ -461,7 +508,8 @@ export class HostSession {
       if (q.connected) f |= F_CONNECTED;
       if (hasPowerup(q, 'damage', t)) f |= F_DAMAGE;
       if (q.burn) f |= F_BURNING;
-      p.push([q.slot, Math.round(q.exposure * 255), Math.round(q.yaw * 1000), Math.round(q.pitch * 1000), f, weaponIndex(q.weapon), q.hole, Math.round(q.beamLen * 10), q.zoom]);
+      if (q.saucedUntil > t) f |= F_SAUCED;
+      p.push([q.slot, Math.round(q.exposure * 255), Math.round(q.yaw * 1000), Math.round(q.pitch * 1000), f, weaponIndex(q.weapon), q.hole, Math.round(q.beamLen * 10), q.zoom, q.springAt]);
     }
     const snap: SnapshotMsg = { k: t, ph: m.phase, a: c.seq, p, ld: m.leader };
     const homing = m.projectiles.filter((pr) => pr.target >= 0);
@@ -557,6 +605,9 @@ export function privateState(m: MatchState, me: PlayerState): PrivateState {
     ds: me.duckedSince,
     al: me.alive,
     hole: me.hole,
+    rq: me.respawnRequested,
+    sa: me.saucedAt,
+    su: me.saucedUntil,
   };
 }
 

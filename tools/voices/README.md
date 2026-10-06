@@ -67,7 +67,7 @@ and optional settings. The comment above the table explains every option.
 
   | Chain | Use |
   | --- | --- |
-  | `pitre` | Player shouts. |
+  | `pitre` | Player shouts (the Pitre lines and the Jerry bots' "Suppressing fire!"). |
   | `baby` | A female voice made into a toddler: pitch +8 to +11 semitones and formants ×1.28, with a whiny rise and vibrato at the end. |
   | `brap` | Voice plus a low gunshot thump under each "brap". |
   | `announcer` | Deep stadium voice: `am_fenrir` −4.5 semitones, formants ×0.9, compression, slapback and a short bright reverb. |
@@ -96,6 +96,14 @@ had to work hard.
 3. To add a take, add a row with the same slot (use `fx="file"` for a
    hand-made MP3) and re-run. Every run rewrites `manifest.json` from the
    table, so hand edits to it are lost.
+
+### "Bitch, please!", "How many bullets?!" and "Suppressing fire!"
+
+`pitre/bitch_please_*.mp3`, `pitre/how_many_bullets_*.mp3` and
+`jerry/suppressing_fire_*.mp3` are original Kokoro takes, not clips from any
+show. To use your own recording instead, save it over one of those files and
+set its row's `fx` to `"file"` (or delete the other rows of that slot so only
+your clip plays). You must have the right to use the clip.
 
 ### The pufferfish sound
 

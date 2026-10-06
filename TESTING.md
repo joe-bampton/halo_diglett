@@ -6,7 +6,7 @@
    ```bash
    git clone https://github.com/joe-bampton/halo_diglett.git
    cd halo_diglett
-   git checkout dev/beautiful-pasteur-xe88ja
+   git checkout dev/laughing-rubin-ewcsty
    npm install
    ```
 
@@ -28,8 +28,14 @@
 | `mode=gunGame` / `randomLife` / `choice` | weapon mode |
 | `orbs=chaos` | lots of power-up bubbles |
 | `pitre=1` | Pitre Mode on |
-| `quality=low` / `medium` / `high` | graphics preset |
+| `botdiff=jerry` / `topover` / `jerry,topover` | bot tiers (cycled through the bots) |
+| `holes=8&spacing=20` | 8 holes at least 20 m apart |
+| `respawn=auto` | respawn without pressing Jump |
+| `quality=low` / `medium` / `high` / `ultra` | graphics preset |
 | `perf` | FPS and draw-call counter in the bottom-left |
+| `test` | test hooks in the browser console: `__hd.grant('spring')`, `__hd.grant('sauce', 1)` (give bot 1 the Super Soaker), `__hd.kill()` |
+
+The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together with `autostart=offline`.
 
 ## 3. Multiplayer on one PC
 **Quick (no internet needed):**
@@ -58,10 +64,30 @@
 - [ ] Headshot with the sniper = instant kill; body shots take 2
 - [ ] Shield bar drains, then recharges after about 4 s; low-shield beeps
 - [ ] Staying ducked about 8 s forces you up ("Pop up in…" warning)
-- [ ] Dying shows the death cam and "Respawn in N"; you respawn in a hole
+- [ ] Dying shows the death cam, then you spectate (see below); you respawn in a hole when you press Space
 - [ ] Kill feed, medals (Headshot, Double Kill…) and announcer voice work
 - [ ] **Tab** shows the scoreboard; **Esc** pauses (offline really pauses)
 - [ ] Match ends at the score limit → results screen → Play again / Back to lobby
+
+**Respawn & spectating** (`?autostart=offline&bots=3`)
+- [ ] After dying: a short death cam, then a "SPECTATING" panel with a player's name, weapon and K/D
+- [ ] **E** / **Q** (or click / right-click) switch player; **F** toggles 1st ↔ 3rd person
+- [ ] 3rd person: the mouse orbits around them, the wheel zooms in and out, the camera never goes under the ground
+- [ ] 1st person: you see their weapon and their scope when they zoom
+- [ ] "Respawn in N · press SPACE when ready", then "Press SPACE to respawn": you stay dead until you press it
+- [ ] Spectating never moves your own aim or fires
+- [ ] Lobby → Respawn → *Automatically* brings back the old automatic respawn
+- [ ] Controller: A respawns, RB/LB switch, Y toggles the view, triggers zoom. Phone: ◀ ▶ 👁 buttons, drag, pinch, RESPAWN
+
+**Bot tiers**
+- [ ] `botdiff=jerry`: Jerry bots pop up, spray the sky yelling "Suppressing fire!" (speech bubble too), and never hurt you
+- [ ] `botdiff=topover`: Top/Over bots stay up, find you instantly and kill with any headshot; overshield or invincibility still stops the instant kill
+- [ ] In the lobby, each bot's difficulty list goes Jerry → … → Top/Over
+
+**Map** (lobby → Map)
+- [ ] Number of holes *Auto* = the usual field; 8, 16, 32 holes all work, and the minimap in the lobby shows the layout
+- [ ] Distance between holes changes how spread out they are (try 6 m and 40 m); big settings make the field bigger, up to 300 m across
+- [ ] With more players than holes, extra joiners wait ("All holes are taken") and get in when one frees up
 
 **Weapons** (`?autostart=offline&bots=3&weapon=…`)
 - [ ] Battle Rifle bursts
@@ -77,6 +103,10 @@
 - [ ] Capture-ball orbs drift around with labels
 - [ ] Shooting one pops it, gives the power-up, and the announcer names it
 - [ ] Try: flamethrower, minigun, overshield (green glow), invincibility (gold), camo, damage boost, homing, X-ray, big heads, orbital strike (red laser, then boom), quick hands
+- [ ] **Spring Jump** (`?test&autostart=offline&bots=3`, then `__hd.grant('spring')` in the console): the HUD shows it held; double-tap Space → a spring pops out and you fly ~20 m up, can look and shoot down into holes, can't duck, then land back in your hole
+- [ ] **Gerry Sauce**: shoot the 💦 bubble (or `__hd.grant('sauce')`), you get the Super Soaker; one click squirts custard jets at everyone, then rain. Covered players can't duck and their camo stops working
+- [ ] Getting sauced yourself (`__hd.grant('sauce', 1)` gives it to bot 1): your screen is covered in custard blobs that slide off over 5 s, aiming is slow at first and speeds back up
+- [ ] Lobby → Power-ups: **None** stops all bubbles, **All** brings them back; the chips show each power-up's icon and colour
 
 **Pitre Mode** (`pitre=1`)
 - [ ] The leader wears the Cat in the Hat costume (striped hat, bow tie, ears)
@@ -86,8 +116,20 @@
 - [ ] Taking damage: baby "mama"
 - [ ] Dying: pufferfish sound (placeholder until you drop in the real clip)
 - [ ] Gunfire becomes "brap brap brappp"
+- [ ] A shot that just misses you (or that you duck under at the last moment): "Bitch, please!"
+- [ ] Hitting someone a second time without a kill: "How many bullets?!"
+- [ ] Power-up bubbles are energy drink cans (black, silver ends, glowing claw marks in the power-up colour) that burst and fizz when shot; *Power-ups come in energy drink cans* switches it off
 - [ ] Voices are quieter from far-away holes and louder from close ones
 - [ ] The *Character voices* slider in Options changes their volume
+
+**Graphics** (Options → Graphics; also from Esc → Options mid-match)
+- [ ] Switching Low ↔ Medium ↔ High ↔ Ultra changes the look straight away (no restart)
+- [ ] High: glowing sun and muzzle flashes (bloom), shiny reflective armour and visors, the detailed Spartans, rocket explosions with a shockwave ring and scorch marks
+- [ ] Ultra: denser grass further out, smoother edges
+- [ ] *Advanced graphics*: each setting shows "Preset (…)"; turning Shadows off, Effects low or Render scale 50% applies at once; *Reset to the preset* undoes them
+- [ ] *Show FPS* puts a counter in the top-right corner
+- [ ] If it's laggy, Low makes it smooth again (and after ~10 s under 28 fps the game suggests it once)
+- [ ] Settings are remembered after a reload
 
 **Controller** (Xbox/PlayStation, plugged in or Bluetooth)
 - [ ] Right stick aims, RT fires, LT zooms
@@ -122,8 +164,9 @@
 
 ## 5. Automated tests
 ```bash
-npm test                          # unit tests: rules, bots, netcode, Pitre voice logic, volumes, voice chat
+npm test                          # unit tests: rules, bots, netcode, Pitre voice logic, volumes, voice chat, graphics settings, models
 npm run build && npm run e2e      # browser tests (first run: npx playwright install chromium)
+npm run check                     # everything: type-check, unit tests, build, browser tests
 ```
 
 ## Found a problem?

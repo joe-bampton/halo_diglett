@@ -1,5 +1,6 @@
-import { Rng } from '../shared/rng';
+import { Rng, hash01 } from '../shared/rng';
 import type { V3 } from '../shared/vec';
+import { EYE_Y, HEAD_Y } from './constants';
 
 /** Geometry constants (metres). Y is up. */
 export const PLAY_RADIUS = 40;
@@ -13,6 +14,8 @@ export const HOLE_COUNT = 16;
 export const HOLE_SPACING = 11.5;
 /** Chosen by scripts/findSeed (all holes see >= 70% of the others). Locked by a unit test. */
 export const ARENA_SEED = 20261007;
+/** Biggest field a custom hole count / spacing may grow to. */
+export const MAX_PLAY_RADIUS = 150;
 
 export interface Hole {
   id: number;
@@ -31,39 +34,157 @@ interface Hill {
   s: number;
 }
 
+/**
+ * Everything needed to rebuild an arena exactly. The host generates it and sends it in MatchStart,
+ * so every browser gets the same holes even if their floating-point maths differs in the last bit.
+ */
+export interface ArenaLayout {
+  seed: number;
+  /** radius the holes are scattered in */
+  radius: number;
+  /** minimum distance between holes that was achieved */
+  spacing: number;
+  /** auto: the classic field — a match only uses the most central players + 3 holes */
+  auto: boolean;
+  hills: Hill[];
+  /** [x, z, ground] — most central first */
+  holes: [number, number, number][];
+}
+
 const smooth = (t: number) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
+
+/** Rolling hills + a bowl that rises beyond `bowl`. No hole features. */
+function baseHeightOf(hills: readonly Hill[], bowl: number, x: number, z: number): number {
+  let y = 0;
+  for (const h of hills) {
+    const dx = x - h.x, dz = z - h.z;
+    y += h.h * Math.exp(-(dx * dx + dz * dz) / (2 * h.s * h.s));
+  }
+  const r = Math.hypot(x, z);
+  if (r > bowl) {
+    const t = (r - bowl) / 50;
+    y += Math.min(t * t * 22, 30) + Math.sin(x * 0.07) * Math.cos(z * 0.06) * Math.min(1, t) * 4;
+  }
+  return y;
+}
+
+/**
+ * Scatter `count` holes at least `spacing` apart within `radius` (Poisson-disk-ish), avoiding slopes.
+ * With the defaults this reproduces the classic arena exactly (same random sequence).
+ */
+export function generateLayout(seed = ARENA_SEED, count = HOLE_COUNT, spacing = HOLE_SPACING, radius = PLAY_RADIUS, auto = true): ArenaLayout {
+  const rng = new Rng(seed);
+  const k = radius / PLAY_RADIUS;
+  const hills: Hill[] = [];
+  const hillCount = Math.min(14, Math.max(3, Math.round(6 * k * k)));
+  for (let i = 0; i < hillCount; i++) {
+    const a = rng.range(0, Math.PI * 2);
+    const r = rng.range(8 * k, 36 * k);
+    hills.push({ x: Math.cos(a) * r, z: Math.sin(a) * r, h: rng.range(0.6, 2.4), s: rng.range(6, 11) * Math.max(1, Math.sqrt(k)) });
+  }
+  const bowl = radius + 6;
+  const holes: [number, number, number][] = [];
+  let guard = 0;
+  while (holes.length < count && guard++ < 20000) {
+    const a = rng.range(0, Math.PI * 2);
+    const r = Math.sqrt(rng.next()) * radius;
+    const x = Math.cos(a) * r;
+    const z = Math.sin(a) * r;
+    if (holes.some(([hx, hz]) => Math.hypot(hx - x, hz - z) < spacing)) continue;
+    const g = baseHeightOf(hills, bowl, x, z);
+    const slope = Math.hypot(baseHeightOf(hills, bowl, x + 1, z) - g, baseHeightOf(hills, bowl, x, z + 1) - g);
+    if (slope > 0.35) continue;
+    holes.push([x, z, g]);
+  }
+  // sort by distance from centre so "active holes" are the most central ones
+  holes.sort((a, b) => Math.hypot(a[0], a[1]) - Math.hypot(b[0], b[1]));
+  return { seed, radius, spacing, auto, hills, holes };
+}
+
+/** How many holes each hole can see (eye → head lines not blocked by hills). */
+export function visibilityStats(a: Arena) {
+  const hs = a.holes;
+  let worst = 1;
+  let total = 0;
+  let pairs = 0;
+  for (const h of hs) {
+    let seen = 0;
+    for (const o of hs) {
+      if (o === h) continue;
+      const clear = a.lineClear({ x: h.x, y: h.rim + EYE_Y, z: h.z }, { x: o.x, y: o.rim + HEAD_Y, z: o.z }, 0.5);
+      if (clear) seen++;
+      pairs++;
+      total += clear ? 1 : 0;
+    }
+    worst = Math.min(worst, seen / Math.max(1, hs.length - 1));
+  }
+  return { worst, avg: total / Math.max(1, pairs), count: hs.length };
+}
+
+const layoutCache = new Map<string, ArenaLayout>();
+let defaultLayout: ArenaLayout | null = null;
+
+/**
+ * The field for a match: `holeCount` 0 = Auto (the classic 16 holes, a match uses the central players + 3);
+ * otherwise exactly max(holeCount, players) holes, all in play. `holeSpacing` is the minimum distance between
+ * holes; the field grows to fit (and, past MAX_PLAY_RADIUS, the spacing shrinks a little). Deterministic and
+ * memoised, but only the host needs to call it — clients get the result in MatchStart.
+ */
+export function layoutForSettings(s: { holeCount: number; holeSpacing: number }, players: number): ArenaLayout {
+  const auto = s.holeCount <= 0;
+  if (auto && s.holeSpacing === HOLE_SPACING) return (defaultLayout ??= generateLayout());
+  const count = auto ? HOLE_COUNT : Math.max(4, s.holeCount, players);
+  const key = `${count}|${s.holeSpacing}|${auto}`;
+  const hit = layoutCache.get(key);
+  if (hit) return hit;
+  let spacing = s.holeSpacing;
+  // a random scatter covers roughly 27% of the disc with spacing-sized circles
+  let radius = Math.min(MAX_PLAY_RADIUS, Math.max(10, Math.ceil((spacing / 2) * Math.sqrt(count / 0.27) - spacing / 2)));
+  let best: { layout: ArenaLayout; worst: number } | null = null;
+  for (let attempt = 0; attempt < 24 && !best; attempt++) {
+    for (let i = 0; i < 8; i++) {
+      const seed = 1 + Math.floor(hash01(count * 7919 + Math.round(spacing * 10), attempt * 31 + i, 4242) * 2 ** 30);
+      const layout = generateLayout(seed, count, spacing, radius, auto);
+      if (layout.holes.length < count) continue;
+      const worst = visibilityStats(new Arena(layout)).worst;
+      if (!best || worst > best.worst) best = { layout, worst };
+      if (worst >= 0.7) break;
+    }
+    if (best) break;
+    if (radius < MAX_PLAY_RADIUS) radius = Math.min(MAX_PLAY_RADIUS, Math.ceil(radius * 1.1));
+    else spacing = Math.max(1, Math.floor(spacing * 0.95 * 2) / 2);
+  }
+  const layout = best?.layout ?? generateLayout(ARENA_SEED);
+  layoutCache.set(key, layout);
+  return layout;
+}
 
 export class Arena {
   readonly seed: number;
-  readonly hills: Hill[] = [];
-  readonly holes: Hole[] = [];
+  readonly layout: ArenaLayout;
+  readonly hills: Hill[];
+  readonly holes: Hole[];
+  /** holes are scattered within this radius; the fence and the rising bowl sit outside it */
+  readonly playRadius: number;
+  readonly fenceRadius: number;
+  readonly bowlRadius: number;
+  /** field size relative to the classic arena (1 = classic) */
+  readonly scale: number;
+  readonly auto: boolean;
   private grid = new Map<number, number[]>();
   private static readonly CELL = 6;
 
-  constructor(seed = ARENA_SEED) {
-    this.seed = seed;
-    const rng = new Rng(seed);
-    for (let i = 0; i < 6; i++) {
-      const a = rng.range(0, Math.PI * 2);
-      const r = rng.range(8, 36);
-      this.hills.push({ x: Math.cos(a) * r, z: Math.sin(a) * r, h: rng.range(0.6, 2.4), s: rng.range(6, 11) });
-    }
-    // Poisson-disk-ish sampling of hole positions
-    let guard = 0;
-    while (this.holes.length < HOLE_COUNT && guard++ < 20000) {
-      const a = rng.range(0, Math.PI * 2);
-      const r = Math.sqrt(rng.next()) * PLAY_RADIUS;
-      const x = Math.cos(a) * r;
-      const z = Math.sin(a) * r;
-      if (this.holes.some((h) => Math.hypot(h.x - x, h.z - z) < HOLE_SPACING)) continue;
-      const g = this.baseHeight(x, z);
-      const slope = Math.hypot(this.baseHeight(x + 1, z) - g, this.baseHeight(x, z + 1) - g);
-      if (slope > 0.35) continue;
-      this.holes.push({ id: this.holes.length, x, z, ground: g, rim: g + RIM_H });
-    }
-    // sort by distance from centre so "active holes" are the most central ones
-    this.holes.sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z));
-    this.holes.forEach((h, i) => (h.id = i));
+  constructor(src: number | ArenaLayout = ARENA_SEED) {
+    const layout = typeof src === 'number' ? generateLayout(src) : src;
+    this.layout = layout;
+    this.seed = layout.seed;
+    this.hills = layout.hills.map((h) => ({ ...h }));
+    this.holes = layout.holes.map(([x, z, g], id) => ({ id, x, z, ground: g, rim: g + RIM_H }));
+    this.playRadius = layout.radius;
+    this.fenceRadius = layout.radius + (FENCE_RADIUS - PLAY_RADIUS);
+    this.bowlRadius = layout.radius + 6;
+    this.scale = layout.radius / PLAY_RADIUS;
+    this.auto = layout.auto;
     for (const h of this.holes) {
       const key = this.cellKey(Math.floor(h.x / Arena.CELL), Math.floor(h.z / Arena.CELL));
       // register in all neighbouring cells so a lookup only needs its own cell
@@ -83,17 +204,7 @@ export class Arena {
 
   /** Rolling hills + a bowl that rises beyond the fence. No hole features. */
   baseHeight(x: number, z: number): number {
-    let y = 0;
-    for (const h of this.hills) {
-      const dx = x - h.x, dz = z - h.z;
-      y += h.h * Math.exp(-(dx * dx + dz * dz) / (2 * h.s * h.s));
-    }
-    const r = Math.hypot(x, z);
-    if (r > 46) {
-      const t = (r - 46) / 50;
-      y += Math.min(t * t * 22, 30) + Math.sin(x * 0.07) * Math.cos(z * 0.06) * Math.min(1, t) * 4;
-    }
-    return y;
+    return baseHeightOf(this.hills, this.bowlRadius, x, z);
   }
 
   nearestHole(x: number, z: number): Hole | undefined {
@@ -170,6 +281,7 @@ export class Arena {
 
   /** Hole ids used for a match of `players` participants (most central first). */
   activeHoleCount(players: number): number {
+    if (!this.auto) return this.holes.length;
     return Math.max(6, Math.min(this.holes.length, players + 3));
   }
 }

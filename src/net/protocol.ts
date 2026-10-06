@@ -1,8 +1,9 @@
+import type { ArenaLayout } from '../sim/arena';
 import type { Settings } from '../sim/settings';
 import type { BotDifficulty, MatchPhase, PlayerCommand, RosterEntry, SimEvent } from '../sim/types';
 import type { WeaponId } from '../sim/weapons';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const BUILD_ID: string = (import.meta.env?.VITE_BUILD_ID as string | undefined) ?? 'dev';
 
 export interface SlotInfo {
@@ -23,6 +24,8 @@ export interface LobbyState {
   settings: Settings;
   slots: SlotInfo[];
   online: boolean;
+  /** custom hole layout preview (absent = the classic field) */
+  map?: ArenaLayout;
 }
 
 /** Control channel messages (reliable, both directions). */
@@ -47,6 +50,8 @@ export interface MatchStart {
   phase: MatchPhase;
   leader: number;
   orbs: { id: number; type: string; seed: number; spawn: number; expire: number }[];
+  /** the field (host-generated so every browser builds identical holes) */
+  arena: ArenaLayout;
 }
 
 export interface ResultRow {
@@ -76,9 +81,9 @@ export interface InputMsg {
 }
 
 /**
- * Packed remote player: [slot, exposure0-255, yaw*1000, pitch*1000, flags, weaponIdx, hole, beamLen*10, zoom]
+ * Packed remote player: [slot, exposure0-255, yaw*1000, pitch*1000, flags, weaponIdx, hole, beamLen*10, zoom, springAt]
  */
-export type PackedPlayer = [number, number, number, number, number, number, number, number, number];
+export type PackedPlayer = [number, number, number, number, number, number, number, number, number, number];
 
 export const F_ALIVE = 1;
 export const F_RELOAD = 2;
@@ -91,6 +96,7 @@ export const F_CONNECTED = 128;
 export const F_DAMAGE = 256;
 export const F_BIGHEAD = 512;
 export const F_BURNING = 1024;
+export const F_SAUCED = 2048;
 
 /** Private state for the receiving player only. */
 export interface PrivateState {
@@ -115,6 +121,9 @@ export interface PrivateState {
   ds: number; // ducked since
   al: boolean;
   hole: number;
+  rq: boolean; // respawn requested (manual respawn)
+  sa: number; // Gerry Sauce hit at (-1 never)
+  su: number; // ...and gone at
 }
 
 export interface SnapshotMsg {

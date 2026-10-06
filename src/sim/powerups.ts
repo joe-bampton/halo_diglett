@@ -11,13 +11,17 @@ export type PowerUpId =
   | 'xray'
   | 'bighead'
   | 'orbital'
-  | 'quickhands';
+  | 'quickhands'
+  | 'spring'
+  | 'sauce';
 
 export interface PowerUpDef {
   id: PowerUpId;
   name: string;
   color: number;
   duration: number;
+  /** kept until used (or until you die) instead of timing out */
+  held?: boolean;
   weapon?: WeaponId;
   weight: number;
   announce: string;
@@ -36,6 +40,8 @@ export const POWERUPS: Record<PowerUpId, PowerUpDef> = {
   bighead: { id: 'bighead', name: 'Big Heads', color: 0xffa0d0, duration: 20, weight: 0.9, announce: 'ann.bighead', icon: '☻' },
   orbital: { id: 'orbital', name: 'Orbital Strike', color: 0xff2020, duration: 15, weapon: 'orbital', weight: 0.5, announce: 'ann.orbital', icon: '☄' },
   quickhands: { id: 'quickhands', name: 'Quick Hands', color: 0x9dff4a, duration: 20, weight: 1, announce: 'ann.quickhands', icon: '⚡' },
+  spring: { id: 'spring', name: 'Spring Jump', color: 0x3cffd0, duration: 0, held: true, weight: 0.8, announce: 'ann.spring', icon: '⇈' },
+  sauce: { id: 'sauce', name: 'Gerry Sauce', color: 0xfff4d6, duration: 15, weapon: 'soaker', weight: 0.5, announce: 'ann.sauce', icon: '💦' },
 };
 
 export const POWERUP_IDS = Object.keys(POWERUPS) as PowerUpId[];

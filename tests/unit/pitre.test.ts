@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PitreVoiceThrottle, pitreCues } from '../../src/audio/pitre';
+import { PitreHitTracker, PitreVoiceThrottle, pitreCues } from '../../src/audio/pitre';
 import type { SimEvent } from '../../src/sim/types';
 
 const on = { pitre: true, pitreVoices: true, pitreBrap: true };
@@ -35,6 +35,44 @@ describe('pitre cues', () => {
     const fire: SimEvent = { k: 'fire', t: 1, p: 3, w: 'sniper', o: [0, 0, 0], e: [0, 0, 0], hit: 'none' };
     expect(pitreCues([fire], on)).toContainEqual(expect.objectContaining({ speaker: 3, line: 'brap' }));
     expect(pitreCues([fire], { ...on, pitreBrap: false })).toEqual([]);
+  });
+});
+
+describe('Bitch please / How many bullets', () => {
+  const dmg = (t: number, a: number, v: number, w: 'br' | 'sniper' | 'flamethrower' = 'br'): SimEvent => ({ k: 'dmg', t, a, v, amt: 30, head: false, sb: false, w });
+  const kill = (t: number, a: number, v: number): SimEvent => ({ k: 'kill', t, a, v, w: 'br', head: false, medals: [], lead: false });
+  const shooterLine = (cues: ReturnType<typeof pitreCues>, a: number) => cues.find((c) => c.speaker === a && (c.line === 'pussy' || c.line === 'bullets'))?.line;
+
+  it('a bullet whizzing past → "Bitch, please!" from whoever it missed', () => {
+    const cues = pitreCues([{ k: 'near', t: 5, a: 0, v: 3, w: 'sniper' }], on);
+    expect(cues).toEqual([expect.objectContaining({ speaker: 3, line: 'please' })]);
+    expect(pitreCues([{ k: 'near', t: 5, a: 0, v: 3, w: 'sniper' }], { ...on, pitreVoices: false })).toEqual([]);
+  });
+
+  it('the second hit without a kill → "How many bullets?!" (any victim; misses don’t reset it)', () => {
+    const tr = new PitreHitTracker();
+    expect(shooterLine(pitreCues([dmg(100, 0, 1)], on, tr), 0)).toBe('pussy');
+    // a burst counts once
+    expect(shooterLine(pitreCues([dmg(104, 0, 1)], on, tr), 0)).toBe('pussy');
+    expect(shooterLine(pitreCues([dmg(108, 0, 1)], on, tr), 0)).toBe('pussy');
+    // another victim, much later (misses in between don't matter)
+    expect(shooterLine(pitreCues([dmg(400, 0, 2)], on, tr), 0)).toBe('bullets');
+    expect(shooterLine(pitreCues([dmg(460, 0, 1)], on, tr), 0)).toBe('bullets');
+    // other shooters keep their own count
+    expect(shooterLine(pitreCues([dmg(470, 2, 1)], on, tr), 2)).toBe('pussy');
+  });
+
+  it('a kill or the shooter’s death resets the count; fire and beams don’t count', () => {
+    const tr = new PitreHitTracker();
+    pitreCues([dmg(100, 0, 1)], on, tr);
+    pitreCues([dmg(200, 0, 1), kill(200, 0, 1)], on, tr);
+    expect(shooterLine(pitreCues([dmg(300, 0, 2)], on, tr), 0)).toBe('pussy');
+    pitreCues([kill(350, 2, 0)], on, tr);
+    expect(shooterLine(pitreCues([dmg(400, 0, 2)], on, tr), 0)).toBe('pussy');
+    // a burn isn't a bullet
+    expect(shooterLine(pitreCues([dmg(500, 0, 1, 'flamethrower')], on, tr), 0)).toBe('pussy');
+    expect(shooterLine(pitreCues([dmg(600, 0, 1, 'flamethrower')], on, tr), 0)).toBe('pussy');
+    expect(shooterLine(pitreCues([dmg(700, 0, 1)], on, tr), 0)).toBe('bullets');
   });
 });
 

@@ -109,6 +109,31 @@ TAKES = [
 
     T("pitre.pufferfish", "pitre/pufferfish.mp3",          "-",         1.00, "pufferfish", "(procedural placeholder)"),
 
+    # a bullet whizzed right past: sassy, the "please" dragged out and swooping down
+    T("pitre.please",   "pitre/bitch_please_1.mp3",        "am_michael",1.00, "pitre", "Bitch, please!",
+      expr=1.6, stretch_last=1.9, contour=[(0, 0), (0.45, 2), (0.7, 4), (1, -2)], pitch=1),
+    T("pitre.please",   "pitre/bitch_please_2.mp3",        "bm_fable",  1.05, "pitre", "Bitch, please!",
+      melody=[5, 4, (7, 0)], keep=0.35, stretch_last=1.7),
+    T("pitre.please",   "pitre/bitch_please_3.mp3",        "am_fenrir", 1.00, "pitre", "Bitch, please!",
+      expr=1.7, stretch_last=1.6, contour=[(0, 1), (0.5, 0), (0.75, 3), (1, -1)]),
+
+    # second hit without a kill: incredulous, rising at the end
+    T("pitre.bullets",  "pitre/how_many_bullets_1.mp3",    "am_michael",1.05, "pitre", "How many bullets?!",
+      expr=1.6, contour=[(0, 0), (0.6, 0), (0.85, 3), (1, 6)], pitch=1),
+    T("pitre.bullets",  "pitre/how_many_bullets_2.mp3",    "am_fenrir", 1.10, "pitre", "How many bullets?!",
+      expr=1.7, contour=[(0, 0), (0.55, 1), (1, 5)]),
+    T("pitre.bullets",  "pitre/how_many_bullets_3.mp3",    "bm_fable",  1.10, "pitre", "How many bullets?!",
+      melody=[(2, 4), (6, 11)], keep=0.35),
+
+    # --- Jerry bots (any mode) -------------------------------------------------
+    # a panicky, nasal yell while spraying the sky
+    T("jerry.suppress", "jerry/suppressing_fire_1.mp3",    "am_puck",   1.15, "pitre", "Suppressing fire!",
+      pitch=3, formant=1.12, expr=1.7, drive=1.7, contour=[(0, 0), (0.7, 2), (1, 4)]),
+    T("jerry.suppress", "jerry/suppressing_fire_2.mp3",    "am_michael",1.20, "pitre", "Suppressing fire!",
+      pitch=2.5, formant=1.1, expr=1.8, drive=1.8, vibrato=(7.5, 0.5, 0.55)),
+    T("jerry.suppress", "jerry/suppressing_fire_3.mp3",    "bm_fable",  1.20, "pitre", "Suppressing fire!",
+      pitch=3, formant=1.12, expr=1.6, drive=1.6, stretch_last=1.6, contour=[(0, 0), (0.6, 1), (1, 5)]),
+
     # --- Announcer -----------------------------------------------------------
     T("ann.slay",       "announcer/slay_your_enemies.mp3", ANNOUNCER, 0.90, "announcer", "Slay your enemies!"),
     T("ann.double",     "announcer/double_kill.mp3",       ANNOUNCER, 0.90, "announcer", "Double kill!"),
@@ -144,6 +169,8 @@ TAKES = [
     T("ann.bighead",    "announcer/big_heads.mp3",         ANNOUNCER, 0.90, "announcer", "Big heads!"),
     T("ann.orbital",    "announcer/orbital_strike.mp3",    ANNOUNCER, 0.90, "announcer", "Orbital strike!"),
     T("ann.quickhands", "announcer/quick_hands.mp3",       ANNOUNCER, 0.90, "announcer", "Quick hands!"),
+    T("ann.spring",     "announcer/spring_jump.mp3",       ANNOUNCER, 0.90, "announcer", "Spring jump!"),
+    T("ann.sauce",      "announcer/gerry_sauce.mp3",       ANNOUNCER, 0.90, "announcer", "/dʒˈɛɹi sˈɔːs!/"),
     T("ann.gungame_level","announcer/weapon_upgraded.mp3", ANNOUNCER, 0.95, "announcer", "Weapon upgraded!"),
     T("ann.cat_hat",    "announcer/cat_in_the_hat.mp3",    ANNOUNCER, 0.95, "announcer", "Cat in the hat!",
       melody=[5, (1, 1, 8, 4)], keep=0.35),       # "CAT in the HAT": playful sing-song
