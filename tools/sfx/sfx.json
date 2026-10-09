@@ -1,0 +1,12 @@
+{
+  "_example": {
+    "_note": "Keys starting with _ are ignored. Copy entries like these to the top level (next to _example) to use them. See SOUND_LIST.md.",
+    "sniper": [
+      { "file": "sniper-shot.wav", "end": 1.4, "source": "Sonniss GameAudioGDC 2024, <pack name>", "license": "Sonniss GDC licence (royalty-free)" },
+      { "file": "rifle-shot-freesound.flac", "start": 0.12, "gain": 0.9, "source": "https://freesound.org/s/<number>/ by <user>", "license": "CC0" }
+    ],
+    "explosion": [
+      { "file": "kenney/<file you picked>.ogg", "source": "Kenney Sci-Fi Sounds", "license": "CC0" }
+    ]
+  }
+}

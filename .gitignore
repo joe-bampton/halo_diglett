@@ -8,6 +8,7 @@ playwright-report/
 tools/voices/.venv/
 tools/voices/models/
 tools/voices/out/
+tools/sfx/.venv/
 __pycache__/
 tools/models/.venv/
 screenshots/
