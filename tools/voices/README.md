@@ -10,8 +10,12 @@ MP3s. Nothing is spoken with browser text-to-speech at runtime.
   announcer.
 - Every file is trimmed, matched to the same loudness and encoded as a small
   mono MP3. `public/audio/manifest.json` is written from the same table.
+- Friends can record the lines themselves instead: **[RECORDING.md](RECORDING.md)**
+  is the guide to send them, and `import.py` turns their phone recordings into
+  game files (see [Friends' recordings](#friends-recordings)). A recorded line
+  replaces the robot voice.
 
-No ffmpeg or sox is needed.
+`generate.py` needs no ffmpeg or sox; `import.py` needs ffmpeg.
 
 ## Run it
 
@@ -37,6 +41,7 @@ the pinned requirements rebuilds the same files.
 | `generate.py --list` | Print the line table. |
 | `generate.py --phonemes` | Show how Kokoro will pronounce each line. |
 | `generate.py --report` | Print the duration, loudness, peak and size of each MP3 on disk. |
+| `generate.py --manifest-only` | Only rebuild `manifest.json` (table + recordings + sound effects); renders nothing and needs no model. |
 
 `.venv/`, `models/` and `out/` are gitignored.
 
@@ -95,7 +100,9 @@ had to work hard.
    other slots.
 3. To add a take, add a row with the same slot (use `fx="file"` for a
    hand-made MP3) and re-run. Every run rewrites `manifest.json` from the
-   table, so hand edits to it are lost.
+   table (plus recordings and sound effects), so hand edits to it are lost.
+
+For real voices, [friends' recordings](#friends-recordings) are easier.
 
 ### "Bitch, please!", "How many bullets?!" and "Suppressing fire!"
 
@@ -112,6 +119,44 @@ a cartoon inflating squeak, a pop and a deflating raspberry, synthesized in
 `chain_pufferfish()`. To use the real clip, drop it in as
 `public/audio/pitre/pufferfish.mp3` and set that row's `fx` to `"file"`. You
 must have the right to use the clip.
+
+## Friends' recordings
+
+Send friends [RECORDING.md](RECORDING.md). Their files go in
+`recordings/<their in-game name>/<slot>_<n>.<ext>`, e.g.
+`recordings/john/pitre.prank_1.m4a` (m4a, mp3, wav, ogg, webm, aac, flac…). This
+folder is committed, so they can upload on GitHub. Then:
+
+```sh
+tools/voices/.venv/bin/python tools/voices/import.py
+```
+
+| Command | What it does |
+|---|---|
+| `import.py` | Convert every recording, write `recordings.json`, rebuild `manifest.json`, delete MP3s whose recording is gone. |
+| `import.py --only john pitre.mama` | Convert only these friends / slots / files (prefixes work). |
+| `import.py --list` | Every line and who has recorded it. |
+| `import.py --report` | Duration, loudness, peak and size of each converted MP3. |
+| `import.py --fx` | A light effect per line: a touch of the announcer's reverb for `ann.*`, a baby pitch-up for `pitre.mama`, gunshot thumps under `pitre.brap`, some grit on the shouts. Off by default, so friends sound like themselves. |
+| `import.py --denoise 0.5` | Gentler noise reduction (default 0.85; 0 turns it off). |
+
+`--src`, `--out`, `--index` and `--manifest` point it at other folders, for testing.
+
+Each take is decoded with ffmpeg to mono 44.1 kHz, high-passed at 80 Hz (rumble,
+handling noise), cleaned with spectral-gating noise reduction
+([noisereduce](https://github.com/timsainb/noisereduce)) learned from the quietest
+half second of the recording, and gently compressed. Then it gets the same trim,
+−16 LUFS loudness, −1 dBFS limiter and MP3 encoding as the generated lines, in
+`public/audio/voices/<friend>/<slot>_<n>.mp3`. The script warns about recordings
+that are distorted, very quiet, too long or have no silence to learn the noise
+from, and skips files it can't place (wrong folder, unknown line name).
+
+`recordings.json` lists the takes as `{slot, file, by}`. `generate.py` merges it
+into the manifest: **a slot with any recording drops its generated takes**, and the
+recorded ones carry who said them. In the game, when a player says a line (Pitre
+lines, "Suppressing fire!"), takes whose `by` matches the player's name are
+preferred (ignoring case, spaces and punctuation); otherwise, and for the
+announcer, a random take plays.
 
 ## Output format
 
@@ -134,13 +179,17 @@ must have the right to use the clip.
 { "version": 1,
   "slots": {
     "pitre.prank": { "files": ["audio/pitre/prank_em_john_1.mp3", "..."], "gain": 1.0 },
-    "ann.double":  { "files": ["audio/announcer/double_kill.mp3"], "gain": 1.0 }
+    "pitre.mama":  { "files": [{ "file": "audio/voices/john/pitre.mama_1.mp3", "by": "John" }], "gain": 0.85 },
+    "ann.double":  { "files": ["audio/announcer/double_kill.mp3"], "gain": 1.0 },
+    "sfx.sniper":  { "files": ["audio/sfx/sniper_1.mp3"], "gain": 1.0 }
   } }
 ```
 
 File paths are relative to the site root, because Vite serves `public/` at `/`.
-The game picks a random entry from `files` and plays it at `gain`, which runs
-from 0 to 1.5.
+A `files` entry is a path, or `{ "file", "by" }` for a friend's recording. The
+game picks an entry from `files` (see above) and plays it at `gain`, which runs
+from 0 to 1.5. `sfx.*` slots replace synthesized sound effects; they belong to
+[`tools/sfx`](../sfx/README.md), and every tool here keeps them as they are.
 
 ## Licences
 
@@ -149,3 +198,5 @@ from 0 to 1.5.
 - The phonemizer uses espeak-ng (GPL-3.0) through `espeakng-loader`. It runs
   only on the build machine and is not shipped with the game.
 - The pufferfish placeholder is procedural.
+- noisereduce (MIT) only runs on the build machine. Friends' recordings are
+  theirs; RECORDING.md asks them to agree to the public repo first.

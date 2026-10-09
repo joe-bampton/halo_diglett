@@ -1106,7 +1106,8 @@ export class Game {
     // stop whatever this speaker was saying (channel interrupt)
     const sv = this.spartans.get(cue.speaker);
     const prevVoice = mine ? this.myVoice : sv?.voice;
-    const h = audio.playVoice(slot, { pos, delay: cue.delayMs / 1000, gain: mine ? 0.8 : 1.3 });
+    const speaker = this.session.players[cue.speaker]?.name; // friends' own recordings, if any
+    const h = audio.playVoice(slot, { pos, delay: cue.delayMs / 1000, gain: mine ? 0.8 : 1.3, speaker });
     if (!h) return;
     prevVoice?.stop(0.03);
     if (mine) this.myVoice = h;
@@ -1119,7 +1120,7 @@ export class Game {
     this.calloutAt.set(slot, now);
     const mine = slot === this.session.slot;
     const sv = this.spartans.get(slot);
-    const h = audio.playVoice(key, { pos: mine ? null : this.posOf(slot), gain: mine ? 0.9 : 1.3 });
+    const h = audio.playVoice(key, { pos: mine ? null : this.posOf(slot), gain: mine ? 0.9 : 1.3, speaker: this.session.players[slot]?.name });
     if (h) {
       (mine ? this.myVoice : sv?.voice)?.stop(0.03);
       if (mine) this.myVoice = h;

@@ -1,0 +1,7 @@
+# Sound-effect importer for Halo Diglett (tools/sfx/import.py), plus ffmpeg on the PATH.
+# Same pins as tools/voices/requirements.txt (it reuses that folder's DSP code).
+numpy==2.4.6
+scipy==1.17.1
+soundfile==0.14.0
+lameenc==1.8.4
+pyloudnorm==0.2.0

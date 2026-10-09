@@ -1,4 +1,5 @@
 import { DEFAULT_VOLUMES, sanitizeVolumes, type Volumes } from './levels';
+import { parseManifest, pickSfx, pickTake, sfxSlots, type Manifest, type Slot } from './manifest';
 import { SFX, type SfxId } from './synth';
 
 export type { Volumes } from './levels';
@@ -8,11 +9,6 @@ export interface Vec {
   x: number;
   y: number;
   z: number;
-}
-
-interface Manifest {
-  version: number;
-  slots: Record<string, { files: string[]; gain?: number }>;
 }
 
 export interface PlayOpts {
@@ -25,6 +21,11 @@ export interface PlayOpts {
   bus?: Bus;
 }
 
+export interface VoiceOpts extends PlayOpts {
+  /** Name of the player saying the line: their own recorded takes are preferred. */
+  speaker?: string;
+}
+
 export interface SoundHandle {
   stop(fade?: number): void;
   setPos(p: Vec): void;
@@ -34,6 +35,11 @@ export interface SoundHandle {
 
 const NOOP: SoundHandle = { stop() {}, setPos() {}, duration: 0, ended: true };
 
+interface VoiceTake {
+  buf: AudioBuffer;
+  by?: string;
+}
+
 export class AudioEngine {
   ctx: AudioContext | null = null;
   private master!: GainNode;
@@ -41,9 +47,13 @@ export class AudioEngine {
   private reverb!: ConvolverNode;
   private reverbIn!: GainNode;
   private buffers = new Map<SfxId, AudioBuffer>();
+  /** Real recordings (manifest `sfx.<id>` slots) that replace the synthesized buffers once decoded. */
+  private sfxFiles = new Map<SfxId, { bufs: AudioBuffer[]; gain: number }>();
+  private sfxLoading: Promise<void> | null = null;
   private manifest: Manifest | null = null;
-  private voiceBufs = new Map<string, AudioBuffer[]>();
-  private voicePending = new Map<string, Promise<AudioBuffer[]>>();
+  private manifestLoading: Promise<void> | null = null;
+  private voiceBufs = new Map<string, VoiceTake[]>();
+  private voicePending = new Map<string, Promise<VoiceTake[]>>();
   private annQueue: { slot: string; gain: number }[] = [];
   private wanted = new Set<string>();
   private wantedPrefixes = new Set<string>();
@@ -96,6 +106,7 @@ export class AudioEngine {
       this.buffers.set(id, b);
     }
     void this.loadManifest();
+    void this.loadSfxFiles();
     for (const slot of this.wanted) void this.voice(slot);
     if (this.wantedPrefixes.size) void this.voicesByPrefix();
   }
@@ -227,23 +238,58 @@ export class AudioEngine {
   }
 
   play(id: SfxId, o: PlayOpts = {}): SoundHandle {
-    const b = this.buffers.get(id);
+    const files = this.sfxFiles.get(id);
+    const b = pickSfx(files?.bufs, this.buffers.get(id));
     if (!b) return NOOP;
-    return this.playBuffer(b, { ...o, rate: (o.rate ?? 1) * (0.96 + Math.random() * 0.08) });
+    const gain = (o.gain ?? 1) * (files?.gain ?? 1);
+    return this.playBuffer(b, { ...o, gain, rate: (o.rate ?? 1) * (0.96 + Math.random() * 0.08) });
+  }
+
+  /**
+   * Decode the real sound files listed as `sfx.<id>` slots in the manifest (tools/sfx/import.py).
+   * Each one replaces its synthesized sound once it's ready; a sound whose files all fail keeps
+   * the synthesized version. Started by unlock(), never awaited there.
+   */
+  loadSfxFiles(): Promise<void> {
+    if (!this.ctx) return Promise.resolve();
+    this.sfxLoading ??= (async () => {
+      await this.loadManifest();
+      const slots = Object.entries(sfxSlots(this.manifest)) as [SfxId, Slot][];
+      await Promise.all(
+        slots.map(async ([id, slot]) => {
+          const bufs = (await Promise.all(slot.takes.map((t) => this.decode(t.file)))).filter((b): b is AudioBuffer => !!b);
+          if (bufs.length) this.sfxFiles.set(id, { bufs, gain: slot.gain });
+        }),
+      );
+    })();
+    return this.sfxLoading;
+  }
+
+  private async decode(file: string): Promise<AudioBuffer | null> {
+    try {
+      const r = await fetch(file);
+      if (!r.ok || !this.ctx) return null;
+      return await this.ctx.decodeAudioData(await r.arrayBuffer());
+    } catch {
+      return null; // missing or undecodable: skip it
+    }
   }
 
   // ---------------------------------------------------------------------------------------------
   // Voice lines (manifest-driven MP3s)
   // ---------------------------------------------------------------------------------------------
 
-  async loadManifest() {
-    if (this.manifest) return;
-    try {
-      const res = await fetch('audio/manifest.json', { cache: 'no-cache' });
-      if (res.ok) this.manifest = (await res.json()) as Manifest;
-    } catch {
-      /* offline or missing — voices simply won't play */
-    }
+  loadManifest(): Promise<void> {
+    this.manifestLoading ??= (async () => {
+      try {
+        const res = await fetch('audio/manifest.json', { cache: 'no-cache' });
+        if (res.ok) this.manifest = parseManifest(await res.json());
+      } catch {
+        /* offline or missing — voices simply won't play, sounds stay synthesized */
+      }
+      if (!this.manifest) this.manifestLoading = null; // try again next time
+    })();
+    return this.manifestLoading;
   }
 
   /** Decode all takes of the given slots ahead of time. */
@@ -266,7 +312,7 @@ export class AudioEngine {
       for (const p of this.wantedPrefixes) if (slot.startsWith(p)) void this.voice(slot);
   }
 
-  private voice(slot: string): Promise<AudioBuffer[]> {
+  private voice(slot: string): Promise<VoiceTake[]> {
     if (!this.ctx) return Promise.resolve([]);
     const ready = this.voiceBufs.get(slot);
     if (ready) return Promise.resolve(ready);
@@ -279,17 +325,8 @@ export class AudioEngine {
         this.voicePending.delete(slot);
         return [];
       }
-      const out: AudioBuffer[] = [];
-      for (const f of entry.files) {
-        try {
-          const r = await fetch(f);
-          if (!r.ok) continue;
-          const ab = await r.arrayBuffer();
-          out.push(await this.ctx.decodeAudioData(ab));
-        } catch {
-          /* skip bad file */
-        }
-      }
+      const bufs = await Promise.all(entry.takes.map((t) => this.decode(t.file)));
+      const out = entry.takes.flatMap((t, i) => (bufs[i] ? [{ buf: bufs[i], by: t.by }] : []));
       this.voiceBufs.set(slot, out);
       return out;
     })();
@@ -297,23 +334,26 @@ export class AudioEngine {
     return p;
   }
 
-  /** Synchronous: plays a random take if decoded, otherwise schedules decoding and returns null. */
-  playVoice(slot: string, o: PlayOpts = {}): SoundHandle | null {
-    const bufs = this.voiceBufs.get(slot);
-    if (!bufs) {
+  /**
+   * Synchronous: plays a take if decoded (the speaker's own recording if they made one, otherwise a
+   * random one), otherwise schedules decoding and returns null.
+   */
+  playVoice(slot: string, o: VoiceOpts = {}): SoundHandle | null {
+    const takes = this.voiceBufs.get(slot);
+    if (!takes) {
       void this.voice(slot);
       return null;
     }
-    if (!bufs.length) return null;
+    if (!takes.length) return null;
     const gain = (this.manifest?.slots[slot]?.gain ?? 1) * (o.gain ?? 1);
-    const b = bufs[Math.floor(Math.random() * bufs.length)]!;
+    const b = takes[pickTake(takes, o.speaker)]!.buf;
     return this.playBuffer(b, { ...o, gain, bus: o.bus ?? 'voice' });
   }
 
   voiceDuration(slot: string): number {
-    const bufs = this.voiceBufs.get(slot);
-    if (!bufs?.length) return 1;
-    return Math.max(...bufs.map((b) => b.duration));
+    const takes = this.voiceBufs.get(slot);
+    if (!takes?.length) return 1;
+    return Math.max(...takes.map((t) => t.buf.duration));
   }
 
   /** Announcer lines are queued so they never talk over each other. */

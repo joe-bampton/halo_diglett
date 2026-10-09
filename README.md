@@ -184,11 +184,13 @@ Toggle it in the lobby. Each part can be switched on and off separately.
 
 ### Replacing sounds
 
-All voice lines are MP3s listed in `public/audio/manifest.json`. To swap one, replace the file with your own MP3 **using the same filename** and redeploy. No code changes needed.
+All voice lines are MP3s listed in `public/audio/manifest.json`, and so are any real sound effects.
 
-- `public/audio/pitre/pufferfish.mp3` is currently an original synthesized placeholder. **Drop the real pufferfish meme clip in here.**
-- Each line has several takes (`mama_1.mp3`, `mama_2.mp3`, …) and the game picks one at random. You can delete takes or add more; just update the `files` list in the manifest.
-- The spoken lines were generated with the open-source [Kokoro-82M](https://github.com/thewh1teagle/kokoro-onnx) voice model (Apache-2.0). See [`tools/voices/README.md`](tools/voices/README.md) to regenerate or tweak them.
+- **Your friends' voices:** send them [`tools/voices/RECORDING.md`](tools/voices/RECORDING.md). They record lines on their phones and upload them to `tools/voices/recordings/<their name>/`; `tools/voices/import.py` cleans them up (noise, volume) and puts them in the game. A recorded line replaces the robot voice, and when you're the one saying it, you hear your own take.
+- **Real gunshots, explosions and beeps:** [`tools/sfx/SOUND_LIST.md`](tools/sfx/SOUND_LIST.md) lists every sound effect, what to look for and where (free CC0 packs), and how to add it with `tools/sfx/import.py`. Sounds you don't replace stay synthesized.
+- To swap a single voice file by hand, replace it with your own MP3 **using the same filename** and redeploy.
+- `public/audio/pitre/pufferfish.mp3` is an original synthesized placeholder. You can drop the real pufferfish meme clip in for private games, but it's copyrighted, so don't commit it to this public repo.
+- The robot lines were generated with the open-source [Kokoro-82M](https://github.com/thewh1teagle/kokoro-onnx) voice model (Apache-2.0). See [`tools/voices/README.md`](tools/voices/README.md) to regenerate or tweak them.
 
 ## Graphics (Options → Graphics)
 
@@ -212,7 +214,7 @@ The detailed Spartan, energy can, Super Soaker and spring are made **from code w
 | Language / build | TypeScript + Vite |
 | 3D | Three.js: procedural low-poly world, instanced grass/rocks/trees. Low/Medium use plain Lambert shading, so they stay fast on phones. High/Ultra add bloom + tone mapping, PBR materials with sky reflections, and Blender-made glTF models, all loaded on demand |
 | Multiplayer | Trystero (WebRTC P2P). The host's browser runs the authoritative simulation; clients get 20 Hz snapshots with interpolation and lag compensation |
-| Audio | Web Audio: 3D positional panners, procedural sound effects, MP3 voice lines |
+| Audio | Web Audio: 3D positional panners, procedural sound effects (real recordings swap in when imported), MP3 voice lines |
 | UI | Plain DOM/CSS. The lobby settings form is generated from a settings schema |
 | Tests | Vitest (simulation, bots, netcode, Pitre logic, graphics settings, model files) + Playwright (offline match, 2-tab multiplayer, phone touch, spectating, power-ups, graphics options) |
 | Hosting | Any static host; configured for **Vercel** (free Hobby plan) |
@@ -227,9 +229,10 @@ src/input/    mouse/keyboard, gamepad and touch
 src/audio/    audio engine, synthesized SFX, Pitre Mode voice logic
 src/ui/       HUD, settings form, styles
 src/app/      screens (title, lobby, results, options) and session wiring
-public/audio/ voice lines + manifest
+public/audio/ voice lines, imported sound effects + manifest
 public/models/ detailed glTF models (High / Ultra)
-tools/voices/ voice-line generator (Python, offline)
+tools/voices/ voice-line generator and friends' recordings importer (Python, offline)
+tools/sfx/    sound-effect importer: downloaded CC0 sounds → game MP3s (Python, offline)
 tools/models/ model builder (Blender as a Python module, offline)
 ```
 
