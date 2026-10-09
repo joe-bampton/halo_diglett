@@ -209,6 +209,29 @@ export function buildWeaponModel(id: WeaponId, pbr = false, detailed = false): T
       ]);
       muzzle = new THREE.Vector3(0, 0.05, -0.48);
       break;
+    case 'frag':
+      // held up in the hand, ready to throw: a ribbed olive egg with its spoon and pin
+      g = assemble([
+        [new THREE.SphereGeometry(0.07, 12, 10).scale(1, 1.25, 1).translate(0, 0.08, -0.12), 0x4a5a32],
+        [new THREE.TorusGeometry(0.071, 0.008, 6, 14).rotateX(Math.PI / 2).translate(0, 0.08, -0.12), 0x3a4628],
+        [new THREE.CylinderGeometry(0.03, 0.035, 0.04, 10).translate(0, 0.175, -0.12), dark],
+        [new THREE.BoxGeometry(0.025, 0.12, 0.012).translate(0.035, 0.12, -0.12).rotateZ(-0.08), mid],
+        [new THREE.TorusGeometry(0.022, 0.005, 5, 10).rotateY(Math.PI / 2).translate(-0.04, 0.19, -0.12), light],
+        [new THREE.BoxGeometry(0.05, 0.12, 0.07).translate(0, -0.04, -0.06), dark],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.08, -0.12);
+      break;
+    case 'plasma':
+      // a glowing blue core held in a dark Covenant cage
+      g = assemble([
+        [new THREE.SphereGeometry(0.06, 14, 10).translate(0, 0.08, -0.12), glow(0x5ab8ff)],
+        [new THREE.TorusGeometry(0.068, 0.012, 6, 14, Math.PI * 1.3).rotateZ(-0.65 * Math.PI).translate(0, 0.08, -0.12), 0x30364a],
+        [new THREE.TorusGeometry(0.068, 0.012, 6, 14, Math.PI * 1.3).rotateY(Math.PI / 2).rotateX(0.35 * Math.PI).translate(0, 0.08, -0.12), 0x30364a],
+        [new THREE.CylinderGeometry(0.02, 0.03, 0.04, 8).translate(0, 0.0, -0.12), 0x30364a],
+        [new THREE.BoxGeometry(0.05, 0.12, 0.07).translate(0, -0.06, -0.06), dark],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.08, -0.12);
+      break;
   }
   g.userData.muzzle = muzzle;
   if (pbr) pbrify(g, { roughness: 0.42, metalness: 0.55 });

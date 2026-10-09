@@ -15,7 +15,7 @@ import { bigHeadShift, drop, eyePos, hitboxOf, rayHitbox } from '../sim/hitbox';
 import { ORB_R, orbPos } from '../sim/orbs';
 import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import type { Projectile, SimEvent, Vec3T } from '../sim/types';
-import { WEAPONS, weaponByIndex, type WeaponId } from '../sim/weapons';
+import { WEAPONS, hostDrawn, weaponByIndex, type WeaponId } from '../sim/weapons';
 import { setHtml, setStyle } from '../ui/dom';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
 import { Decals, FlashLights, Particles, Ribbons, Shockwaves } from './fx';
@@ -54,6 +54,9 @@ interface SpartanView {
   sauce: THREE.Mesh[];
 }
 
+/** How long the first-person grenade throw takes (s). */
+const THROW_ANIM = 0.75;
+
 /** Sound-and-light events this late (a connection that stalled, then caught up) are skipped. */
 const STALE_FX_TICKS = Math.round(0.5 * TICK_RATE);
 
@@ -67,6 +70,8 @@ interface ProjView {
   /** my own shot, predicted here (the host's copy of it is never drawn) */
   local: boolean;
   trailAcc: number;
+  /** a plasma grenade stuck to this player: drawn on them as they move */
+  attach?: { slot: number; off: { x: number; y: number; z: number } } | null;
 }
 
 interface OrbView {
@@ -83,7 +88,7 @@ interface StrikeView {
 }
 
 const WEAPON_SFX: Record<WeaponId, SfxId> = {
-  sniper: 'sniper', br: 'rifle', crossbow: 'crossbow', rpg: 'rocket', grenade: 'bloop', railgun: 'rail', hyperbeam: 'charge', needler: 'needle', flamethrower: 'flameLoop', minigun: 'minigun', orbital: 'beep', soaker: 'squirt',
+  sniper: 'sniper', br: 'rifle', crossbow: 'crossbow', rpg: 'rocket', grenade: 'bloop', railgun: 'rail', hyperbeam: 'charge', needler: 'needle', flamethrower: 'flameLoop', minigun: 'minigun', orbital: 'beep', soaker: 'squirt', frag: 'toss', plasma: 'toss',
 };
 
 /** Dispose geometries, materials and textures of a detached subtree. */
@@ -124,6 +129,19 @@ function projMesh(kind: string): THREE.Object3D | null {
     simple('bolt', new THREE.CylinderGeometry(0.02, 0.02, 0.8, 5).rotateX(Math.PI / 2), 0x9fe8ff);
     simple('grenade', new THREE.SphereGeometry(0.1, 8, 6), 0x7cff6b);
     simple('needle', new THREE.ConeGeometry(0.03, 0.3, 4).rotateX(-Math.PI / 2), 0xff5fd2);
+    const fragGeo = keep(new THREE.SphereGeometry(0.08, 10, 8).scale(1, 1.25, 1));
+    const fragMat = keep(new THREE.MeshLambertMaterial({ color: 0x4a5a32 }));
+    projCache.set('frag', () => new THREE.Mesh(fragGeo, fragMat));
+    const plasmaCore = keep(new THREE.SphereGeometry(0.09, 12, 8));
+    const plasmaMat = keep(new THREE.MeshBasicMaterial({ color: 0xbfe6ff }));
+    const plasmaGlow = keep(new THREE.SphereGeometry(0.2, 12, 8));
+    const plasmaGlowMat = keep(new THREE.MeshBasicMaterial({ color: 0x3a9cff, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
+    projCache.set('plasma', () => {
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(plasmaCore, plasmaMat));
+      g.add(new THREE.Mesh(plasmaGlow, plasmaGlowMat));
+      return g;
+    });
   }
   return projCache.get(kind)?.() ?? null;
 }
@@ -150,6 +168,8 @@ export class Game {
   private vmModel: THREE.Group | null = null;
   private vmWeapon: WeaponId | '' = '';
   private vmKick = 0;
+  /** seconds since a grenade left the hand (the throw animation) */
+  private vmThrow = 9;
   private sky: THREE.Mesh;
   private grass: Grass;
   private trees: THREE.InstancedMesh;
@@ -501,7 +521,7 @@ export class Game {
     const world = new THREE.Group();
     const vm = new THREE.Group();
     world.visible = vm.visible = false;
-    for (const k of ['rocket', 'bolt', 'grenade', 'needle']) {
+    for (const k of ['rocket', 'bolt', 'grenade', 'frag', 'plasma', 'needle']) {
       const o = projMesh(k);
       if (o) world.add(o);
     }
@@ -949,6 +969,7 @@ export class Game {
     const dir = new THREE.Vector3(d.x, d.y, d.z);
     this.vmKick = Math.min(1, this.vmKick + w.fx.recoil * 0.6);
     this.camKick += w.fx.recoil * 0.004;
+    if (w.projectile?.loftDeg) this.vmThrow = 0;
     this.muzzleFlash(this.muzzleOf(s.slot), dir, w.id, true);
     this.playFireSound(s.slot, w.id, null);
     this.pitreLocalCue({ speaker: s.slot, line: 'brap', delayMs: 0, priority: 1 }, w.id);
@@ -965,8 +986,9 @@ export class Game {
       const endP = eye.clone().addScaledVector(dir, end);
       this.tracer(this.muzzleOf(s.slot), endP, w.id);
       if (end < w.range) this.impact(endP, w.id);
-    } else if (w.projectile && !w.projectile.homing) {
-      // (homing needles pick their target on the host: those are drawn from the host's copy)
+    } else if (w.projectile && !hostDrawn(w.projectile)) {
+      // (homing needles pick their target on the host, and grenades bounce off or stick to players there: those are
+      // drawn from the host's copy)
       const def = w.projectile;
       const id = `L${++this.pred.localId}`;
       const start = eye.clone().addScaledVector(dir, 0.6);
@@ -1018,6 +1040,7 @@ export class Game {
             }
           }
           if (fp) {
+            if (w.projectile?.loftDeg) this.vmThrow = 0;
             this.vmKick = Math.min(1, this.vmKick + w.fx.recoil * 0.6);
             this.camKick += w.fx.recoil * 0.004;
           }
@@ -1025,9 +1048,26 @@ export class Game {
           break;
         }
         case 'proj': {
-          if (e.p === mySlot && this.ownShotPredicted(e.w) && !WEAPONS[e.w].projectile?.homing) break;
+          if (e.p === mySlot && this.ownShotPredicted(e.w) && !hostDrawn(WEAPONS[e.w].projectile!)) break;
           const pr: Projectile = { id: e.id, owner: e.p, weapon: e.w, x: e.pos[0], y: e.pos[1], z: e.pos[2], vx: e.vel[0], vy: e.vel[1], vz: e.vel[2], born: e.t, bounces: 0, target: e.tgt, fuseAt: 0, y0: e.pos[1] };
           this.addProjectile(String(e.id), pr, false);
+          break;
+        }
+        case 'pmove': {
+          // a grenade glanced off someone, or stuck: pick its flight up from the host's copy
+          const pv = this.projs.get(String(e.id));
+          if (!pv) break;
+          const tr = pv.track;
+          Object.assign(tr.pr, { x: e.pos[0], y: e.pos[1], z: e.pos[2], vx: e.vel[0], vy: e.vel[1], vz: e.vel[2] });
+          tr.tick = e.t;
+          tr.px = e.pos[0];
+          tr.py = e.pos[1];
+          tr.pz = e.pos[2];
+          tr.stopped = e.on !== undefined;
+          pv.attach = e.on !== undefined && e.on >= 0 && e.off ? { slot: e.on, off: { x: e.off[0], y: e.off[1], z: e.off[2] } } : null;
+          const pos = { x: e.pos[0], y: e.pos[1], z: e.pos[2] };
+          if (pv.weapon === 'plasma' && e.on !== undefined) audio.play('plasmaStick', { pos, gain: 0.8, bus: 'guns' });
+          else if (e.on === undefined) audio.play('clink', { pos, gain: 0.7, bus: 'guns' });
           break;
         }
         case 'pend': {
@@ -1365,7 +1405,7 @@ export class Game {
 
   private muzzleFlash(pos: THREE.Vector3, dir: THREE.Vector3, w: WeaponId, mine: boolean) {
     const c = WEAPONS[w].fx.color;
-    if (w === 'flamethrower') return;
+    if (w === 'flamethrower' || WEAPONS[w].projectile?.loftDeg) return; // (nothing flashes when a grenade is thrown)
     this.fxAdd.emit({ pos, count: mine ? 5 : 7, speed: [0.5, 3], dir, spread: 0.5, life: [0.04, 0.09], size: [mine ? 0.25 : 0.45, 0.05], color: 0xffffff, color1: c });
     if (!mine && this.q.flashLights > 1) this.lights.flash(pos, c, 3, 6, 0.08);
   }
@@ -1732,6 +1772,13 @@ export class Game {
         continue;
       }
       const pos = trackPos(tr, now, tmpP);
+      const stuckTo = pv.attach ? s.players[pv.attach.slot] : null;
+      if (stuckTo?.alive) {
+        const a = hitboxOf(this.holeOf(stuckTo), stuckTo.exposure, this.headScaleFor(stuckTo), this.liftOf(stuckTo)).torsoB;
+        pos.x = a.x + pv.attach!.off.x;
+        pos.y = a.y + pv.attach!.off.y;
+        pos.z = a.z + pv.attach!.off.z;
+      }
       if (pv.obj) {
         pv.obj.visible = ageTicks >= 0;
         pv.obj.position.set(pos.x, pos.y, pos.z);
@@ -1755,6 +1802,7 @@ export class Game {
         } else if (w === 'crossbow') this.fxAdd.emit({ pos, count: 1, speed: [0, 0.1], life: [0.15, 0.25], size: [0.12, 0.02], color: 0x9fe8ff });
         else if (w === 'needler') this.fxAdd.emit({ pos, count: 1, speed: [0, 0.1], life: [0.1, 0.2], size: [0.14, 0.02], color: 0xff5fd2 });
         else if (w === 'grenade') this.fxAdd.emit({ pos, count: 1, speed: [0, 0.1], life: [0.15, 0.3], size: [0.18, 0.02], color: 0x7cff6b });
+        else if (w === 'plasma') this.fxAdd.emit({ pos, count: 1, speed: [0, 0.2], life: [0.15, 0.3], size: [0.25, 0.03], color: 0x9fd4ff, color1: 0x2a7cff });
       }
     }
   }
@@ -2079,9 +2127,23 @@ export class Game {
     }
     const exp = other ? other.exposure : s.myExposure;
     const bob = Math.sin(this.time * 2) * 0.004;
+    // a throw: the hand swings forward, empty for a moment, then the next grenade comes up from below
+    this.vmThrow += dt;
+    let tY = 0, tZ = 0, tRot = 0, empty = false;
+    if (WEAPONS[w].projectile?.loftDeg && this.vmThrow < THROW_ANIM) {
+      const k = this.vmThrow / THROW_ANIM;
+      if (k < 0.3) {
+        const a = Math.sin((k / 0.3) * Math.PI);
+        tY = a * 0.1;
+        tZ = -a * 0.18;
+        tRot = -a * 0.9;
+      } else if (k < 0.6) empty = true;
+      else tY = -(1 - (k - 0.6) / 0.4) * 0.3;
+    }
+    if (this.vmModel) this.vmModel.visible = !empty;
     this.vmHolder.scale.setScalar(0.6);
-    this.vmHolder.position.set(0.3, -0.27 - (1 - exp) * 0.25 - reloadDip * 0.18 + bob, -0.46 + this.vmKick * 0.06);
-    this.vmHolder.rotation.set(this.vmKick * 0.12 - reloadDip * 0.6, 0.06, reloadDip * 0.35);
+    this.vmHolder.position.set(0.3, -0.27 - (1 - exp) * 0.25 - reloadDip * 0.18 + bob + tY, -0.46 + this.vmKick * 0.06 + tZ);
+    this.vmHolder.rotation.set(this.vmKick * 0.12 - reloadDip * 0.6 + tRot, 0.06, reloadDip * 0.35);
   }
 
   // -------------------------------------------------------------------------------------------

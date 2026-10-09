@@ -413,6 +413,47 @@ const fizz: Gen = (sr) => {
   );
 };
 
+/** A grenade leaving the hand: a short swish of air. */
+const toss: Gen = (sr) => {
+  const l1 = lp(1200, sr), h1 = hp(250, sr);
+  const dur = 0.28;
+  return normalize(
+    buf(sr, dur, (t) => {
+      const k = Math.sin(Math.PI * Math.min(1, t / dur));
+      return h1(l1(noise(), 500 + 2600 * k)) * k * k;
+    }),
+    0.5,
+  );
+};
+
+/** A frag hitting stone or a helmet: a bright metallic clink. */
+const clink: Gen = (sr) => {
+  let p1 = 0, p2 = 0;
+  return normalize(
+    buf(sr, 0.22, (t) => {
+      p1 += (TAU * 2350) / sr;
+      p2 += (TAU * 3720) / sr;
+      return (Math.sin(p1) + 0.6 * Math.sin(p2)) * env(t, 0.0005, 0.045) + noise() * env(t, 0.0003, 0.004) * 0.6;
+    }),
+    0.5,
+  );
+};
+
+/** A plasma grenade sticking: a wet electric thunk, then a rising fizz until it goes off. */
+const plasmaStick: Gen = (sr) => {
+  const l1 = lp(500, sr), h1 = hp(1800, sr);
+  let ph = 0;
+  return normalize(
+    buf(sr, 1.2, (t) => {
+      ph += (TAU * (220 + 900 * t * t)) / sr;
+      const thunk = l1(noise()) * env(t, 0.002, 0.05) * 2;
+      const buzz = (Math.sin(ph) * 0.5 + h1(noise()) * 0.5) * Math.min(1, t * 6) * (0.4 + 0.6 * t);
+      return thunk + buzz * 0.6;
+    }),
+    0.55,
+  );
+};
+
 export const SFX = {
   sniper,
   rifle,
@@ -450,6 +491,9 @@ export const SFX = {
   splat,
   canOpen,
   fizz,
+  toss,
+  clink,
+  plasmaStick,
 } satisfies Record<string, Gen>;
 
 export type SfxId = keyof typeof SFX;

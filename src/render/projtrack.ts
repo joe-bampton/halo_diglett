@@ -73,7 +73,7 @@ export function stepTrack(t: ProjTrack, def: ProjectileDef, arena: Arena, homing
     return 'hit';
   }
   const hole = arena.nearestHole(at.x, at.z);
-  if (def.bounce && hole && Math.hypot(hole.x - at.x, hole.z - at.z) < MOUTH_R && at.y < hole.rim) {
+  if ((def.bounce || def.sticky) && hole && Math.hypot(hole.x - at.x, hole.z - at.z) < MOUTH_R && at.y < hole.rim) {
     // dropped into someone's hole: it goes off at the bottom
     stopAt(t, { x: hole.x, y: hole.ground - 1.2, z: hole.z });
     return 'end';

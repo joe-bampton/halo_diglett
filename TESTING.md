@@ -23,7 +23,7 @@
 | Flag | Effect |
 |---|---|
 | `autostart=offline&bots=N` | skip the menus |
-| `weapon=rpg` / `sniper` / `br` / `crossbow` / `grenade` / `railgun` / `hyperbeam` / `needler` | starting weapon |
+| `weapon=rpg` / `sniper` / `br` / `crossbow` / `grenade` / `railgun` / `hyperbeam` / `needler` / `frag` / `plasma` | starting weapon |
 | `mode=gunGame` / `randomLife` / `choice` | weapon mode |
 | `orbs=chaos` | lots of power-up bubbles |
 | `pitre=1` | Pitre Mode on |
@@ -110,6 +110,9 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] Crossbow bolts drop over distance
 - [ ] RPG explodes
 - [ ] A grenade dropped into a hole kills the ducked player
+- [ ] Frag Grenade (`weapon=frag`): the grenade swings out of your hand in an arc, bounces off the ground and off players with a clink, and goes off after 2 s; one that rolls into a hole gets the player in it
+- [ ] Plasma Grenade (`weapon=plasma`): glowing blue; sticks to a player ("Stuck" medal) and stays on them as they duck, then kills them; one that lands on the grass sticks there and goes off a second later
+- [ ] Online (`?net=bc`, two tabs): the other tab sees the same bounces and the grenade stuck to the same player
 - [ ] Railgun charges, then pierces
 - [ ] Hyperbeam charges into a 1.8 s beam
 - [ ] Needler homes; 7 needles make a supercombine

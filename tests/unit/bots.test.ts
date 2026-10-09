@@ -25,7 +25,7 @@ describe('bots', () => {
     expect(ms).toBeLessThan(1.5);
   });
 
-  for (const weapon of ['br', 'crossbow', 'rpg', 'grenade', 'railgun', 'hyperbeam', 'needler'] as const) {
+  for (const weapon of ['br', 'crossbow', 'rpg', 'grenade', 'railgun', 'hyperbeam', 'needler', 'frag', 'plasma'] as const) {
     it(`bots get kills with ${weapon}`, () => {
       const { m } = botMatch(['normal', 'heroic', 'legendary', 'heroic'], { weapon }, 120, 7);
       const total = m.players.filter(Boolean).reduce((a, p) => a + p!.kills, 0);

@@ -118,6 +118,8 @@ Every setting is in the lobby. The **presets** are Classic Diglett, Rocket Whack
 | Railgun | charge up; pierces several players |
 | Hyperbeam | charge up, then a sweeping beam |
 | Needler | homing; 7 needles = supercombine |
+| Frag Grenade | thrown, two at a time; bounces off the ground and off players, goes off after 2 s. Roll one into a hole to get the player hiding in it |
+| Plasma Grenade | thrown, two at a time; sticks to the first player (or patch of ground) it touches and goes off a second later. Once you're stuck, ducking won't save you |
 
 **Damage**
 - Damage multiplier

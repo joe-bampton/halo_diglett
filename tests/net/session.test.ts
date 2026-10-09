@@ -47,6 +47,33 @@ describe('loopback session', () => {
   });
 });
 
+describe('thrown grenades over the wire', () => {
+  it('clients hear about plasma grenades sticking (pmove) and going off', async () => {
+    const { host: hn, client: cn } = loopbackPair();
+    let now = 0;
+    const host = new HostSession(hn, 'LOCAL', false);
+    host.clock = () => now;
+    const client = new ClientSession(cn, { name: 'Me', color: 0x3d7bff, token: 'tok' });
+    client.clock = () => now;
+    await flush();
+    host.addBot('legendary');
+    host.addBot('legendary');
+    host.addBot('legendary');
+    host.setSettings({ ...host.lobby.settings, orbRate: 'off', weapon: 'plasma' });
+    host.startMatch(5);
+    const seen = { proj: 0, pmove: 0, boom: 0 };
+    for (let i = 0; i < 60 * 60; i++) {
+      now += 1000 / 60;
+      host.update(now);
+      client.update(now);
+      for (const e of client.drainEvents()) if (e.k === 'proj' || e.k === 'pmove' || e.k === 'boom') seen[e.k]++;
+    }
+    expect(seen.proj).toBeGreaterThan(3);
+    expect(seen.pmove).toBeGreaterThan(0);
+    expect(seen.boom).toBeGreaterThan(0);
+  });
+});
+
 describe('manual respawn over the wire', () => {
   it('a dead player stays down until they press Jump', async () => {
     const { host: hn, client: cn } = loopbackPair();

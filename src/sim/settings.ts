@@ -209,23 +209,34 @@ const SETTINGS_VERSION = 2;
 /** Power-ups that existed before saved settings remembered which ones they knew about. */
 const LEGACY_POWERUPS: string[] = ['flamethrower', 'minigun', 'overshield', 'invincible', 'camo', 'damage', 'homing', 'xray', 'bighead', 'orbital', 'quickhands'];
 
+/** Weapons that existed before saved settings remembered which ones they knew about. */
+const LEGACY_WEAPONS: string[] = ['sniper', 'br', 'crossbow', 'rpg', 'grenade', 'railgun', 'hyperbeam', 'needler'];
+/** The Gun Game order before the thrown grenades. */
+const LEGACY_GUNGAME = ['railgun', 'sniper', 'crossbow', 'br', 'needler', 'hyperbeam', 'rpg', 'grenade'];
+
+const strings = (x: unknown, fallback: string[]) => (Array.isArray(x) ? x.filter((y): y is string => typeof y === 'string') : fallback);
+
 /**
- * Load settings saved by an older version: power-ups added since then start enabled
- * (a saved list only says which of the power-ups known at the time were picked).
+ * Load settings saved by an older version: power-ups and weapons added since then start enabled
+ * (a saved list only says which of the ones known at the time were picked).
  */
 export function migrateSavedSettings(raw: unknown): Settings {
   const src = raw && typeof raw === 'object' ? { ...(raw as Record<string, unknown>) } : {};
-  const known = Array.isArray(src.knownPowerups) ? src.knownPowerups.filter((x): x is string => typeof x === 'string') : LEGACY_POWERUPS;
+  const known = strings(src.knownPowerups, LEGACY_POWERUPS);
   if (Array.isArray(src.powerups)) src.powerups = [...src.powerups, ...POWERUP_IDS.filter((id) => !known.includes(id) && !(src.powerups as unknown[]).includes(id))];
+  const knownW = strings(src.knownWeapons, LEGACY_WEAPONS);
+  if (Array.isArray(src.allowedWeapons)) src.allowedWeapons = [...src.allowedWeapons, ...LOADOUT_WEAPONS.filter((id) => !knownW.includes(id) && !(src.allowedWeapons as unknown[]).includes(id))];
+  // an untouched Gun Game order gets the new default
+  if (Array.isArray(src.gunGameOrder) && src.gunGameOrder.join() === LEGACY_GUNGAME.join() && !Array.isArray(src.knownWeapons)) src.gunGameOrder = [...DEFAULT_GUNGAME];
   // the old default was too tight for phones (their round trip plus the interpolation delay is ~120–270 ms)
   const version = typeof src.settingsVersion === 'number' ? src.settingsVersion : 1;
   if (version < 2 && src.maxRewindMs === 150) src.maxRewindMs = DEFAULT_SETTINGS.maxRewindMs;
   return sanitizeSettings(src);
 }
 
-/** What to save: the settings plus the power-ups this version knows about. */
-export function settingsForStorage(s: Settings): Settings & { knownPowerups: string[]; settingsVersion: number } {
-  return { ...s, knownPowerups: [...POWERUP_IDS], settingsVersion: SETTINGS_VERSION };
+/** What to save: the settings plus the power-ups and weapons this version knows about. */
+export function settingsForStorage(s: Settings): Settings & { knownPowerups: string[]; knownWeapons: string[]; settingsVersion: number } {
+  return { ...s, knownPowerups: [...POWERUP_IDS], knownWeapons: [...LOADOUT_WEAPONS], settingsVersion: SETTINGS_VERSION };
 }
 
 export function applyPreset(base: Settings, preset: string): Settings {

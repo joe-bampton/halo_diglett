@@ -3,8 +3,8 @@ import type { Settings } from '../sim/settings';
 import type { BotDifficulty, MatchPhase, PlayerCommand, RosterEntry, SimEvent } from '../sim/types';
 import type { WeaponId } from '../sim/weapons';
 
-/** Bumped whenever host and clients must run the same build (v3: 8 players, fast state channel, CH_EV). */
-export const PROTOCOL_VERSION = 3;
+/** Bumped whenever host and clients must run the same build (v3: 8 players, fast state channel, CH_EV; v4: thrown grenades). */
+export const PROTOCOL_VERSION = 4;
 export const BUILD_ID: string = (import.meta.env?.VITE_BUILD_ID as string | undefined) ?? 'dev';
 
 export interface SlotInfo {

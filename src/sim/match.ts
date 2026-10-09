@@ -1,5 +1,5 @@
 import { Rng } from '../shared/rng';
-import { angleBetween, clamp, dirFromYawPitch, dist, norm, spreadDir, sub, type V3 } from '../shared/vec';
+import { angleBetween, clamp, dirFromYawPitch, dist, norm, spreadDir, sub, yawPitchOf, type V3 } from '../shared/vec';
 import type { Arena } from './arena';
 import { MOUTH_R } from './arena';
 import {
@@ -690,7 +690,7 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
     }
   } else {
     const def = w.projectile!;
-    const d = spreadDir(dir, (w.spreadDeg * Math.PI) / 180, rng.next(), rng.next());
+    const d = launchDir(spreadDir(dir, (w.spreadDeg * Math.PI) / 180, rng.next(), rng.next()), def);
     let target = -1;
     if (def.homing) {
       const q = findHomingTarget(m, arena, p, origin, d, (def.homing.coneDeg * Math.PI) / 180, def.homing.range);
@@ -854,6 +854,29 @@ function beamTick(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext,
 // Projectiles
 // ---------------------------------------------------------------------------------------------
 
+/** Thrown grenades leave the hand a little above the aim. */
+export function launchDir(d: V3, def: NonNullable<WeaponDef['projectile']>): V3 {
+  if (!def.loftDeg) return d;
+  const a = yawPitchOf(d);
+  return dirFromYawPitch(a.yaw, Math.min(Math.PI / 2 - 0.01, a.pitch + (def.loftDeg * Math.PI) / 180));
+}
+
+/** Where a grenade stuck to a player is anchored: their upper torso. */
+function stickAnchor(hb: Hitbox): V3 {
+  return hb.torsoB;
+}
+
+/** Grenades that stop on a player or the ground: tell clients where it is now. */
+function stopProjectile(m: MatchState, ctx: StepContext, pr: Projectile, at: V3, on: number, off?: V3) {
+  pr.x = at.x;
+  pr.y = at.y;
+  pr.z = at.z;
+  pr.vx = pr.vy = pr.vz = 0;
+  pr.stuck = on;
+  pr.off = off;
+  ctx.events.push(off ? { k: 'pmove', t: m.tick, id: pr.id, pos: V(at), vel: [0, 0, 0], on, off: V(off) } : { k: 'pmove', t: m.tick, id: pr.id, pos: V(at), vel: [0, 0, 0], on });
+}
+
 /** Pure ballistic/homing integration shared by host & client visuals. */
 export function integrateProjectile(pr: Projectile, def: NonNullable<WeaponDef['projectile']>, targetPos: V3 | null) {
   if (def.homing && targetPos) {
@@ -895,6 +918,16 @@ function terrainNormal(arena: Arena, x: number, z: number): V3 {
   return norm({ x: -hx / (2 * e), y: 1, z: -hz / (2 * e) });
 }
 
+/** A bouncing frag slower than this (m/s) after a bounce comes to rest. */
+const REST_SPEED = 2;
+
+function closestOnSegment(p: V3, a: V3, b: V3): V3 {
+  const ab = sub(b, a);
+  const L2 = ab.x * ab.x + ab.y * ab.y + ab.z * ab.z;
+  const k = L2 > 0 ? clamp(((p.x - a.x) * ab.x + (p.y - a.y) * ab.y + (p.z - a.z) * ab.z) / L2, 0, 1) : 0;
+  return { x: a.x + ab.x * k, y: a.y + ab.y * k, z: a.z + ab.z * k };
+}
+
 function stepProjectiles(m: MatchState, ctx: StepContext) {
   const { arena } = ctx;
   const t = m.tick;
@@ -903,6 +936,26 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     const w = WEAPONS[pr.weapon];
     const def = w.projectile!;
     const owner = m.players[pr.owner];
+    if (pr.stuck !== undefined) {
+      // stuck to a player (it rides along, Spring Jump and all) or lying on the ground, until its fuse runs out
+      let inHole = -1;
+      if (pr.stuck >= 0) {
+        const q = m.players[pr.stuck];
+        if (q?.alive) {
+          const a = stickAnchor(playerHitbox(m, arena, q));
+          pr.x = a.x + pr.off!.x;
+          pr.y = a.y + pr.off!.y;
+          pr.z = a.z + pr.off!.z;
+          inHole = q.hole;
+        } else pr.stuck = -1;
+      } else {
+        const hole = arena.nearestHole(pr.x, pr.z);
+        if (hole && Math.hypot(hole.x - pr.x, hole.z - pr.z) < MOUTH_R && pr.y < hole.rim) inHole = hole.id;
+      }
+      if (pr.fuseAt && t >= pr.fuseAt) endProjectile(m, ctx, pr, { x: pr.x, y: pr.y, z: pr.z }, w, inHole);
+      else keep.push(pr);
+      continue;
+    }
     const prev = { x: pr.x, y: pr.y, z: pr.z };
     let targetPos: V3 | null = null;
     if (pr.target >= 0) {
@@ -964,6 +1017,37 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
       endProjectile(m, ctx, pr, at, w, -1);
       continue;
     }
+    if (hitPlayer && def.sticky) {
+      // plasma: it sticks, and goes off a moment later wherever they go
+      const q = m.players[hitPlayer.slot]!;
+      const a = stickAnchor(playerHitbox(m, arena, q, q.exposure, owner ?? null));
+      pr.fuseAt = t + secToTicks(def.sticky.fuse);
+      stopProjectile(m, ctx, pr, at, q.slot, sub(at, a));
+      if (owner && owner !== q) bumpMedal(m, ctx, owner, 'stuck');
+      keep.push(pr);
+      continue;
+    }
+    if (hitPlayer && def.contact === 'bounce') {
+      // a frag glances off whoever it hits
+      const q = m.players[hitPlayer.slot]!;
+      const hb = playerHitbox(m, arena, q, q.exposure, owner ?? null);
+      const c = hitPlayer.head ? hb.head : closestOnSegment(at, hb.torsoA, hb.torsoB);
+      const n = norm(sub(at, c));
+      const r = def.bounce?.restitution ?? 0.4;
+      const vdn = pr.vx * n.x + pr.vy * n.y + pr.vz * n.z;
+      if (vdn < 0) {
+        pr.vx = (pr.vx - 2 * vdn * n.x) * r;
+        pr.vy = (pr.vy - 2 * vdn * n.y) * r;
+        pr.vz = (pr.vz - 2 * vdn * n.z) * r;
+      }
+      pr.x = at.x + n.x * 0.05;
+      pr.y = at.y + n.y * 0.05;
+      pr.z = at.z + n.z * 0.05;
+      pr.bounces++;
+      ctx.events.push({ k: 'pmove', t, id: pr.id, pos: V(pr), vel: V({ x: pr.vx, y: pr.vy, z: pr.vz }) });
+      keep.push(pr);
+      continue;
+    }
     if (hitPlayer) {
       const q = m.players[hitPlayer.slot]!;
       if (w.damage > 0) {
@@ -985,15 +1069,29 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
       endProjectile(m, ctx, pr, at, w, hitPlayer.inHole ? q.hole : -1, w.damage > 0);
       continue;
     }
-    if (inMouth && def.bounce) {
+    if (inMouth && (def.bounce || def.sticky)) {
       // it fell into someone's hole — detonate at the bottom
       const bottom = { x: hole!.x, y: hole!.ground - 1.2, z: hole!.z };
       endProjectile(m, ctx, pr, bottom, w, hole!.id);
       continue;
     }
     if (hitWorld) {
-      if (def.bounce && pr.bounces < def.bounce.max && !(pr.fuseAt && t >= pr.fuseAt)) {
+      const fused = pr.fuseAt && t >= pr.fuseAt;
+      if (def.sticky && !fused) {
+        pr.fuseAt = Math.min(pr.fuseAt || Infinity, t + secToTicks(def.sticky.fuse));
+        stopProjectile(m, ctx, pr, at, -1);
+        keep.push(pr);
+        continue;
+      }
+      if (def.bounce && pr.bounces < def.bounce.max && !fused) {
         bounceOffTerrain(pr, arena, at, def.bounce.restitution);
+        // a frag that has nearly stopped rolls to a halt and waits for its fuse
+        if (def.rest && Math.hypot(pr.vx, pr.vy, pr.vz) < REST_SPEED) stopProjectile(m, ctx, pr, at, -1);
+        keep.push(pr);
+        continue;
+      }
+      if (def.rest && !fused) {
+        stopProjectile(m, ctx, pr, at, -1);
         keep.push(pr);
         continue;
       }

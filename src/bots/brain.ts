@@ -8,7 +8,7 @@ import { sauceAimScale } from '../sim/sauce';
 import { inFlight, springLift } from '../sim/spring';
 import { orbPos } from '../sim/orbs';
 import type { BotDifficulty, MatchState, PlayerCommand, PlayerState, SimEvent } from '../sim/types';
-import { WEAPONS } from '../sim/weapons';
+import { WEAPONS, type WeaponDef } from '../sim/weapons';
 
 export interface BotProfile {
   label: string;
@@ -60,6 +60,12 @@ export function ballisticPitch(dx: number, dy: number, speed: number, g: number)
   const disc = v2 * v2 - g * (g * dx * dx + 2 * dy * v2);
   if (disc < 0) return null;
   return Math.atan2(v2 - Math.sqrt(disc), g * dx);
+}
+
+/** Lob it into their hole: bouncing grenades always, sticky ones when there's nobody up to stick to. */
+function lobsIn(w: WeaponDef, exposure: number): boolean {
+  const p = w.projectile;
+  return !!p && (!!p.bounce || (!!p.sticky && !isExposed(exposure)));
 }
 
 export class BotBrain {
@@ -192,7 +198,7 @@ export class BotBrain {
       const hb = playerHitbox(m, arena, tgt, flying ? tgt.exposure : Math.max(tgt.exposure, 0.3), me);
       if (w.splash) {
         // aim at the rim for splash weapons (or into the hole for lobbed grenades)
-        aimPoint = w.projectile?.bounce ? { x: hb.head.x, y: hb.rim - 0.2, z: hb.head.z } : { x: hb.torsoA.x, y: Math.max(hb.rim + 0.1, hb.torsoA.y + 0.2), z: hb.torsoA.z };
+        aimPoint = lobsIn(w, tgt.exposure) ? { x: hb.head.x, y: hb.rim - 0.2, z: hb.head.z } : { x: hb.torsoA.x, y: Math.max(hb.rim + 0.1, hb.torsoA.y + 0.2), z: hb.torsoA.z };
         tolRad = (1.2 / Math.max(1, dist(eye, aimPoint))) * pr.fireTol;
       } else if (this.aimHead) {
         aimPoint = hb.head;
@@ -201,7 +207,7 @@ export class BotBrain {
         aimPoint = { x: hb.torsoB.x, y: hb.torsoB.y - 0.1, z: hb.torsoB.z };
         tolRad = (hb.torsoR / Math.max(1, dist(eye, aimPoint))) * pr.fireTol;
       }
-      if (!isExposed(tgt.exposure) && !w.projectile?.bounce && !flying) tolRad = 0; // wait for them to pop up
+      if (!isExposed(tgt.exposure) && !lobsIn(w, tgt.exposure) && !flying) tolRad = 0; // wait for them to pop up
     } else if (this.targetOrb >= 0) {
       const orb = m.orbs.find((o) => o.id === this.targetOrb);
       if (orb) {
@@ -221,7 +227,7 @@ export class BotBrain {
       if (proj && proj.gravity > 0 && this.rng.chance(0.98) && this.leads) {
         const hd = Math.hypot(dx, dz);
         const p = ballisticPitch(hd, dy, proj.speed, proj.gravity);
-        if (p !== null) wantPitch = p;
+        if (p !== null) wantPitch = p - (proj.loftDeg ?? 0) * D2R;
       }
       // decaying aim error, resampled a few times per second
       if (t >= this.errNext) {
@@ -363,7 +369,7 @@ export class BotBrain {
       const e1 = clamp(q.exposure + (rising ? DT / RISE_TIME : -DT / LOWER_TIME), 0, 1);
       const hb = playerHitbox(m, arena, q, e1, me);
       const aim: V3 = w.splash
-        ? w.projectile?.bounce
+        ? lobsIn(w, e1)
           ? { x: hb.head.x, y: hb.rim - 0.2, z: hb.head.z }
           : { x: hb.torsoA.x, y: Math.max(hb.rim + 0.1, hb.torsoA.y + 0.2), z: hb.torsoA.z }
         : { x: hb.head.x, y: Math.max(hb.head.y, hb.rim + 0.06), z: hb.head.z };
@@ -371,7 +377,10 @@ export class BotBrain {
       const ang = yawPitchOf(to);
       let pitch = ang.pitch;
       const proj = w.projectile;
-      if (proj && proj.gravity > 0) pitch = ballisticPitch(Math.hypot(to.x, to.z), to.y, proj.speed, proj.gravity) ?? pitch;
+      if (proj && proj.gravity > 0) {
+        const bp = ballisticPitch(Math.hypot(to.x, to.z), to.y, proj.speed, proj.gravity);
+        if (bp !== null) pitch = bp - (proj.loftDeg ?? 0) * D2R;
+      }
       const slow = sauceAimScale(me.saucedAt, me.saucedUntil, t);
       if (slow < 1) {
         // even the hacker can't snap through sauce
