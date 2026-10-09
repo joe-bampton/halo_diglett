@@ -23,6 +23,8 @@ export interface PlayOpts {
   delay?: number;
   loop?: boolean;
   bus?: Bus;
+  /** never cut short by the cap on simultaneous sounds (a charge-up you're holding, a strike warning) */
+  keep?: boolean;
 }
 
 export interface SoundHandle {
@@ -208,7 +210,7 @@ export class AudioEngine {
       if (!o.loop && (o.gain ?? 1) * Math.min(1, REF_DISTANCE / Math.max(REF_DISTANCE, dist)) < MIN_AUDIBLE) return NOOP;
     }
     // voice lines and the announcer are throttled where they're triggered; guns and effects are capped here
-    const capped = !o.loop && (o.bus ?? 'sfx') !== 'voice' && o.bus !== 'announcer';
+    const capped = !o.loop && !o.keep && (o.bus ?? 'sfx') !== 'voice' && o.bus !== 'announcer';
     if (capped) {
       if (this.active.length >= MAX_VOICES) this.active = this.active.filter((h) => !h.ended);
       if (this.active.length >= MAX_VOICES) this.active.shift()!.stop(0.02);

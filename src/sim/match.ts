@@ -959,7 +959,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     }
     const expired = t - pr.born >= secToTicks(def.life) || (pr.fuseAt && t >= pr.fuseAt) || pr.y < -20;
     if (expired) {
-      endProjectile(m, ctx, pr, { x: pr.x, y: pr.y, z: pr.z }, w, -1);
+      endProjectile(m, ctx, pr, { x: pr.x, y: pr.y, z: pr.z }, w, -1, false, true);
       continue;
     }
     keep.push(pr);
@@ -967,8 +967,8 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
   m.projectiles = keep;
 }
 
-function endProjectile(m: MatchState, ctx: StepContext, pr: Projectile, at: V3, w: WeaponDef, inHole: number, counted = false) {
-  ctx.events.push({ k: 'pend', t: m.tick, id: pr.id, pos: V(at) });
+function endProjectile(m: MatchState, ctx: StepContext, pr: Projectile, at: V3, w: WeaponDef, inHole: number, counted = false, gone = false) {
+  ctx.events.push(gone ? { k: 'pend', t: m.tick, id: pr.id, pos: V(at), gone } : { k: 'pend', t: m.tick, id: pr.id, pos: V(at) });
   if (w.splash && explode(m, ctx, pr.owner, w.id, at, w.splash, inHole) && !counted) {
     const owner = m.players[pr.owner];
     if (owner) owner.hits++;

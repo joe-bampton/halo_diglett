@@ -300,13 +300,19 @@ export async function trysteroClient(code: string, onError: (msg: string) => voi
     current = r;
     r.actions[CH_CTL].onMessage = (data, { peerId }) => {
       const msg = data as { t?: string };
-      if (msg?.t === 'host' && !host) {
+      // the host says hello whenever it (re)connects to us: (re)open our end of the low-latency channel then
+      if (msg?.t === 'host' && (!host || host === peerId)) {
         host = peerId;
-        fast = openFast(
-          r.room.getPeers()[peerId],
-          (d) => net.onMessage?.(CH_SNAP, d),
-          () => (fast = null),
-        );
+        if (!fast || fast.ch.readyState === 'closed') {
+          const link = openFast(
+            r.room.getPeers()[peerId],
+            (d) => net.onMessage?.(CH_SNAP, d),
+            () => {
+              if (fast === link) fast = null;
+            },
+          );
+          fast = link;
+        }
       }
       if (peerId !== host) return;
       net.onMessage?.(CH_CTL, data);

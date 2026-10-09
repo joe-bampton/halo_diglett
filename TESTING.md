@@ -62,7 +62,7 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] On a 120 or 144 Hz screen (`weapon=rpg`): rockets fly at the same speed as on 60 Hz, and explode where they land
 - [ ] Grenades (`weapon=grenade`) bounce and explode in the same spot you saw them land
 - [ ] Sniper scope (both zoom levels) and Battle Rifle zoom: the view moves across the screen as far per mouse/stick movement as unzoomed
-- [ ] Esc → Options mid-match: Space, W, R etc. don't move your Spartan; Esc closes Options and goes straight back to the game
+- [ ] Esc → Options mid-match: Space, W, R etc. don't move your Spartan; Esc closes Options and the match carries on (click once to capture the mouse again: browsers don't let Esc do that)
 - [ ] Phone: switch to another app and back mid-match — sound still plays, the screen doesn't go to sleep
 - [ ] A long match on Medium after a stutter: the picture doesn't stay blurry (`perf` shows the scale `x1.00` again)
 - [ ] The first explosion of a match doesn't hitch

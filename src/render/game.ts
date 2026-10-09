@@ -4,7 +4,7 @@ import { PITRE_SLOT, PitreHitTracker, PitreVoiceThrottle, pitreCues, type PitreC
 import type { SfxId } from '../audio/synth';
 import { InputManager, zoomSensitivity, type AssistInfo } from '../input/input';
 import type { ClientSession, ViewPlayer } from '../net/client';
-import { F_BEAM, F_BURNING, F_CAMO, F_CHARGING, F_DAMAGE, F_INVINCIBLE, F_OVERSHIELD, F_RELOAD, F_SAUCED } from '../net/protocol';
+import { COSMETIC_EVENTS, F_BEAM, F_BURNING, F_CAMO, F_CHARGING, F_DAMAGE, F_INVINCIBLE, F_OVERSHIELD, F_RELOAD, F_SAUCED } from '../net/protocol';
 import { angleDiff, dirFromYawPitch, yawPitchOf } from '../shared/vec';
 import { Arena, MOUTH_R, RIM_OUT, WELL_DEPTH } from '../sim/arena';
 import { sauceAimScale, sauceLeft } from '../sim/sauce';
@@ -54,8 +54,7 @@ interface SpartanView {
   sauce: THREE.Mesh[];
 }
 
-/** Events that are only sound and light: skipped when they arrive late (a connection that stalled, then caught up). */
-const STALE_FX = new Set<SimEvent['k']>(['fire', 'proj', 'pend', 'dmg', 'near', 'reload', 'callout', 'boom', 'forced']);
+/** Sound-and-light events this late (a connection that stalled, then caught up) are skipped. */
 const STALE_FX_TICKS = Math.round(0.5 * TICK_RATE);
 
 /** On-screen text for voice callouts. */
@@ -397,6 +396,7 @@ export class Game {
     this.chargeSound?.stop();
     this.beamSound?.stop();
     this.myVoice?.stop();
+    for (const o of this.warmed) disposeTree(o);
     this.post?.dispose();
     this.envRT?.dispose();
     this.renderer.dispose();
@@ -513,14 +513,16 @@ export class Game {
     }
     this.scene.add(world);
     this.vmScene.add(vm);
+    // out of the scenes once compiled, but kept (and disposed with the game): disposing a material frees its shader
+    // when nothing else uses it yet, which would undo the warm-up
+    this.warmed = [world, vm];
     const done = () => {
       this.scene.remove(world);
       this.vmScene.remove(vm);
-      disposeTree(world);
-      disposeTree(vm);
     };
     Promise.all([this.renderer.compileAsync(this.scene, this.camera), this.renderer.compileAsync(this.vmScene, this.vmCamera)]).then(done, done);
   }
+  private warmed: THREE.Object3D[] = [];
 
   /** Post-processing code is only downloaded when it's switched on (it draws straight to the canvas until then). */
   private setupPost() {
@@ -912,7 +914,7 @@ export class Game {
     if (fresh && !infinite && me.clip === 0 && me.rl === 0) audio.play('empty');
     // charge ring & sound (railgun/hyperbeam)
     if ((w.trigger === 'charge' || w.trigger === 'beam') && this.input.s.trigger && ready && me.bu <= s.hostTick) {
-      if (!this.chargeSound) this.chargeSound = audio.play('charge', { gain: 0.6, bus: 'guns' });
+      if (!this.chargeSound) this.chargeSound = audio.play('charge', { gain: 0.6, bus: 'guns', keep: true });
     } else if (this.chargeSound) {
       this.chargeSound.stop();
       this.chargeSound = null;
@@ -985,7 +987,7 @@ export class Game {
     // after a stalled connection catches up, old gunfire, hits and blasts aren't replayed all at once
     const events: SimEvent[] = [];
     for (const e of all) {
-      if (!s.isLocal && STALE_FX.has(e.k) && s.hostTick - e.t > STALE_FX_TICKS) {
+      if (!s.isLocal && COSMETIC_EVENTS.has(e.k) && s.hostTick - e.t > STALE_FX_TICKS) {
         if (e.k === 'pend') this.removeProjectile(String(e.id));
         continue;
       }
@@ -1031,7 +1033,7 @@ export class Game {
         case 'pend': {
           const pv = this.projs.get(String(e.id));
           if (pv) {
-            if (!WEAPONS[pv.weapon].splash) this.impact(new THREE.Vector3(...e.pos), pv.weapon);
+            if (!WEAPONS[pv.weapon].splash && !e.gone) this.impact(new THREE.Vector3(...e.pos), pv.weapon);
             this.removeProjectile(String(e.id));
           }
           break;
@@ -1700,18 +1702,19 @@ export class Game {
       const def = WEAPONS[pv.weapon].projectile!;
       const tr = pv.track;
       const hom = pv.local ? null : (s.homing.get(tr.pr.id) ?? null);
-      let ended = false;
+      let ended: 'hit' | 'end' | 'expire' | null = null;
       for (let n = 0; tr.tick + 1 <= now && n < MAX_CATCHUP; n++) {
         const r = stepTrack(tr, def, this.arena, hom, pv.local ? this.ownShotTargets : null);
         if (r !== 'fly' && pv.local) {
-          ended = true;
+          ended = r;
           break;
         }
       }
       const ageTicks = tr.tick - tr.pr.born;
       if (ended) {
-        // the host's end-of-flight event names its own copy of this shot, so the impact is drawn here
-        if (!WEAPONS[pv.weapon].splash) this.impact(tmpV.set(tr.pr.x, tr.pr.y, tr.pr.z), pv.weapon);
+        // the host's end-of-flight event names its own copy of this shot, so the impact is drawn here (not for one
+        // that just ran out in the air)
+        if (ended !== 'expire' && !WEAPONS[pv.weapon].splash) this.impact(tmpV.set(tr.pr.x, tr.pr.y, tr.pr.z), pv.weapon);
         this.removeProjectile(id);
         continue;
       }
@@ -1906,7 +1909,7 @@ export class Game {
       this.ribbons.add(top, st.pos, 0xff2020, 0.08 + (1 - Math.max(0, left) / 2) * 0.5, 0.05, 0.8);
       if (!st.whistled && left < 1.6) {
         st.whistled = true;
-        audio.play('whistle', { pos: st.pos, gain: 1 });
+        audio.play('whistle', { pos: st.pos, gain: 1, keep: true });
       }
     }
   }

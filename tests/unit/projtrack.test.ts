@@ -41,9 +41,10 @@ describe('client projectile tracks', () => {
         const host = m.projectiles.find((p) => p.id === pr.id);
         const end = ev.find((e) => e.k === 'pend');
         if (!host) {
-          // the host ended it this tick: so does the track, in the same place
+          // the host ended it this tick: so does the track, in the same place, and for the same reason (ran out in
+          // the air, or landed)
           expect(end).toBeTruthy();
-          expect(r).toBe('end');
+          expect(r).toBe(end?.k === 'pend' && end.gone ? 'expire' : 'end');
           if (end?.k === 'pend') {
             expect(tr.pr.x).toBeCloseTo(end.pos[0], 1);
             expect(tr.pr.y).toBeCloseTo(end.pos[1], 1);

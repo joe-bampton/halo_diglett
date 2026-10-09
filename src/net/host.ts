@@ -23,6 +23,7 @@ import {
   F_OVERSHIELD,
   F_RELOAD,
   F_SAUCED,
+  COSMETIC_EVENTS,
   PROTOCOL_VERSION,
   type Channel,
   type CtlMsg,
@@ -51,6 +52,10 @@ interface Conn {
   pending: SimEvent[];
   /** a reliable send to them is still going out (backpressure): their events wait */
   sending: boolean;
+  /** the last snapshot went over the low-latency path */
+  fastOk: boolean;
+  /** last time their waiting events were thinned out */
+  prunedAt: number;
   lastSnapTick: number;
   lastInputAt: number;
 }
@@ -64,14 +69,13 @@ interface HeldSlot {
 const REJOIN_MS = 120_000;
 const AFK_MS = 5000;
 
-/** Events that are only sound and light: a player who missed a few seconds needn't have them all replayed at once. */
-const COSMETIC = new Set<SimEvent['k']>(['fire', 'proj', 'pend', 'dmg', 'near', 'reload', 'callout', 'boom', 'forced']);
 /**
  * Events normally wait a tick or three for the next snapshot. Once the oldest has waited longer than this, that
  * player's connection has stalled (a tunnel, a switch to another app): their cosmetic events older than this are
- * dropped (kills, spawns, power-ups and the rest always get through).
+ * dropped (kills, spawns, power-ups and the rest always get through). Checked twice a second at most.
  */
 const STALE_TICKS = TICK_RATE;
+const PRUNE_EVERY = TICK_RATE / 2;
 
 export class HostSession {
   arena = new Arena();
@@ -291,7 +295,7 @@ export class HostSession {
     this.tokens.set(token, slot);
     // replace any older connection that still claims this slot (same token rejoining)
     for (const [p, o] of this.conns) if (o.slot === slot) this.conns.delete(p);
-    const conn: Conn = { peer, slot, token, local, seq: 0, cmd: undefined, pending: [], sending: false, lastSnapTick: -1, lastInputAt: this.clock() };
+    const conn: Conn = { peer, slot, token, local, seq: 0, cmd: undefined, pending: [], sending: false, fastOk: false, prunedAt: -1e9, lastSnapTick: -1, lastInputAt: this.clock() };
     this.conns.set(peer, conn);
     this.send(peer, CH_CTL, { t: 'welcome', slot, lobby: this.lobby });
     if (this.match && this.lobby.phase === 'match') {
@@ -450,7 +454,10 @@ export class HostSession {
       for (const b of this.bots.values()) b.onEvents(events);
       for (const c of this.conns.values()) {
         c.pending.push(...events);
-        if (m.tick - c.pending[0]!.t > STALE_TICKS) c.pending = c.pending.filter((e) => !COSMETIC.has(e.k) || m.tick - e.t <= STALE_TICKS);
+        if (m.tick - c.pending[0]!.t > STALE_TICKS && m.tick - c.prunedAt >= PRUNE_EVERY) {
+          c.prunedAt = m.tick;
+          c.pending = c.pending.filter((e) => !COSMETIC_EVENTS.has(e.k) || m.tick - e.t <= STALE_TICKS);
+        }
       }
       if (events.some((e) => e.k === 'end')) this.resultsAt = nowMs + 3500;
     }
@@ -492,10 +499,12 @@ export class HostSession {
   private sendSnapshot(c: Conn) {
     const m = this.match!;
     const fast = !c.local && !!this.net.sendFast;
-    if (!fast && c.sending) return; // backpressure: previous send still in flight, events carry over
+    // backpressure: the last reliable send is still going out (their events carry over), and with no low-latency
+    // path working either there's nothing to send this tick
+    if (c.sending && !(fast && c.fastOk)) return;
     const snap = this.buildSnapshot(c);
     // the low-latency path: the state alone (a lost one is replaced 50 ms later), the events reliably beside it
-    if (fast && this.net.sendFast!(c.peer, snap)) {
+    if (fast && (c.fastOk = this.net.sendFast!(c.peer, snap))) {
       c.lastSnapTick = m.tick;
       if (c.pending.length && !c.sending) {
         const ev: EventsMsg = { k: m.tick, e: c.pending };

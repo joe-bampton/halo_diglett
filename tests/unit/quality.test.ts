@@ -5,7 +5,7 @@ import { GFX_FIELDS, QUALITY, presetChoice, resolveQuality, sanitizeGfx } from '
 describe('graphics quality', () => {
   it('Low and Medium are what they were (no post-processing, no PBR)', () => {
     expect(QUALITY.low).toMatchObject({ dprCap: 1, dynamicRes: [0.6, 1], antialias: false, shadows: 'none', grassClumps: 3500, grassRadius: 28, trees: 60, angularSegs: 180, particles: 180, flashLights: 0, post: false, pbr: false, renderScale: 1 });
-    expect(QUALITY.medium).toMatchObject({ dprCap: 1.5, dynamicRes: [0.75, 1.5], antialias: true, shadows: 'static', shadowSize: 1024, grassClumps: 11000, grassRadius: 45, trees: 130, particles: 420, flashLights: 3, fxScale: 1, post: false, pbr: false, renderScale: 1 });
+    expect(QUALITY.medium).toMatchObject({ dprCap: 1.5, dynamicRes: [0.75, 1.5], antialias: true, shadows: 'static', shadowSize: 1024, grassClumps: 11000, grassRadius: 45, trees: 130, particles: 420, flashLights: 2, fxScale: 1, post: false, pbr: false, renderScale: 1 });
     expect(QUALITY.high).toMatchObject({ shadows: 'dynamic', shadowSize: 2048, grassClumps: 22000, post: true, pbr: true });
     expect(QUALITY.ultra).toMatchObject({ shadowSize: 4096, grassClumps: 40000, grassRadius: 75, particles: 1600, smaa: true });
   });

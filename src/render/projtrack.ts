@@ -32,13 +32,14 @@ export function newTrack(pr: Projectile, born: number): ProjTrack {
  */
 export type TargetTest = (o: V3, d: V3, L: number, tick: number, r: number) => number;
 
-export type StepResult = 'fly' | 'hit' | 'end';
+/** 'hit': stopped on a target; 'end': stopped by the ground (or its fuse there); 'expire': ran out in the air */
+export type StepResult = 'fly' | 'hit' | 'end' | 'expire';
 
 /**
  * One host tick of flight, in the same order the host checks things (targets, then the hole mouth, then the ground).
  * `homing`: the host-reported position of a homing projectile, which the view eases towards instead of guessing.
- * Returns 'hit' when it stopped on a target, 'end' when it is done for good (stopped by the ground or its fuse, out of
- * life); a stopped track keeps returning 'fly' and stays put.
+ * Returns 'hit' when it stopped on a target, 'end' when the ground (or the bottom of a hole) stopped it, 'expire' when
+ * it ran out (life, fuse) in the air; a stopped track keeps returning 'fly' and stays put.
  */
 export function stepTrack(t: ProjTrack, def: ProjectileDef, arena: Arena, homing: V3 | null, targets: TargetTest | null): StepResult {
   const pr = t.pr;
@@ -88,7 +89,7 @@ export function stepTrack(t: ProjTrack, def: ProjectileDef, arena: Arena, homing
   }
   if (t.tick - pr.born >= secToTicks(def.life) || fused || pr.y < -20) {
     t.stopped = true;
-    return 'end';
+    return 'expire';
   }
   return 'fly';
 }

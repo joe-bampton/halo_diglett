@@ -151,6 +151,12 @@ export interface EventsMsg {
   e: SimEvent[];
 }
 
+/**
+ * Events that are only sound and light. A player whose connection stalled needn't have them all replayed at once: the
+ * host drops old ones for them, and the client skips any that arrive late.
+ */
+export const COSMETIC_EVENTS: ReadonlySet<SimEvent['k']> = new Set<SimEvent['k']>(['fire', 'proj', 'pend', 'dmg', 'near', 'reload', 'callout', 'boom', 'forced']);
+
 export const CH_CTL = 'ctl';
 export const CH_IN = 'in';
 export const CH_SNAP = 'snap';

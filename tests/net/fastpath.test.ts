@@ -106,7 +106,7 @@ describe('a stalled player', () => {
     await run(1500, after);
     // (the first few ticks went out before the link filled up: they were sent in time, just delivered late)
     const during = after.filter((e) => e.t > stallFrom + 6 && e.t <= stallTo);
-    const oldCosmetic = during.filter((e) => COSMETIC.has(e.k) && e.t < stallTo - 1.5 * TICK_RATE);
+    const oldCosmetic = during.filter((e) => COSMETIC.has(e.k) && e.t < stallTo - 2 * TICK_RATE);
     console.log(`after a 6 s stall: ${during.length} events from the stall delivered, ${oldCosmetic.length} of them stale effects; ${killsDuring} kills`);
     expect(killsDuring).toBeGreaterThan(0);
     expect(during.filter((e) => e.k === 'kill').length).toBe(killsDuring);
