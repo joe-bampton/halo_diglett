@@ -69,7 +69,7 @@ export const DEFAULT_SETTINGS: Settings = {
   powerupDurationMult: 1,
   skulls: [],
   aimAssist: 'normal',
-  maxRewindMs: 150,
+  maxRewindMs: 250,
   pitre: false,
   pitreCatHat: true,
   pitreVoices: true,
@@ -150,7 +150,7 @@ export const SETTINGS_SCHEMA: Field[] = [
   { key: 'pitreCans', label: 'Power-ups come in energy drink cans', group: 'Pitre Mode', kind: 'bool', visibleIf: (s) => s.pitre },
   { key: 'skulls', label: 'Skulls', group: 'Skulls', kind: 'multi', options: SKULLS.map((s) => ({ value: s.value, label: s.label })) },
   { key: 'aimAssist', label: 'Aim assist (controller & touch)', group: 'Advanced', kind: 'enum', options: [{ value: 'off', label: 'Off' }, { value: 'low', label: 'Low' }, { value: 'normal', label: 'Normal' }] },
-  { key: 'maxRewindMs', label: 'Lag compensation', group: 'Advanced', kind: 'number', min: 0, max: 250, step: 25, unit: 'ms', help: 'How far back the host rewinds to honour a laggy player’s shot.' },
+  { key: 'maxRewindMs', label: 'Lag compensation', group: 'Advanced', kind: 'number', min: 0, max: 400, step: 25, unit: 'ms', help: 'How far back the host rewinds to honour a laggy player’s shot. Phones on Wi-Fi or 4G usually need 200–300 ms.' },
 ];
 
 export const PRESETS: Record<string, { label: string; settings: Partial<Settings> }> = {
@@ -203,6 +203,9 @@ export function sanitizeSettings(raw: unknown): Settings {
   return out as unknown as Settings;
 }
 
+/** Saved settings format: 2 = lag compensation default raised from 150 to 250 ms. */
+const SETTINGS_VERSION = 2;
+
 /** Power-ups that existed before saved settings remembered which ones they knew about. */
 const LEGACY_POWERUPS: string[] = ['flamethrower', 'minigun', 'overshield', 'invincible', 'camo', 'damage', 'homing', 'xray', 'bighead', 'orbital', 'quickhands'];
 
@@ -214,12 +217,15 @@ export function migrateSavedSettings(raw: unknown): Settings {
   const src = raw && typeof raw === 'object' ? { ...(raw as Record<string, unknown>) } : {};
   const known = Array.isArray(src.knownPowerups) ? src.knownPowerups.filter((x): x is string => typeof x === 'string') : LEGACY_POWERUPS;
   if (Array.isArray(src.powerups)) src.powerups = [...src.powerups, ...POWERUP_IDS.filter((id) => !known.includes(id) && !(src.powerups as unknown[]).includes(id))];
+  // the old default was too tight for phones (their round trip plus the interpolation delay is ~120–270 ms)
+  const version = typeof src.settingsVersion === 'number' ? src.settingsVersion : 1;
+  if (version < 2 && src.maxRewindMs === 150) src.maxRewindMs = DEFAULT_SETTINGS.maxRewindMs;
   return sanitizeSettings(src);
 }
 
 /** What to save: the settings plus the power-ups this version knows about. */
-export function settingsForStorage(s: Settings): Settings & { knownPowerups: string[] } {
-  return { ...s, knownPowerups: [...POWERUP_IDS] };
+export function settingsForStorage(s: Settings): Settings & { knownPowerups: string[]; settingsVersion: number } {
+  return { ...s, knownPowerups: [...POWERUP_IDS], settingsVersion: SETTINGS_VERSION };
 }
 
 export function applyPreset(base: Settings, preset: string): Settings {

@@ -1,11 +1,12 @@
 import { angleDiff, clamp } from '../shared/vec';
-import { LOWER_TIME, RISE_TIME, TICK_RATE } from '../sim/constants';
+import { LOWER_TIME, MAX_HUMANS, RISE_TIME, TICK_RATE } from '../sim/constants';
 import { inFlight } from '../sim/spring';
 import type { MatchPhase, PlayerCommand, RosterEntry, SimEvent } from '../sim/types';
 import { weaponByIndex, type WeaponId } from '../sim/weapons';
 import {
   BUILD_ID,
   CH_CTL,
+  CH_EV,
   CH_IN,
   CH_SNAP,
   F_ALIVE,
@@ -13,9 +14,11 @@ import {
   PROTOCOL_VERSION,
   type Channel,
   type CtlMsg,
+  type EventsMsg,
   type LobbyState,
   type MatchResults,
   type MatchStart,
+  type PackedPlayer,
   type PrivateState,
   type SnapshotMsg,
 } from './protocol';
@@ -66,6 +69,18 @@ export interface LocalInput {
 
 const TICK_MS = 1000 / TICK_RATE;
 
+/** A snapshot's players by slot (worked out once per snapshot, not every frame). */
+const bySlotCache = new WeakMap<SnapshotMsg, (PackedPlayer | undefined)[]>();
+function playersBySlot(s: SnapshotMsg): (PackedPlayer | undefined)[] {
+  let a = bySlotCache.get(s);
+  if (!a) {
+    a = [];
+    for (const pp of s.p) a[pp[0]] = pp;
+    bySlotCache.set(s, a);
+  }
+  return a;
+}
+
 export class ClientSession {
   state: 'connecting' | 'lobby' | 'match' | 'results' | 'closed' = 'connecting';
   closeReason = '';
@@ -92,6 +107,8 @@ export class ClientSession {
   hostTick = 0;
   interpDelay = 1;
   rttMs = 0;
+  /** frames where the newest snapshot was already shown (other players freeze until the next one): a smoothness gauge */
+  stalledFrames = 0;
 
   onLobby: (() => void) | null = null;
   onStart: (() => void) | null = null;
@@ -102,6 +119,8 @@ export class ClientSession {
   private snaps: SnapshotMsg[] = [];
   private offset = NaN;
   private jitter = 0;
+  /** share of snapshots recently missing (lost on the low-latency path, or held up) */
+  private loss = 0;
   private seq = 0;
   private lastSend = 0;
   private lastKey = '';
@@ -148,6 +167,7 @@ export class ClientSession {
     if (!data || typeof data !== 'object') return;
     if (ch === CH_CTL) this.onCtl(data as CtlMsg);
     else if (ch === CH_SNAP) this.onSnap(data as SnapshotMsg);
+    else if (ch === CH_EV) this.onEvents(data as EventsMsg);
   }
 
   private onCtl(msg: CtlMsg) {
@@ -162,7 +182,7 @@ export class ClientSession {
         this.onLobby?.();
         break;
       case 'reject':
-        this.close(msg.reason === 'full' ? 'That game is full (7 players max).' : msg.reason === 'version' ? 'Your game version is different from the host’s — refresh the page.' : msg.reason === 'kicked' ? 'The host removed you from the lobby.' : 'Could not join.');
+        this.close(msg.reason === 'full' ? `That game is full (${MAX_HUMANS} players max).` : msg.reason === 'version' ? 'Your game version is different from the host’s — refresh the page.' : msg.reason === 'kicked' ? 'The host removed you from the lobby.' : 'Could not join.');
         break;
       case 'lobby':
         this.lobby = msg.lobby;
@@ -198,6 +218,7 @@ export class ClientSession {
     this.events = [];
     this.offset = NaN;
     this.jitter = 0;
+    this.loss = 0;
     this.me = null;
     this.myExposure = 0;
     this.orbs.clear();
@@ -218,7 +239,18 @@ export class ClientSession {
 
   private onSnap(s: SnapshotMsg) {
     if (this.state !== 'match' && this.state !== 'results') return;
-    if (typeof s.k !== 'number') return;
+    if (typeof s.k !== 'number' || !Array.isArray(s.p)) return;
+    // the low-latency path can deliver a snapshot of the previous match after this one started ("Play again")
+    if (s.id !== this.start?.seed) return;
+    // events only ever come reliably, in order: always take them
+    if (Array.isArray(s.e)) this.takeEvents(s.e);
+    // the low-latency path doesn't keep order: one older than the newest we have is of no use
+    const newest = this.snaps[this.snaps.length - 1];
+    if (newest && s.k <= newest.k) return;
+    if (newest) {
+      const step = this.local ? 1 : 3;
+      this.loss = this.loss * 0.97 + (s.k - newest.k > step ? 0.03 : 0);
+    }
     const now = this.clock();
     const sample = s.k - now / TICK_MS;
     if (Number.isNaN(this.offset)) this.offset = sample;
@@ -254,14 +286,6 @@ export class ClientSession {
       this.homing.clear();
       for (const [id, x, y, z] of s.h) this.homing.set(id, { x, y, z });
     } else this.homing.clear();
-    if (s.e) {
-      for (const e of s.e) {
-        if (e.k === 'orb') this.orbs.set(e.id, { id: e.id, type: e.type, seed: e.seed, spawn: e.spawn, expire: e.expire });
-        else if (e.k === 'orbPop') this.orbs.delete(e.id);
-        else if (e.k === 'spawn' && e.p === this.slot) this.myExposure = 0;
-        this.events.push(e);
-      }
-    }
     // players present in the snapshot but not in roster (late joiners)
     for (const pp of s.p) {
       if (!this.players[pp[0]]) {
@@ -283,6 +307,21 @@ export class ClientSession {
     }
   }
 
+  /** Events sent on their own (the state went over the low-latency path). */
+  private onEvents(msg: EventsMsg) {
+    if (this.state !== 'match' && this.state !== 'results') return;
+    if (Array.isArray(msg.e)) this.takeEvents(msg.e);
+  }
+
+  private takeEvents(events: SimEvent[]) {
+    for (const e of events) {
+      if (e.k === 'orb') this.orbs.set(e.id, { id: e.id, type: e.type, seed: e.seed, spawn: e.spawn, expire: e.expire });
+      else if (e.k === 'orbPop') this.orbs.delete(e.id);
+      else if (e.k === 'spawn' && e.p === this.slot) this.myExposure = 0;
+      this.events.push(e);
+    }
+  }
+
   drainEvents(): SimEvent[] {
     const e = this.events;
     this.events = [];
@@ -296,8 +335,11 @@ export class ClientSession {
     if (this.state !== 'match' && this.state !== 'results') return;
     if (!Number.isNaN(this.offset)) {
       this.hostTick = Math.min(now / TICK_MS + this.offset, this.latestTick + 6);
-      this.interpDelay = this.local ? 1 : clamp(3 + 2.5 * this.jitter + 1, 4, 12);
-      this.renderTick = Math.min(this.hostTick - this.interpDelay, this.latestTick);
+      // ~1.3 snapshots of buffer on a clean line; enough to bridge one missing snapshot when some go missing
+      this.interpDelay = this.local ? 1 : clamp(3 + 2.5 * this.jitter + 1, this.loss > 0.02 ? 7 : 4, 12);
+      const want = this.hostTick - this.interpDelay;
+      if (!this.local && want > this.latestTick && this.state === 'match') this.stalledFrames++;
+      this.renderTick = Math.min(want, this.latestTick);
       this.interpolate(this.renderTick);
     }
     // own stance prediction
@@ -332,9 +374,9 @@ export class ClientSession {
     }
     const span = b.k - a.k;
     const f = span > 0 ? clamp((rt - a.k) / span, 0, 1) : 0;
-    const bmap = new Map(b.p.map((pp) => [pp[0], pp]));
+    const bp = playersBySlot(b);
     for (const pa of a.p) {
-      const pb = bmap.get(pa[0]) ?? pa;
+      const pb = bp[pa[0]] ?? pa;
       const v = this.players[pa[0]];
       if (!v || pa[0] === this.slot) {
         if (v && pa[0] === this.slot) {
@@ -387,7 +429,11 @@ export class ClientSession {
       vt: Math.round(this.renderTick * 100) / 100,
       pick: i.pick,
     };
-    this.net.send(CH_IN, { s: ++this.seq, c });
+    const msg = { s: ++this.seq, c };
+    // the low-latency path once the host listens on it; a press, reload etc. goes reliably as well (the host keeps
+    // whichever copy arrives first)
+    const fast = this.net.sendFast?.(msg) ?? false;
+    if (!fast || edge) this.net.send(CH_IN, msg);
   }
 
   /** Force-send input now (called right after a trigger press so the shot is not delayed). */

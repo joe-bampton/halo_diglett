@@ -9,7 +9,7 @@ Everyone sits in a stone foxhole on a grassy field. You can only:
 - shoot
 - reload
 
-Play with up to **6 friends online** (7 players), or on your own against up to **6 bots**. It runs on:
+Play with up to **7 friends online** (8 players), or on your own against up to **6 bots**. It runs on:
 - desktop (mouse + keyboard)
 - controllers (Xbox / PlayStation, via the browser Gamepad API)
 - phones and tablets (touch)
@@ -53,11 +53,12 @@ Play with up to **6 friends online** (7 players), or on your own against up to *
 
 How it works:
 - The host's browser runs the match and the bots. Friends connect directly over WebRTC ([Trystero](https://github.com/dmotz/trystero)).
+- The positions of everyone on the field go over a low-latency channel: a lost packet on a phone's Wi-Fi or 4G is simply replaced by the next update, instead of freezing the field until it's resent. Kills, spawns and other events still arrive reliably.
 - Players find each other through public Nostr relays, with BitTorrent trackers as a fallback. No accounts, no server and no cost.
 - If a friend refreshes or drops, they can rejoin within 2 minutes and get their slot and score back.
 - If the host closes the tab, the match ends. **Host from a desktop/laptop** where possible, and keep the tab open.
 
-**If a friend can't connect:** some networks (strict corporate or mobile carrier NAT) block direct WebRTC. The fix is a free TURN relay.
+**If a friend can't connect:** some networks (strict corporate or mobile carrier NAT) block direct WebRTC. The fix is a free TURN relay (see [DEPLOY.md](DEPLOY.md#turn-relay-my-friend-cant-connect)).
 1. Create a free TURN credential, e.g. [Cloudflare TURN](https://developers.cloudflare.com/realtime/turn/) or [Open Relay](https://www.metered.ca/stun-turn).
 2. Give it to the game in one of two ways:
    - Paste it into **Options → Network** as JSON: `{"urls":"turn:host:3478","username":"u","credential":"p"}`.
@@ -152,7 +153,7 @@ Every setting is in the lobby. The **presets** are Classic Diglett, Rocket Whack
 
 **Advanced**
 - Aim assist for controller/touch
-- Lag compensation window
+- Lag compensation window (default 250 ms, up to 400 ms)
 
 **Bots:** up to 6, with difficulty set per bot:
 
@@ -211,7 +212,7 @@ The detailed Spartan, energy can, Super Soaker and spring are made **from code w
 |---|---|
 | Language / build | TypeScript + Vite |
 | 3D | Three.js: procedural low-poly world, instanced grass/rocks/trees. Low/Medium use plain Lambert shading, so they stay fast on phones. High/Ultra add bloom + tone mapping, PBR materials with sky reflections, and Blender-made glTF models, all loaded on demand |
-| Multiplayer | Trystero (WebRTC P2P). The host's browser runs the authoritative simulation; clients get 20 Hz snapshots with interpolation and lag compensation |
+| Multiplayer | Trystero (WebRTC P2P). The host's browser runs the authoritative simulation; clients get 20 Hz snapshots over an unordered, never-resent data channel (events reliably beside it), with interpolation and lag compensation |
 | Audio | Web Audio: 3D positional panners, procedural sound effects, MP3 voice lines |
 | UI | Plain DOM/CSS. The lobby settings form is generated from a settings schema |
 | Tests | Vitest (simulation, bots, netcode, Pitre logic, graphics settings, model files) + Playwright (offline match, 2-tab multiplayer, phone touch, spectating, power-ups, graphics options) |
@@ -252,12 +253,10 @@ Useful URL flags:
 - `&holes=8&spacing=20`: map size
 - `&respawn=auto`: respawn without pressing Jump
 - `?quality=low|medium|high|ultra`: force a graphics preset
-- `?perf`: FPS / draw-call overlay
+- `?perf`: FPS / draw-call overlay, plus the snapshot buffer and stalls (`st`: frames where other players briefly froze)
 - `?net=bc`: multiplayer between tabs of one browser, no internet needed
+- `?fastnet=0`: send everything over the reliable channel (switches the low-latency channel off, for comparing)
 
-## Deploying to Vercel (free)
+## Deploying (free)
 
-1. Import this GitHub repo in Vercel (**Add New → Project**). `vercel.json` already sets the framework, build command and output directory.
-2. Deploy. Share the **production** URL (`https://<project>.vercel.app`) with friends. Preview URLs are behind Vercel login by default.
-
-Any static host works too (Netlify, Cloudflare Pages, GitHub Pages): build with `npm run build` and serve `dist/`.
+It's a static site: build with `npm run build` and serve `dist/` from any static host. **[DEPLOY.md](DEPLOY.md)** compares the free options (Cloudflare Pages, GitHub Pages, Vercel, Netlify, a LAN party), shows how to set up a TURN relay for friends who can't connect, and has a game-night checklist.

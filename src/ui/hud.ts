@@ -1,7 +1,10 @@
 import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import { WEAPONS, type WeaponId } from '../sim/weapons';
 import { SAUCE } from '../render/palette';
-import { esc, hex } from './dom';
+import { esc, hex, setHtml, setStyle, setText } from './dom';
+
+/** 3 decimals: enough for a bar on screen, and the same value isn't rewritten every frame */
+const q3 = (x: number) => Math.round(Math.max(0, Math.min(1, x)) * 1000) / 1000;
 
 export const MEDALS: Record<string, { name: string; icon: string; color: string; ann?: string }> = {
   headshot: { name: 'Headshot', icon: '⊕', color: '#e8a93a', ann: '' },
@@ -57,6 +60,14 @@ export class Hud {
   private lastPips = '';
   private msgTimer = 0;
   private subTimer = 0;
+  private shFill!: HTMLElement;
+  private shOs!: HTMLElement;
+  private shHp!: HTMLElement;
+  private chargeArc!: SVGCircleElement;
+  private chargeOffset = -1;
+  private zoomLabel!: HTMLElement;
+  private reticleSvg!: SVGElement;
+  private puKey = '';
   constructor(parent: HTMLElement) {
     const r = document.createElement('div');
     r.className = 'hud';
@@ -84,12 +95,19 @@ export class Hud {
     for (const k of ['vignette', 'flash', 'sauce', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'spectate', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
       this.el[k] = r.querySelector(`.${k}`) as HTMLElement;
     }
+    // the bits that change every frame, looked up once
+    this.shFill = r.querySelector('.shield .fill')!;
+    this.shOs = r.querySelector('.shield .os')!;
+    this.shHp = r.querySelector('.shield .hp > div')!;
+    this.chargeArc = r.querySelector('.charge circle')!;
+    this.zoomLabel = r.querySelector('.scope .zl')!;
+    this.reticleSvg = r.querySelector('.reticle svg')!;
   }
 
   /** Voice chat widget: my mic state + who is talking right now. `mic: null` hides it (offline). */
   voice(mic: { state: string; label: string } | null, talkers: { name: string; color: number }[]) {
     const v = this.el.vchat!;
-    v.style.display = mic ? '' : 'none';
+    setStyle(v, 'display', mic ? '' : 'none');
     if (!mic) return;
     const btn = v.querySelector('.mic') as HTMLElement;
     btn.dataset.state = mic.state;
@@ -97,8 +115,7 @@ export class Hud {
     const icon = mic.state === 'live' ? '🎙️' : mic.state === 'off' || mic.state === 'error' ? '🎤' : '🔇';
     if (btn.textContent !== icon) btn.textContent = icon;
     const html = talkers.map((t) => `<div style="color:${hex(t.color)}">🔊 ${esc(t.name)}</div>`).join('');
-    const tk = v.querySelector('.talkers') as HTMLElement;
-    if (tk.innerHTML !== html) tk.innerHTML = html;
+    setHtml(v.querySelector('.talkers')!, html);
   }
 
   set visible(v: boolean) {
@@ -107,22 +124,22 @@ export class Hud {
 
   shield(sh: number, shm: number, hp: number, hpm: number, os: number, alive = true) {
     const f = shm > 0 ? sh / shm : 0;
-    (this.el.shield!.querySelector('.fill') as HTMLElement).style.transform = `scaleX(${Math.max(0, Math.min(1, f))})`;
-    (this.el.shield!.querySelector('.os') as HTMLElement).style.transform = `scaleX(${Math.max(0, Math.min(1, os / 70))})`;
-    (this.el.shield!.querySelector('.hp > div') as HTMLElement).style.transform = `scaleX(${Math.max(0, Math.min(1, hp / hpm))})`;
+    setStyle(this.shFill, 'transform', `scaleX(${q3(f)})`);
+    setStyle(this.shOs, 'transform', `scaleX(${q3(os / 70)})`);
+    setStyle(this.shHp, 'transform', `scaleX(${q3(hpm > 0 ? hp / hpm : 0)})`);
     this.el.shield!.classList.toggle('low', f < 0.25);
-    this.el.vignette!.style.opacity = String(alive && hp < hpm * 0.99 && sh <= 0 ? Math.min(0.8, 1 - hp / hpm + 0.2) : 0);
+    setStyle(this.el.vignette!, 'opacity', String(alive && hp < hpm * 0.99 && sh <= 0 ? q3(Math.min(0.8, 1 - hp / hpm + 0.2)) : 0));
   }
 
   ammo(weapon: WeaponId, clip: number, clipMax: number, infinite: boolean, reloading: boolean) {
     const w = WEAPONS[weapon];
     if (this.lastWeapon !== weapon) {
       this.lastWeapon = weapon;
-      this.el.wname!.textContent = w.name.toUpperCase();
-      this.el.reticle!.querySelector('svg')!.innerHTML = RETICLES[WEAPON_RETICLE[weapon]]!;
+      setText(this.el.wname!, w.name.toUpperCase());
+      setHtml(this.reticleSvg, RETICLES[WEAPON_RETICLE[weapon]]!);
     }
     const c = this.el.count!;
-    c.textContent = reloading ? '···' : infinite ? '∞' : String(clip);
+    setText(c, reloading ? '···' : infinite ? '∞' : String(clip));
     c.classList.toggle('empty', !infinite && clip === 0 && !reloading);
     const key = `${clip}/${clipMax}/${infinite}`;
     if (key !== this.lastPips) {
@@ -134,19 +151,23 @@ export class Hud {
 
   reticle(red: boolean, visible: boolean) {
     this.el.reticle!.classList.toggle('red', red);
-    this.el.reticle!.style.color = red ? '#ff5050' : '#9fe7ff';
-    this.el.reticle!.style.display = visible ? '' : 'none';
+    setStyle(this.el.reticle!, 'color', red ? '#ff5050' : '#9fe7ff');
+    setStyle(this.el.reticle!, 'display', visible ? '' : 'none');
   }
 
   charge(f: number) {
-    const c = this.el.charge!.querySelector('circle')!;
-    this.el.charge!.style.display = f > 0 ? '' : 'none';
-    c.setAttribute('stroke-dashoffset', String(163.4 * (1 - Math.min(1, f))));
+    setStyle(this.el.charge!, 'display', f > 0 ? '' : 'none');
+    if (f <= 0) return;
+    const off = Math.round(163.4 * (1 - Math.min(1, f)) * 10) / 10;
+    if (off !== this.chargeOffset) {
+      this.chargeOffset = off;
+      this.chargeArc.setAttribute('stroke-dashoffset', String(off));
+    }
   }
 
   scope(on: boolean, label = '') {
     this.el.scope!.classList.toggle('on', on);
-    (this.el.scope!.querySelector('.zl') as HTMLElement).textContent = label;
+    setText(this.zoomLabel, label);
   }
 
   hitmarker(kill: boolean) {
@@ -174,17 +195,20 @@ export class Hud {
 
   message(text: string, ms = 2000, cls = '') {
     const m = this.el['center-msg']!;
-    m.textContent = text;
+    setText(m, text);
     m.className = `center-msg ${cls}`;
     clearTimeout(this.msgTimer);
-    if (ms > 0) this.msgTimer = window.setTimeout(() => (m.textContent = ''), ms);
+    if (ms > 0) this.msgTimer = window.setTimeout(() => setText(m, ''), ms);
   }
 
+  /** The line under the centre: called every frame with whatever applies (or '' for nothing). */
   sub(text: string, ms = 0) {
     const m = this.el['sub-msg']!;
-    m.textContent = text;
-    clearTimeout(this.subTimer);
-    if (ms > 0) this.subTimer = window.setTimeout(() => (m.textContent = ''), ms);
+    setText(m, text);
+    if (ms > 0 || this.subTimer) {
+      clearTimeout(this.subTimer);
+      this.subTimer = ms > 0 ? window.setTimeout(() => ((this.subTimer = 0), setText(m, '')), ms) : 0;
+    }
   }
 
   killfeed(html: string) {
@@ -214,14 +238,24 @@ export class Hud {
     setTimeout(() => d.remove(), 2700);
   }
 
+  /** Power-up icons with their run-down bars: rebuilt only when the set changes, the bars just move. */
   powerups(list: { id: PowerUpId; frac: number }[]) {
-    const html = list
-      .map((p) => {
-        const d = POWERUPS[p.id];
-        return `<div class="pu${d.held ? ' held' : ''}" style="--pc:${hex(d.color)}"><div class="ic">${d.icon}</div><div class="t" style="transform:scaleX(${p.frac.toFixed(3)})"></div></div>`;
-      })
-      .join('');
-    if (this.el.powerups!.innerHTML !== html) this.el.powerups!.innerHTML = html;
+    const root = this.el.powerups!;
+    const key = list.map((p) => p.id).join(',');
+    if (key !== this.puKey) {
+      this.puKey = key;
+      root.innerHTML = list
+        .map((p) => {
+          const d = POWERUPS[p.id];
+          return `<div class="pu${d.held ? ' held' : ''}" style="--pc:${hex(d.color)}"><div class="ic">${d.icon}</div><div class="t"></div></div>`;
+        })
+        .join('');
+    }
+    const bars = root.children;
+    for (let i = 0; i < list.length; i++) {
+      const bar = bars[i]?.lastElementChild as HTMLElement | null;
+      if (bar) setStyle(bar, 'transform', `scaleX(${q3(list[i]!.frac)})`);
+    }
   }
 
   /**
@@ -273,16 +307,16 @@ export class Hud {
       <div class="who"><span class="arr">◀</span><span class="nm" style="color:${hex(info.color)}">${esc(info.name)}</span><span class="arr">▶</span></div>
       <div class="info">${esc(info.weapon)} · ${info.kills} K / ${info.deaths} D${info.tags.length ? ` · ${info.tags.map(esc).join(' · ')}` : ''}</div>
       <div class="hint">${esc(info.hint)}</div>`;
-    if (el.innerHTML !== html) el.innerHTML = html;
+    setHtml(el, html);
   }
 
   timer(text: string, mode: string) {
-    this.el.timer!.textContent = text;
-    this.el.mode!.textContent = mode;
+    setText(this.el.timer!, text);
+    setText(this.el.mode!, mode);
   }
 
   conn(text: string) {
-    this.el.conn!.textContent = text;
+    setText(this.el.conn!, text);
   }
 
   catHat(on: boolean) {
@@ -303,7 +337,7 @@ export class Hud {
         (r) => `<div class="srow"><div class="sb"><div style="background:${hex(r.color)};transform:scaleX(${Math.min(1, r.score / max)})"></div><span class="nm">${r.leader ? '👑 ' : ''}${esc(r.name)}</span></div><div class="n">${r.score}</div></div>`,
       )
       .join('');
-    if (this.el.score!.innerHTML !== html) this.el.score!.innerHTML = html;
+    setHtml(this.el.score!, html);
   }
 }
 

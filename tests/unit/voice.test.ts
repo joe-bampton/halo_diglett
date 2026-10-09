@@ -180,6 +180,21 @@ describe('voice chat', () => {
     expect(vc.prefs.micWanted).toBe(true);
   });
 
+  it('does not leave the mic recording if you leave while the browser is still asking for it', async () => {
+    const { vc } = setup();
+    let grant: (s: MediaStream) => void = () => {};
+    const stream = new FakeStream();
+    (vc.deps as { getUserMedia: unknown }).getUserMedia = () => new Promise<MediaStream>((r) => (grant = r));
+    const started = vc.enableMic();
+    expect(vc.micState).toBe('starting');
+    vc.detach();
+    grant(stream as unknown as MediaStream);
+    expect(await started).toBe(false);
+    expect(stream.tracks[0]!.stopped).toBe(true);
+    expect(vc.micStream).toBe(null);
+    expect(vc.micState).toBe('off');
+  });
+
   it('sanitizes saved prefs', () => {
     expect(sanitizeVoicePrefs({ mode: 'weird', peers: { A: { vol: 7, muted: 1 }, B: null } })).toEqual({ micWanted: false, mode: 'open', selfMuted: false, peers: { A: { vol: 1, muted: false } } });
   });

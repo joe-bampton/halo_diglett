@@ -832,6 +832,19 @@ export function integrateProjectile(pr: Projectile, def: NonNullable<WeaponDef['
   pr.z += pr.vz * DT;
 }
 
+/** A bouncing projectile met the ground at `at`: reflect it off the terrain, losing energy. (Host and client visuals.) */
+export function bounceOffTerrain(pr: Projectile, arena: Arena, at: V3, restitution: number) {
+  const n = terrainNormal(arena, at.x, at.z);
+  const vdn = pr.vx * n.x + pr.vy * n.y + pr.vz * n.z;
+  pr.vx = (pr.vx - 2 * vdn * n.x) * restitution;
+  pr.vy = (pr.vy - 2 * vdn * n.y) * restitution;
+  pr.vz = (pr.vz - 2 * vdn * n.z) * restitution;
+  pr.x = at.x + n.x * 0.05;
+  pr.y = at.y + n.y * 0.05;
+  pr.z = at.z + n.z * 0.05;
+  pr.bounces++;
+}
+
 function terrainNormal(arena: Arena, x: number, z: number): V3 {
   const e = 0.25;
   const hx = arena.solidAt(x + e, z) - arena.solidAt(x - e, z);
@@ -855,7 +868,8 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     }
     integrateProjectile(pr, def, targetPos);
     const seg = { x: pr.x - prev.x, y: pr.y - prev.y, z: pr.z - prev.z };
-    const L = Math.hypot(seg.x, seg.y, seg.z);
+    // (a projectile that somehow stopped dead would give a 0/0 direction)
+    const L = Math.hypot(seg.x, seg.y, seg.z) || 1e-9;
     const d = { x: seg.x / L, y: seg.y / L, z: seg.z / L };
     // nearest collision along the segment
     let bestT = L;
@@ -936,16 +950,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     }
     if (hitWorld) {
       if (def.bounce && pr.bounces < def.bounce.max && !(pr.fuseAt && t >= pr.fuseAt)) {
-        const n = terrainNormal(arena, at.x, at.z);
-        const vdn = pr.vx * n.x + pr.vy * n.y + pr.vz * n.z;
-        const r = def.bounce.restitution;
-        pr.vx = (pr.vx - 2 * vdn * n.x) * r;
-        pr.vy = (pr.vy - 2 * vdn * n.y) * r;
-        pr.vz = (pr.vz - 2 * vdn * n.z) * r;
-        pr.x = at.x + n.x * 0.05;
-        pr.y = at.y + n.y * 0.05;
-        pr.z = at.z + n.z * 0.05;
-        pr.bounces++;
+        bounceOffTerrain(pr, arena, at, def.bounce.restitution);
         keep.push(pr);
         continue;
       }
@@ -954,7 +959,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     }
     const expired = t - pr.born >= secToTicks(def.life) || (pr.fuseAt && t >= pr.fuseAt) || pr.y < -20;
     if (expired) {
-      endProjectile(m, ctx, pr, { x: pr.x, y: pr.y, z: pr.z }, w, -1);
+      endProjectile(m, ctx, pr, { x: pr.x, y: pr.y, z: pr.z }, w, -1, false, true);
       continue;
     }
     keep.push(pr);
@@ -962,8 +967,8 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
   m.projectiles = keep;
 }
 
-function endProjectile(m: MatchState, ctx: StepContext, pr: Projectile, at: V3, w: WeaponDef, inHole: number, counted = false) {
-  ctx.events.push({ k: 'pend', t: m.tick, id: pr.id, pos: V(at) });
+function endProjectile(m: MatchState, ctx: StepContext, pr: Projectile, at: V3, w: WeaponDef, inHole: number, counted = false, gone = false) {
+  ctx.events.push(gone ? { k: 'pend', t: m.tick, id: pr.id, pos: V(at), gone } : { k: 'pend', t: m.tick, id: pr.id, pos: V(at) });
   if (w.splash && explode(m, ctx, pr.owner, w.id, at, w.splash, inHole) && !counted) {
     const owner = m.players[pr.owner];
     if (owner) owner.hits++;

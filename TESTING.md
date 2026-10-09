@@ -6,7 +6,7 @@
    ```bash
    git clone https://github.com/joe-bampton/halo_diglett.git
    cd halo_diglett
-   git checkout dev/laughing-rubin-ewcsty
+   git checkout ccr-acb8c0e5-bod47d   # the review fixes (or main, once they're merged)
    npm install
    ```
 
@@ -32,7 +32,8 @@
 | `holes=8&spacing=20` | 8 holes at least 20 m apart |
 | `respawn=auto` | respawn without pressing Jump |
 | `quality=low` / `medium` / `high` / `ultra` | graphics preset |
-| `perf` | FPS and draw-call counter in the bottom-left |
+| `perf` | FPS and draw-call counter in the bottom-left, plus the snapshot buffer and stalls (`st`) |
+| `fastnet=0` | online: everything over the reliable channel (the low-latency channel off, to compare) |
 | `test` | test hooks in the browser console: `__hd.grant('spring')`, `__hd.grant('sauce', 1)` (give bot 1 the Super Soaker), `__hd.kill()` |
 
 The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together with `autostart=offline`.
@@ -56,6 +57,15 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] Each preset button changes the settings
 - [ ] Settings persist after a page reload
 - [ ] The lobby is readable on a phone (no sideways scrolling)
+
+**Feel & smoothness** (fixed in the review — worth a look)
+- [ ] On a 120 or 144 Hz screen (`weapon=rpg`): rockets fly at the same speed as on 60 Hz, and explode where they land
+- [ ] Grenades (`weapon=grenade`) bounce and explode in the same spot you saw them land
+- [ ] Sniper scope (both zoom levels) and Battle Rifle zoom: the view moves across the screen as far per mouse/stick movement as unzoomed
+- [ ] Esc → Options mid-match: Space, W, R etc. don't move your Spartan; Esc closes Options and the match carries on (click once to capture the mouse again: browsers don't let Esc do that)
+- [ ] Phone: switch to another app and back mid-match — sound still plays, the screen doesn't go to sleep
+- [ ] A long match on Medium after a stutter: the picture doesn't stay blurry (`perf` shows the scale `x1.00` again)
+- [ ] The first explosion of a match doesn't hitch
 
 **Core gameplay (mouse + keyboard)**
 - [ ] Click the game to capture the mouse; the "Click to play" hint disappears
@@ -143,6 +153,8 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 
 **Online**
 - [ ] A friend joins with the code/link and appears in the lobby; the host starts the match
+- [ ] Up to 8 players fit in one lobby (a 9th is told it's full)
+- [ ] With `?perf` on a friend's phone over Wi-Fi/4G: the stall count (`st`) stays low, other players move smoothly
 - [ ] Shots and kills show up for both players
 - [ ] A friend refreshes mid-match and comes back into the same slot with the same score
 - [ ] Closing the host tab shows "The host left the game" to friends

@@ -59,8 +59,12 @@ export class Backdrop {
   };
 
   start() {
+    // behind menus 30 fps is plenty: phones skip every other frame (battery, heat)
+    const half = matchMedia('(pointer: coarse)').matches;
+    let skip = false;
     const loop = () => {
       this.raf = requestAnimationFrame(loop);
+      if (half && (skip = !skip)) return;
       const t = (performance.now() - this.t0) / 1000;
       const a = t * 0.035;
       this.camera.position.set(Math.cos(a) * 34, 9 + Math.sin(t * 0.1) * 1.5, Math.sin(a) * 34);

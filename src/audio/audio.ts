@@ -23,6 +23,8 @@ export interface PlayOpts {
   delay?: number;
   loop?: boolean;
   bus?: Bus;
+  /** never cut short by the cap on simultaneous sounds (a charge-up you're holding, a strike warning) */
+  keep?: boolean;
 }
 
 export interface SoundHandle {
@@ -33,6 +35,15 @@ export interface SoundHandle {
 }
 
 const NOOP: SoundHandle = { stop() {}, setPos() {}, duration: 0, ended: true };
+
+/** Most gun / effect one-shots playing at once: past this the oldest gives way (a minigun duel mustn't choke a phone). */
+const MAX_VOICES = 40;
+/** A positional sound this quiet at the listener isn't worth starting. */
+const MIN_AUDIBLE = 0.02;
+/** Proper 3D (HRTF) panning is costly: only for sounds this close; further away plain stereo panning sounds the same. */
+const HRTF_RANGE = 30;
+/** Panner refDistance: full level up to here, then 1/distance. */
+const REF_DISTANCE = 8;
 
 export class AudioEngine {
   ctx: AudioContext | null = null;
@@ -48,6 +59,9 @@ export class AudioEngine {
   private wanted = new Set<string>();
   private wantedPrefixes = new Set<string>();
   private annBusyUntil = 0;
+  /** gun / effect one-shots still playing, oldest first */
+  private active: SoundHandle[] = [];
+  private listenerPos: Vec = { x: 0, y: 0, z: 0 };
   hrtf = true;
   volumes: Volumes = { ...DEFAULT_VOLUMES };
   /** Listeners notified after any level changes (voice chat re-applies its element volumes). */
@@ -64,7 +78,7 @@ export class AudioEngine {
   /** Must be called from a user gesture (click/tap/key). Safe to call repeatedly. */
   unlock() {
     if (this.ctx) {
-      if (this.ctx.state === 'suspended') void this.ctx.resume();
+      this.resume();
       return;
     }
     const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -98,6 +112,15 @@ export class AudioEngine {
     void this.loadManifest();
     for (const slot of this.wanted) void this.voice(slot);
     if (this.wantedPrefixes.size) void this.voicesByPrefix();
+  }
+
+  /**
+   * Get sound going again. Besides "suspended", iOS leaves the context "interrupted" after a phone call, Siri or a
+   * switch to another app, and only resumes it when asked (from a tap, or when the page is visible again).
+   */
+  resume() {
+    const ctx = this.ctx;
+    if (ctx && ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch(() => {});
   }
 
   setVolumes(v: Partial<Volumes>) {
@@ -140,6 +163,9 @@ export class AudioEngine {
   setListener(pos: Vec, fwd: Vec, up: Vec = { x: 0, y: 1, z: 0 }) {
     const ctx = this.ctx;
     if (!ctx) return;
+    this.listenerPos.x = pos.x;
+    this.listenerPos.y = pos.y;
+    this.listenerPos.z = pos.z;
     const l = ctx.listener;
     if (l.positionX) {
       const t = ctx.currentTime;
@@ -158,12 +184,12 @@ export class AudioEngine {
     }
   }
 
-  private panner(pos: Vec): PannerNode {
+  private panner(pos: Vec, dist: number): PannerNode {
     const ctx = this.ctx!;
     const p = ctx.createPanner();
-    p.panningModel = this.hrtf ? 'HRTF' : 'equalpower';
+    p.panningModel = this.hrtf && dist < HRTF_RANGE ? 'HRTF' : 'equalpower';
     p.distanceModel = 'inverse';
-    p.refDistance = 8;
+    p.refDistance = REF_DISTANCE;
     p.rolloffFactor = 1;
     p.maxDistance = 400;
     if (p.positionX) {
@@ -177,6 +203,18 @@ export class AudioEngine {
   playBuffer(buf: AudioBuffer, o: PlayOpts = {}): SoundHandle {
     const ctx = this.ctx;
     if (!ctx) return NOOP;
+    let dist = 0;
+    if (o.pos) {
+      const L = this.listenerPos;
+      dist = Math.hypot(o.pos.x - L.x, o.pos.y - L.y, o.pos.z - L.z);
+      if (!o.loop && (o.gain ?? 1) * Math.min(1, REF_DISTANCE / Math.max(REF_DISTANCE, dist)) < MIN_AUDIBLE) return NOOP;
+    }
+    // voice lines and the announcer are throttled where they're triggered; guns and effects are capped here
+    const capped = !o.loop && !o.keep && (o.bus ?? 'sfx') !== 'voice' && o.bus !== 'announcer';
+    if (capped) {
+      if (this.active.length >= MAX_VOICES) this.active = this.active.filter((h) => !h.ended);
+      if (this.active.length >= MAX_VOICES) this.active.shift()!.stop(0.02);
+    }
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.playbackRate.value = o.rate ?? 1;
@@ -187,13 +225,14 @@ export class AudioEngine {
     src.connect(g);
     let pan: PannerNode | null = null;
     if (o.pos) {
-      pan = this.panner(o.pos);
+      pan = this.panner(o.pos, dist);
       g.connect(pan);
       tail = pan;
     }
     tail.connect(this.buses[o.bus ?? 'sfx']);
+    let send: GainNode | null = null;
     if (o.reverb) {
-      const send = ctx.createGain();
+      send = ctx.createGain();
       send.gain.value = o.reverb;
       tail.connect(send).connect(this.reverbIn);
     }
@@ -221,8 +260,13 @@ export class AudioEngine {
     };
     src.onended = () => {
       h.ended = true;
+      // the whole chain, so nothing lingers on the buses
       src.disconnect();
+      g.disconnect();
+      pan?.disconnect();
+      send?.disconnect();
     };
+    if (capped) this.active.push(h);
     return h;
   }
 

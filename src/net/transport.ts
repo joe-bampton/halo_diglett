@@ -26,6 +26,12 @@ export interface HostNet {
   /** Only set on transports that can carry audio (WebRTC). */
   voice?: VoiceLink;
   send(peer: string, ch: Channel, data: unknown): Promise<void> | void;
+  /**
+   * The low-latency path (WebRTC only): unordered, never retransmitted — a late snapshot is a useless one, and a lost
+   * one must not hold up the ones after it. Only once that player is known to be listening on it (their inputs arrive
+   * that way). Returns false when there's no such path to them, and the caller sends reliably instead.
+   */
+  sendFast?(peer: string, data: unknown): boolean;
   broadcast(ch: Channel, data: unknown): void;
   onMessage: ((peer: string, ch: Channel, data: unknown) => void) | null;
   onJoin: ((peer: string) => void) | null;
@@ -38,6 +44,11 @@ export interface HostNet {
 export interface ClientNet {
   readonly kind: string;
   send(ch: Channel, data: unknown): Promise<void> | void;
+  /**
+   * Send on the low-latency path if it's open. Returns true once the host is known to be listening on it (snapshots
+   * arrive that way); until then the caller sends reliably as well.
+   */
+  sendFast?(data: unknown): boolean;
   onMessage: ((ch: Channel, data: unknown) => void) | null;
   onClose: ((reason: string) => void) | null;
   voice?: VoiceLink;
@@ -135,6 +146,10 @@ export class MuxHostNet implements HostNet {
 
   send(peer: string, ch: Channel, data: unknown) {
     return this.owner.get(peer)?.send(peer, ch, data);
+  }
+
+  sendFast(peer: string, data: unknown): boolean {
+    return this.owner.get(peer)?.sendFast?.(peer, data) ?? false;
   }
 
   broadcast(ch: Channel, data: unknown) {

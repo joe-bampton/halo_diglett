@@ -12,6 +12,8 @@ type HD = {
   game: { input: { s: { yaw: number; pitch: number; presses: number } } } | null;
 };
 const hd = (page: Page) => page.evaluate(() => (window as unknown as { __hd: HD }).__hd.state());
+/** each step takes a frame or two, and the software-rendered test browser can drop to ~1 fps */
+const WAIT = 10_000;
 
 test('dead players spectate (cycle, 1st/3rd person, zoom) until they press Jump', async ({ page }) => {
   const errors: string[] = [];
@@ -31,18 +33,18 @@ test('dead players spectate (cycle, 1st/3rd person, zoom) until they press Jump'
 
   // E switches to the next player
   await page.keyboard.press('KeyE');
-  await page.waitForFunction((t) => (window as unknown as { __hd: HD }).__hd.state().spec!.target !== t, st.spec!.target, { timeout: 3000 });
+  await page.waitForFunction((t) => (window as unknown as { __hd: HD }).__hd.state().spec!.target !== t, st.spec!.target, { timeout: WAIT });
   // F toggles first / third person
   await page.keyboard.press('KeyF');
-  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().spec!.view === 'first', null, { timeout: 3000 });
+  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().spec!.view === 'first', null, { timeout: WAIT });
   await page.keyboard.press('KeyF');
-  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().spec!.view === 'third', null, { timeout: 3000 });
+  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().spec!.view === 'third', null, { timeout: WAIT });
   // the mouse wheel zooms the orbit camera
   const d0 = (await hd(page)).spec!.dist;
   const box = (await page.locator('canvas.game').boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.wheel(0, 600);
-  await page.waitForFunction((d) => (window as unknown as { __hd: HD }).__hd.state().spec!.dist > d + 1, d0, { timeout: 3000 });
+  await page.waitForFunction((d) => (window as unknown as { __hd: HD }).__hd.state().spec!.dist > d + 1, d0, { timeout: WAIT });
 
   // spectating never moves the player's own aim or fires
   const aim1 = await page.evaluate(() => ({ ...(window as unknown as { __hd: HD }).__hd.game!.input.s }));
@@ -55,7 +57,7 @@ test('dead players spectate (cycle, 1st/3rd person, zoom) until they press Jump'
   expect((await hd(page)).me!.al).toBe(false);
   await page.keyboard.press('Space');
   await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().me?.al === true, null, { timeout: 5000 });
-  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().mode === 'play', null, { timeout: 3000 });
+  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().mode === 'play', null, { timeout: WAIT });
   await expect(page.locator('.hud .spectate.on')).toHaveCount(0);
   expect(errors).toEqual([]);
 });

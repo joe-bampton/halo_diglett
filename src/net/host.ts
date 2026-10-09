@@ -9,6 +9,7 @@ import { WEAPONS, weaponIndex } from '../sim/weapons';
 import {
   BUILD_ID,
   CH_CTL,
+  CH_EV,
   CH_IN,
   CH_SNAP,
   F_ALIVE,
@@ -22,9 +23,11 @@ import {
   F_OVERSHIELD,
   F_RELOAD,
   F_SAUCED,
+  COSMETIC_EVENTS,
   PROTOCOL_VERSION,
   type Channel,
   type CtlMsg,
+  type EventsMsg,
   type InputMsg,
   type LobbyState,
   type MatchResults,
@@ -36,7 +39,8 @@ import {
 } from './protocol';
 import type { HostNet } from './transport';
 
-export const PLAYER_COLORS = [0x3d7bff, 0xe23b3b, 0x2fbf4a, 0xf2c230, 0xa24dff, 0xff8a1f, 0x19c8d0, 0xff5fb0, 0x8a6a3a, 0xe6e6e6, 0x5a6b2a, 0x1b2a6b, 0x6b1b2a];
+/** One distinct armour colour per slot (MAX_SLOTS). */
+export const PLAYER_COLORS = [0x3d7bff, 0xe23b3b, 0x2fbf4a, 0xf2c230, 0xa24dff, 0xff8a1f, 0x19c8d0, 0xff5fb0, 0x8a6a3a, 0xe6e6e6, 0x5a6b2a, 0x1b2a6b, 0x6b1b2a, 0xb4f03c];
 
 interface Conn {
   peer: string;
@@ -46,9 +50,13 @@ interface Conn {
   seq: number;
   cmd: PlayerCommand | undefined;
   pending: SimEvent[];
+  /** a reliable send to them is still going out (backpressure): their events wait */
   sending: boolean;
+  /** the last snapshot went over the low-latency path */
+  fastOk: boolean;
+  /** last time their waiting events were thinned out */
+  prunedAt: number;
   lastSnapTick: number;
-  lastSb: number;
   lastInputAt: number;
 }
 
@@ -60,6 +68,14 @@ interface HeldSlot {
 
 const REJOIN_MS = 120_000;
 const AFK_MS = 5000;
+
+/**
+ * Events normally wait a tick or three for the next snapshot. Once the oldest has waited longer than this, that
+ * player's connection has stalled (a tunnel, a switch to another app): their cosmetic events older than this are
+ * dropped (kills, spawns, power-ups and the rest always get through). Checked twice a second at most.
+ */
+const STALE_TICKS = TICK_RATE;
+const PRUNE_EVERY = TICK_RATE / 2;
 
 export class HostSession {
   arena = new Arena();
@@ -279,7 +295,7 @@ export class HostSession {
     this.tokens.set(token, slot);
     // replace any older connection that still claims this slot (same token rejoining)
     for (const [p, o] of this.conns) if (o.slot === slot) this.conns.delete(p);
-    const conn: Conn = { peer, slot, token, local, seq: 0, cmd: undefined, pending: [], sending: false, lastSnapTick: -1, lastSb: -9999, lastInputAt: this.clock() };
+    const conn: Conn = { peer, slot, token, local, seq: 0, cmd: undefined, pending: [], sending: false, fastOk: false, prunedAt: -1e9, lastSnapTick: -1, lastInputAt: this.clock() };
     this.conns.set(peer, conn);
     this.send(peer, CH_CTL, { t: 'welcome', slot, lobby: this.lobby });
     if (this.match && this.lobby.phase === 'match') {
@@ -333,7 +349,6 @@ export class HostSession {
     for (const c of this.conns.values()) {
       c.pending = [];
       c.lastSnapTick = -1;
-      c.lastSb = -9999;
       c.cmd = undefined;
     }
     this.results = null;
@@ -437,7 +452,13 @@ export class HostSession {
     }
     if (events.length) {
       for (const b of this.bots.values()) b.onEvents(events);
-      for (const c of this.conns.values()) c.pending.push(...events);
+      for (const c of this.conns.values()) {
+        c.pending.push(...events);
+        if (m.tick - c.pending[0]!.t > STALE_TICKS && m.tick - c.prunedAt >= PRUNE_EVERY) {
+          c.prunedAt = m.tick;
+          c.pending = c.pending.filter((e) => !COSMETIC_EVENTS.has(e.k) || m.tick - e.t <= STALE_TICKS);
+        }
+      }
       if (events.some((e) => e.k === 'end')) this.resultsAt = nowMs + 3500;
     }
     if (m.tick % 30 === 0) this.admitWaiting();
@@ -477,11 +498,30 @@ export class HostSession {
 
   private sendSnapshot(c: Conn) {
     const m = this.match!;
-    if (c.sending) return; // backpressure: previous send still in flight, events carry over
-    c.lastSnapTick = m.tick;
+    const fast = !c.local && !!this.net.sendFast;
+    // backpressure: the last reliable send is still going out (their events carry over), and with no low-latency
+    // path working either there's nothing to send this tick
+    if (c.sending && !(fast && c.fastOk)) return;
     const snap = this.buildSnapshot(c);
+    // the low-latency path: the state alone (a lost one is replaced 50 ms later), the events reliably beside it
+    if (fast && (c.fastOk = this.net.sendFast!(c.peer, snap))) {
+      c.lastSnapTick = m.tick;
+      if (c.pending.length && !c.sending) {
+        const ev: EventsMsg = { k: m.tick, e: c.pending };
+        c.pending = [];
+        this.track(c, this.send(c.peer, CH_EV, ev));
+      }
+      return;
+    }
+    if (c.sending) return;
+    c.lastSnapTick = m.tick;
+    if (c.pending.length) snap.e = c.pending;
     c.pending = [];
-    const r = this.send(c.peer, CH_SNAP, snap);
+    this.track(c, this.send(c.peer, CH_SNAP, snap));
+  }
+
+  /** A reliable send that hasn't gone out yet holds back the next one (their events pile up meanwhile). */
+  private track(c: Conn, r: Promise<void> | void) {
     if (r && typeof (r as Promise<void>).then === 'function') {
       c.sending = true;
       (r as Promise<void>).then(
@@ -511,16 +551,13 @@ export class HostSession {
       if (q.saucedUntil > t) f |= F_SAUCED;
       p.push([q.slot, Math.round(q.exposure * 255), Math.round(q.yaw * 1000), Math.round(q.pitch * 1000), f, weaponIndex(q.weapon), q.hole, Math.round(q.beamLen * 10), q.zoom, q.springAt]);
     }
-    const snap: SnapshotMsg = { k: t, ph: m.phase, a: c.seq, p, ld: m.leader };
+    const snap: SnapshotMsg = { k: t, id: m.seed, ph: m.phase, a: c.seq, p, ld: m.leader };
     const homing = m.projectiles.filter((pr) => pr.target >= 0);
     if (homing.length) snap.h = homing.map((pr) => [pr.id, round2(pr.x), round2(pr.y), round2(pr.z)]);
-    if (c.pending.length) snap.e = c.pending;
     const me = m.players[c.slot];
     if (me) snap.me = privateState(m, me);
-    if (t - c.lastSb >= 30 || c.pending.some((e) => e.k === 'kill' || e.k === 'end')) {
-      c.lastSb = t;
-      snap.sb = m.players.filter((q): q is PlayerState => !!q).map((q) => [q.slot, q.kills, q.deaths, q.gunLevel]);
-    }
+    // the scoreboard is small, and with every snapshot a lost one can't leave it stale
+    snap.sb = m.players.filter((q): q is PlayerState => !!q).map((q) => [q.slot, q.kills, q.deaths, q.gunLevel]);
     return snap;
   }
 

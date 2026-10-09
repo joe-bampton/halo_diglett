@@ -181,7 +181,8 @@ export type HitKind = 'head' | 'body' | 'orb' | 'world' | 'none';
 export type SimEvent =
   | { k: 'fire'; t: number; p: number; w: WeaponId; o: Vec3T; e: Vec3T; hit: HitKind }
   | { k: 'proj'; t: number; id: number; p: number; w: WeaponId; pos: Vec3T; vel: Vec3T; tgt: number }
-  | { k: 'pend'; t: number; id: number; pos: Vec3T }
+  /** a projectile ended; `gone`: it just ran out (life or fuse) without hitting anything */
+  | { k: 'pend'; t: number; id: number; pos: Vec3T; gone?: boolean }
   | { k: 'boom'; t: number; p: number; w: WeaponId; pos: Vec3T; r: number }
   | { k: 'dmg'; t: number; a: number; v: number; amt: number; head: boolean; sb: boolean; w: WeaponId }
   | { k: 'kill'; t: number; a: number; v: number; w: WeaponId; head: boolean; medals: string[]; lead: boolean }

@@ -562,7 +562,7 @@ export function buildSauceBlob(): THREE.Mesh {
       pos.setXYZ(i, x * k, y * k * 0.7, z * k);
     }
     geo.computeVertexNormals();
-    sauceParts = { geo, mat: new THREE.MeshPhongMaterial({ color: SAUCE.base, specular: SAUCE.gloss, shininess: 90, emissive: 0x1c1a14 }) };
+    sauceParts = { geo: share(geo), mat: share(new THREE.MeshPhongMaterial({ color: SAUCE.base, specular: SAUCE.gloss, shininess: 90, emissive: 0x1c1a14 })) };
   }
   return new THREE.Mesh(sauceParts.geo, sauceParts.mat);
 }
@@ -589,11 +589,12 @@ export function buildSpring(detailed = false): THREE.Group {
       const a = (i / perTurn) * Math.PI * 2;
       pts.push(new THREE.Vector3(Math.cos(a) * 0.42, i / (turns * perTurn), Math.sin(a) * 0.42));
     }
+    // cached for every spring: never disposed with one
     springParts = {
-      coil: new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), turns * perTurn, 0.05, 6, false),
-      plate: new THREE.CylinderGeometry(0.55, 0.55, 0.07, 18).translate(0, 1, 0),
-      metal: new THREE.MeshLambertMaterial({ color: 0xc9d2da }),
-      pad: new THREE.MeshLambertMaterial({ color: 0x3cffd0, emissive: 0x0b4a3c }),
+      coil: share(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), turns * perTurn, 0.05, 6, false)),
+      plate: share(new THREE.CylinderGeometry(0.55, 0.55, 0.07, 18).translate(0, 1, 0)),
+      metal: share(new THREE.MeshLambertMaterial({ color: 0xc9d2da })),
+      pad: share(new THREE.MeshLambertMaterial({ color: 0x3cffd0, emissive: 0x0b4a3c })),
     };
   }
   const g = new THREE.Group();

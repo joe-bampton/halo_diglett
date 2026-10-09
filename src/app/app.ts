@@ -108,6 +108,8 @@ export class App {
   /** voice-chat listeners for the current screen and for the in-match HUD */
   private screenVoiceUnsub: (() => void) | null = null;
   private hudVoiceUnsub: (() => void) | null = null;
+  /** the Options screen is open over a running match: closing it (Done, or Esc) goes back to the game */
+  private optionsDone: (() => void) | null = null;
 
   constructor(private root: HTMLElement) {
     this.gameLayer = document.createElement('div');
@@ -175,6 +177,7 @@ export class App {
 
   private setScreen(html: string, cls = ''): HTMLElement {
     this.watchVoice(null);
+    this.optionsDone = null;
     this.ensureBackdrop();
     this.screen?.remove();
     const s = document.createElement('div');
@@ -187,6 +190,7 @@ export class App {
 
   private clearScreen() {
     this.watchVoice(null);
+    this.optionsDone = null;
     this.screen?.remove();
     this.screen = null;
   }
@@ -350,7 +354,13 @@ export class App {
   }
 
   private onVisibility() {
-    if (document.hidden && this.host?.lobby.online && this.host.match) console.info('Host tab hidden — a background worker keeps the match running.');
+    if (document.hidden) {
+      if (this.host?.lobby.online && this.host.match) console.info('Host tab hidden — a background worker keeps the match running.');
+      return;
+    }
+    // back from another app or tab: the browser dropped the screen wake lock, and iOS may have interrupted the audio
+    if (this.game) void this.requestWakeLock();
+    audio.resume();
   }
 
   private persistSettings() {
@@ -595,7 +605,12 @@ export class App {
   private async requestWakeLock() {
     try {
       const wl = (navigator as Navigator & { wakeLock?: { request(t: string): Promise<{ release(): Promise<void> }> } }).wakeLock;
-      if (wl) this.wakeLock = await wl.request('screen');
+      if (!wl) return;
+      const lock = await wl.request('screen');
+      void this.wakeLock?.release().catch(() => {});
+      // the match may have ended while we waited
+      if (this.game) this.wakeLock = lock;
+      else void lock.release().catch(() => {});
     } catch {
       /* ignore */
     }
@@ -614,13 +629,15 @@ export class App {
   }
 
   private toggleMenu() {
-    if (this.menuEl) this.closeMenu();
+    if (this.optionsDone) this.optionsDone();
+    else if (this.menuEl) this.closeMenu();
     else this.openMenu();
   }
 
   private openMenu() {
     if (this.menuEl || !this.game) return;
     this.game.input.unlock();
+    this.game.input.suspended = true;
     const isHost = !!this.host;
     const m = document.createElement('div');
     m.className = 'screen pause';
@@ -644,6 +661,7 @@ export class App {
       this.showOptions(() => {
         this.clearScreen();
         if (this.host) this.host.paused = false;
+        if (this.game) this.game.input.suspended = false;
         this.game?.input.lock();
       });
     });
@@ -655,10 +673,13 @@ export class App {
     m.querySelector('[data-a=leave]')!.addEventListener('click', () => this.showTitle());
   }
 
+  /** `keepPaused`: going on to the Options screen (the game stays paused, and your Spartan stays put). */
   private closeMenu(keepPaused = false) {
     this.menuEl?.remove();
     this.menuEl = null;
-    if (this.host && !keepPaused) this.host.paused = false;
+    if (keepPaused) return;
+    if (this.host) this.host.paused = false;
+    if (this.game) this.game.input.suspended = false;
   }
 
   private showResults() {
@@ -817,12 +838,16 @@ export class App {
       toast('Audio levels reset to defaults');
     });
     this.renderVoiceOptions(scr.querySelector<HTMLElement>('.voice-root')!);
-    scr.querySelector('.back')!.addEventListener('click', () => {
+    const done = () => {
+      this.optionsDone = null;
       save();
       // a mic check outside an online game shouldn't keep recording
       if (!voice.available) voice.stopMic(true);
       back();
-    });
+    };
+    scr.querySelector('.back')!.addEventListener('click', done);
+    // over a running match, Esc (or the controller's Menu button) is Done too
+    if (this.game) this.optionsDone = done;
   }
 
   /** Options → Voice chat: my mic, mic mode, and per-player volume/mute. */

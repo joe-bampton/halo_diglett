@@ -36,4 +36,12 @@ describe('power-up settings', () => {
     expect(migrateSavedSettings(JSON.parse(JSON.stringify(settingsForStorage(s))))).toEqual(s);
     expect(migrateSavedSettings(null)).toEqual(sanitizeSettings(DEFAULT_SETTINGS));
   });
+
+  it('moves an old save off the old 150 ms lag-compensation default, but keeps a deliberate choice', () => {
+    expect(migrateSavedSettings({ maxRewindMs: 150 }).maxRewindMs).toBe(250);
+    expect(migrateSavedSettings({ maxRewindMs: 100 }).maxRewindMs).toBe(100);
+    // a save from this version means what it says
+    expect(migrateSavedSettings(settingsForStorage(sanitizeSettings({ maxRewindMs: 150 }))).maxRewindMs).toBe(150);
+    expect(sanitizeSettings({ maxRewindMs: 400 }).maxRewindMs).toBe(400);
+  });
 });
