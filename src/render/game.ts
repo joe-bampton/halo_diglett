@@ -20,7 +20,7 @@ import { setHtml, setStyle } from '../ui/dom';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
 import { Decals, FlashLights, Particles, Ribbons, Shockwaves } from './fx';
 import { loadDetailedModels } from './assets';
-import { CAN_H, CAN_SCALE, GLB, SHARED, buildCan, buildOrb, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
+import { CAN_H, CAN_SCALE, GLB, SHARED, buildCan, buildOrb, setCatCostume, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
 import { PAL, SAUCE } from './palette';
 import type { PostFx } from './post';
 import { DynRes } from './dynres';
@@ -1652,7 +1652,7 @@ export class Game {
       for (const b of sv.sauce) b.visible = sauced;
       if (sauced && Math.random() < dt * 6) this.fxSauce.emit({ pos: this.headPos(p).add(new THREE.Vector3((Math.random() - 0.5) * 0.4, -0.2, (Math.random() - 0.5) * 0.4)), count: 1, speed: [0, 0.3], gravity: 6, life: [0.5, 0.9], size: [0.12, 0.08], color: SAUCE.base, color1: SAUCE.shade, alpha: [1, 0.8] });
       // Pitre: the leader is the Cat in the Hat
-      sv.parts.catHat.visible = !!settings?.pitre && settings.pitreCatHat && s.leader === p.slot && !camo;
+      setCatCostume(sv.parts, !!settings?.pitre && settings.pitreCatHat && s.leader === p.slot && !camo);
       // charging & beams
       if (p.flags & F_CHARGING && sv.weaponModel && Math.random() < dt * 30) {
         const mz = this.muzzleOf(p.slot);

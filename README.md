@@ -210,6 +210,12 @@ Pick a preset from the **Graphics** menu on the title screen, or in Options. Cha
 
 The ground and stone textures are painted in code when a match starts (no image files).
 
+**Better models from AI tools.** Any character, weapon or prop can be swapped for a model made with an AI 3D generator such as Meshy or Tripo. That includes the Spartan (still painted in each player's colour), a proper Cat in the Hat for Pitre Mode's leader, the energy cans, and every gun.
+- Drop the `.glb` into `models-src/` and run `npm run models:import`.
+- The game fits each model to the holes, hitboxes and hands by itself.
+- `?modelview=<slot>` shows how a model fits.
+- **[tools/models/AI_MODELS.md](tools/models/AI_MODELS.md)** has ready-made prompts for every model.
+
 The detailed Spartan, energy can, Super Soaker and spring are made **from code with Blender** ([`tools/models`](tools/models/README.md)): change the script, run it, and the game picks up the new `.glb` files.
 
 ## Tech stack

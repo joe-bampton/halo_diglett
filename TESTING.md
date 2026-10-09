@@ -62,6 +62,7 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] High: textured grass ground, rounded weathered stones around the holes, stone-lined hole walls, soft shadows under the rims (ambient occlusion)
 - [ ] On a slow laptop with *Auto*: after ~15 s of play it says "Graphics lowered to Medium" and starts on Medium from then on
 - [ ] Pitre Mode cans (`pitre=1&orbs=chaos`) are noticeably bigger than before and still easy to shoot
+- [ ] AI models (once some are imported, see `tools/models/AI_MODELS.md`): `?modelview=all` shows them; `?modelview=spartan` stands it on the rim inside its hitboxes, aiming and ducking without gaps at the waist or neck; in a match on High every player's Spartan is in their own colour and the guns sit in their hands and fire from the muzzle
 
 **Feel & smoothness** (fixed in the review — worth a look)
 - [ ] On a 120 or 144 Hz screen (`weapon=rpg`): rockets fly at the same speed as on 60 Hz, and explode where they land

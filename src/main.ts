@@ -26,6 +26,9 @@ function webglOk(): boolean {
 
 if (!webglOk()) {
   root.innerHTML = '<div class="screen"><div class="title-logo"><div class="t2">DIGLETT</div></div><p class="err">Your browser does not support WebGL, which the game needs.</p></div>';
+} else if (new URLSearchParams(location.search).has('modelview')) {
+  // checking how AI-made models fit (tools/models/AI_MODELS.md)
+  void import('./render/modelView').then((m) => m.showModelView(root, new URLSearchParams(location.search).get('modelview') ?? 'all'));
 } else {
   const app = new App(root);
   const params = new URLSearchParams(location.search);

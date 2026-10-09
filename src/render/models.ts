@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { AI, type AiCharacterModel, type AiPiece } from './aiModels';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { WeaponId } from '../sim/weapons';
 import { PAL, SAUCE } from './palette';
@@ -66,6 +67,14 @@ function pbrify(root: THREE.Object3D, o: { roughness: number; metalness: number 
  * muzzle position stored in userData.muzzle.
  */
 export function buildWeaponModel(id: WeaponId, pbr = false, detailed = false): THREE.Group {
+  const ai = detailed ? AI[id] : undefined;
+  if (ai && ai.kind !== 'character') {
+    // an AI-made model (models-src/): already laid along -Z with its grip at the origin
+    const g = new THREE.Group();
+    for (const m of aiMeshes(ai.pieces)) g.add(m);
+    g.userData.muzzle = ai.muzzle.clone();
+    return g;
+  }
   if (id === 'soaker' && detailed && GLB.soaker) {
     const mats: Record<string, THREE.Material> = {
       body: aoMat(0xff7a1a, 0.35, 0, pbr),
@@ -278,10 +287,17 @@ export interface SpartanParts {
   shellMat: THREE.ShaderMaterial;
   catHat: THREE.Group;
   materials: THREE.Material[];
+  /** with an AI-made Cat in the Hat: its materials, and the Spartan's that stop drawing while it's worn */
+  costume?: { cat: THREE.Material[]; spartan: THREE.Material[] };
 }
 
 export function buildSpartan(color: number, pbr = false, detailed = false): SpartanParts {
-  if (detailed && GLB.spartan) return spartanFromGlb(color, pbr);
+  const parts = detailed && AI.spartan?.kind === 'character' ? spartanFromAi(AI.spartan, color) : detailed && GLB.spartan ? spartanFromGlb(color, pbr) : proceduralSpartan(color, pbr);
+  if (detailed && AI.cat?.kind === 'character') addCatCostume(parts, AI.cat);
+  return parts;
+}
+
+function proceduralSpartan(color: number, pbr: boolean): SpartanParts {
   const armorC = color;
   const accentC = new THREE.Color(color).multiplyScalar(0.62).getHex();
   const suitC = PAL.undersuit;
@@ -370,6 +386,114 @@ function spartanFromGlb(color: number, pbr: boolean): SpartanParts {
   catHat.visible = false;
   head.add(catHat);
   return { root, body, aim, head, weaponHolder, mat: armor, visor, shell, shellMat, catHat, materials: Object.values(mats) };
+}
+
+/** Meshes for AI-made pieces (geometry and material shared by every copy). */
+function aiMeshes(pieces: AiPiece[], mat?: (m: THREE.Material) => THREE.Material): THREE.Mesh[] {
+  return pieces.map((p) => {
+    const m = new THREE.Mesh(p.geo, mat ? mat(p.mat) : p.mat);
+    m.castShadow = true;
+    return m;
+  });
+}
+
+/**
+ * A copy of an AI character's material for one player (camo fades each player's own): the light, unsaturated parts of
+ * its texture (see tintMaskFromPixels) are painted in the player's colour.
+ */
+function aiCharacterMaterial(src: THREE.Material, color: number | null): THREE.Material {
+  const m = src.clone();
+  const std = m as THREE.MeshStandardMaterial;
+  const mask = src.userData.tintMask as THREE.Texture | null | undefined;
+  if (color === null) return m;
+  if (!mask || !std.map) {
+    // untextured: a light grey part is the armour
+    if (std.color && std.color.getHSL({ h: 0, s: 0, l: 0 }).s < 0.25 && std.color.getHSL({ h: 0, s: 0, l: 0 }).l > 0.45) std.color.set(color);
+    return m;
+  }
+  const tint = new THREE.Color(color);
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.tintMask = { value: mask };
+    sh.uniforms.tintColor = { value: tint };
+    sh.fragmentShader = `uniform sampler2D tintMask;\nuniform vec3 tintColor;\n${sh.fragmentShader}`.replace(
+      '#include <map_fragment>',
+      `#include <map_fragment>
+      float tintK = texture2D(tintMask, vMapUv).r;
+      float tintL = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+      diffuseColor.rgb = mix(diffuseColor.rgb, tintColor * tintL * 1.35, tintK);`,
+    );
+  };
+  m.customProgramCacheKey = () => 'ai-tint';
+  return m;
+}
+
+/** An AI-made Spartan with the built-in one's pivots (root > body > aim > head, aim > weaponHolder). */
+function spartanFromAi(model: AiCharacterModel, color: number): SpartanParts {
+  const materials: THREE.Material[] = [];
+  const mat = (src: THREE.Material) => {
+    const m = aiCharacterMaterial(src, model.tint ? color : null);
+    materials.push(m);
+    return m;
+  };
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  const aim = new THREE.Group();
+  const head = new THREE.Group();
+  root.add(body);
+  aim.position.set(0, 0.58, 0);
+  body.add(aim);
+  head.position.set(0, 0.37, 0);
+  aim.add(head);
+  for (const m of aiMeshes(model.lower, mat)) body.add(m);
+  for (const m of aiMeshes(model.upper, mat)) aim.add(m);
+  for (const m of aiMeshes(model.head, mat)) head.add(m);
+  const weaponHolder = new THREE.Group();
+  weaponHolder.position.set(...model.hand);
+  aim.add(weaponHolder);
+  const shellMat = shellMaterial(0x40ff70);
+  const shell = new THREE.Mesh(new THREE.CapsuleGeometry(0.46, 0.72, 4, 12), shellMat);
+  shell.position.set(0, 0.46, 0);
+  shell.visible = false;
+  body.add(shell);
+  const catHat = buildCatHat();
+  catHat.visible = false;
+  head.add(catHat);
+  const first = (materials[0] ?? new THREE.MeshStandardMaterial()) as THREE.MeshStandardMaterial;
+  return { root, body, aim, head, weaponHolder, mat: first, visor: first, shell, shellMat, catHat, materials };
+}
+
+/**
+ * An AI-made Cat in the Hat, worn by the leader in Pitre Mode instead of the hat: its parts ride on the same pivots,
+ * and the Spartan's own materials stop drawing while it's on (setCatCostume). (Materials, not meshes: in the built-in
+ * Spartans the pivots are themselves meshes, and hiding one would hide everything on it.)
+ */
+function addCatCostume(parts: SpartanParts, model: AiCharacterModel) {
+  const spartan = [...parts.materials];
+  const cat: THREE.Material[] = [];
+  const add = (g: THREE.Object3D, pieces: AiPiece[]) => {
+    for (const m of aiMeshes(pieces, (src) => {
+      const c = src.clone();
+      c.visible = false;
+      cat.push(c);
+      return c;
+    }))
+      g.add(m);
+  };
+  add(parts.body, model.lower);
+  add(parts.aim, model.upper);
+  add(parts.head, model.head);
+  parts.materials.push(...cat);
+  parts.costume = { cat, spartan };
+}
+
+/** The Pitre Mode leader's costume: the AI-made cat if there is one, otherwise the hat on the Spartan. */
+export function setCatCostume(parts: SpartanParts, on: boolean) {
+  if (!parts.costume) {
+    parts.catHat.visible = on;
+    return;
+  }
+  for (const m of parts.costume.cat) m.visible = on;
+  for (const m of parts.costume.spartan) m.visible = !on;
 }
 
 /** Original Seuss-inspired costume: tall red/white striped hat, bow tie, cat ears & whiskers. */
@@ -545,7 +669,9 @@ export function buildCan(color: number, pbr = false, detailed = false): THREE.Gr
   can.scale.setScalar(CAN_SCALE);
   g.add(can);
   const metalMat = pbr ? canParts.metalPbr : canParts.metalMat;
-  if (detailed && GLB.can) {
+  const ai = detailed ? AI.can : undefined;
+  if (ai && ai.kind !== 'character') for (const m of aiMeshes(ai.pieces)) can.add(m);
+  else if (detailed && GLB.can) {
     const label = canLabel(color, pbr);
     can.add(fromGlb('can', 'can', (n) => (n === 'label' ? label : metalMat), false));
   } else can.add(new THREE.Mesh(canParts.metal, metalMat), new THREE.Mesh(canParts.body, canLabel(color, pbr)));
@@ -601,6 +727,12 @@ let springParts: { coil: THREE.BufferGeometry; plate: THREE.BufferGeometry; meta
 let springGlbMats: Record<string, THREE.Material> | null = null;
 
 export function buildSpring(detailed = false): THREE.Group {
+  const ai = detailed ? AI.spring : undefined;
+  if (ai && ai.kind !== 'character') {
+    const g = new THREE.Group();
+    for (const m of aiMeshes(ai.pieces)) g.add(m);
+    return g;
+  }
   if (detailed && GLB.spring) {
     springGlbMats ??= {
       metal: share(new THREE.MeshStandardMaterial({ color: 0xc9d2da, metalness: 0.9, roughness: 0.3, vertexColors: true })),
