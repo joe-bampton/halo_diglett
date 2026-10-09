@@ -3,6 +3,7 @@ import { BotBrain } from '../../src/bots/brain';
 import { Rng } from '../../src/shared/rng';
 import { createMatch, damagePlayer, stepMatch } from '../../src/sim/match';
 import { sanitizeSettings } from '../../src/sim/settings';
+import { HIDDEN_EXPOSURE, RISE_TIME, TICK_RATE } from '../../src/sim/constants';
 import type { PlayerCommand, RosterEntry, SimEvent } from '../../src/sim/types';
 import { botMatch } from './botMatch';
 import { arena, cmd, faceOff } from './helpers';
@@ -91,8 +92,8 @@ describe('bots', () => {
       if (ev.some((e) => e.k === 'dmg' && e.v === 1)) firstHit = m.tick;
     }
     expect(firstHit).toBeGreaterThan(0);
-    // the head clears the rim ~2 ticks after the player starts rising
-    expect(firstHit - popped).toBeLessThanOrEqual(3);
+    // the head clears the rim a few ticks after the player starts rising
+    expect(firstHit - popped).toBeLessThanOrEqual(Math.ceil(HIDDEN_EXPOSURE * RISE_TIME * TICK_RATE) + 1);
     expect(m.players[1]!.alive).toBe(false);
   });
 

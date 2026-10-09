@@ -6,7 +6,6 @@
    ```bash
    git clone https://github.com/joe-bampton/halo_diglett.git
    cd halo_diglett
-   git checkout ccr-acb8c0e5-bod47d   # the review fixes (or main, once they're merged)
    npm install
    ```
 
@@ -66,6 +65,13 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] Phone: switch to another app and back mid-match — sound still plays, the screen doesn't go to sleep
 - [ ] A long match on Medium after a stutter: the picture doesn't stay blurry (`perf` shows the scale `x1.00` again)
 - [ ] The first explosion of a match doesn't hitch
+
+**Ducking is safe** (`?autostart=offline&bots=3&holes=8&spacing=6`)
+- [ ] With a bot ducked in the next hole, aim at its hole and shoot: no hit, not even a headshot
+- [ ] Duck just as someone fires at you: you're safe once your head is under the rim
+- [ ] Big Heads skull or power-up: ducked heads still disappear under the rim
+- [ ] Homing rounds (`__hd.grant('homing')` with `?test`): aim at a ducked bot's hole, and the shot curves over the rim and hits
+- [ ] Spring Jump: from the top you can still shoot down into a ducked player's hole
 
 **Core gameplay (mouse + keyboard)**
 - [ ] Click the game to capture the mouse; the "Click to play" hint disappears

@@ -38,7 +38,7 @@ Play with up to **7 friends online** (8 players), or on your own against up to *
   | Look around (3rd person orbit) | mouse | right stick | drag |
   | Zoom in / out | mouse wheel | RT / LT | pinch |
 
-- **Ducking** makes you safe from bullets. Explosions only reach you if a grenade drops into your hole, or if the host turns on *Explosions reach ducked players*.
+- **Ducking** makes you safe from bullets: once your head is under the rim, nobody on the ground can hit you, even if they aimed before you ducked. Only these get you in your hole: a shot fired down from a **Spring Jump**, **homing rounds** (they curve over the rim), a grenade that drops in, an orbital strike, or explosions if the host turns on *Explosions reach ducked players*.
 - **Stay ducked too long** and the *anti-turtle* timer pops you up for 2 seconds.
 - **Headshots** do the most damage. With the sniper and crossbow, any headshot kills.
 - **Power-up bubbles** are capture-ball-style orbs that drift over the field. Shoot one to claim what's inside: flamethrower, minigun, overshield, invincibility, active camo, damage boost, homing rounds, X-ray vision, big heads, orbital strike, quick hands, and two new ones:

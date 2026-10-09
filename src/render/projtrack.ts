@@ -28,9 +28,9 @@ export function newTrack(pr: Projectile, born: number): ProjTrack {
 
 /**
  * Distance along the segment (o + d·t, t ≤ L) to the nearest thing a projectile of radius `r` would stop on other
- * than the terrain (players, power-up orbs) at host tick `tick`, or Infinity.
+ * than the terrain (players, power-up orbs) at host tick `tick`, or Infinity. `from`: the height it was fired from.
  */
-export type TargetTest = (o: V3, d: V3, L: number, tick: number, r: number) => number;
+export type TargetTest = (o: V3, d: V3, L: number, tick: number, r: number, from: number) => number;
 
 /** 'hit': stopped on a target; 'end': stopped by the ground (or its fuse there); 'expire': ran out in the air */
 export type StepResult = 'fly' | 'hit' | 'end' | 'expire';
@@ -61,7 +61,7 @@ export function stepTrack(t: ProjTrack, def: ProjectileDef, arena: Arena, homing
   const o = { x: ox, y: oy, z: oz };
   const d = { x: sx / L, y: sy / L, z: sz / L };
   let best = L;
-  const tt = targets ? targets(o, d, L, t.tick, def.radius) : Infinity;
+  const tt = targets ? targets(o, d, L, t.tick, def.radius, pr.y0 ?? oy) : Infinity;
   const onTarget = tt < best;
   if (onTarget) best = tt;
   const tw = arena.raycast(o, d, best);

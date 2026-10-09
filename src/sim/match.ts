@@ -211,9 +211,13 @@ function intervalTicks(m: MatchState, p: PlayerState, sec: number): number {
   return Math.max(1, Math.round(sec * TICK_RATE * quick));
 }
 
+/** A player's exposure at a past tick (a fractional view tick blends the two ticks around it). */
 export function exposureAt(m: MatchState, slot: number, tick: number): number {
   if (tick >= m.tick) return m.players[slot]?.exposure ?? 0;
-  return m.history[slot * HISTORY + (((tick % HISTORY) + HISTORY) % HISTORY)]! / 255;
+  const at = (k: number) => (k >= m.tick ? (m.players[slot]?.exposure ?? 0) : m.history[slot * HISTORY + (((k % HISTORY) + HISTORY) % HISTORY)]! / 255);
+  const k0 = Math.floor(tick);
+  const f = tick - k0;
+  return f > 0 ? at(k0) + (at(k0 + 1) - at(k0)) * f : at(k0);
 }
 
 function headScaleFor(m: MatchState, shooter: PlayerState | null): number {
@@ -618,6 +622,38 @@ function findHomingTarget(m: MatchState, arena: Arena, p: PlayerState, origin: V
   return best;
 }
 
+/** Homing rounds: how far off the aim a target may be (radians). */
+const HOMING_CONE = (5 * Math.PI) / 180;
+
+/** Homing rounds and nobody exposed in the cone: a ducked enemy whose hole mouth is in the cone and in sight. */
+function findHomingDive(m: MatchState, arena: Arena, p: PlayerState, origin: V3, dir: V3, range: number): { q: PlayerState; via: V3 } | null {
+  let best: { q: PlayerState; via: V3 } | null = null;
+  let bestAng = HOMING_CONE;
+  for (const q of m.players) {
+    if (!q || q === p || !q.alive || isExposed(q.exposure)) continue;
+    const hole = arena.holes[q.hole]!;
+    const via = { x: hole.x, y: hole.rim + 0.4, z: hole.z };
+    const to = sub(via, origin);
+    if (Math.hypot(to.x, to.y, to.z) > range) continue;
+    const ang = angleBetween(dir, norm(to));
+    if (ang < bestAng && arena.lineClear(origin, via, 0.4)) {
+      bestAng = ang;
+      best = { q, via };
+    }
+  }
+  return best;
+}
+
+/** The round curves over the rim and down into the hole: a body hit, ducked or not. */
+function homingDive(m: MatchState, ctx: StepContext, p: PlayerState, w: WeaponDef, o: V3, dive: { q: PlayerState; via: V3 }) {
+  const { q, via } = dive;
+  const hb = playerHitbox(m, ctx.arena, q, q.exposure, p);
+  const at = { x: (hb.torsoA.x + hb.torsoB.x) / 2, y: (hb.torsoA.y + hb.torsoB.y) / 2, z: (hb.torsoA.z + hb.torsoB.z) / 2 };
+  p.hits++;
+  damagePlayer(m, ctx, p.slot, q, w.damage, { head: false, weapon: w.id, kind: 'direct', headMult: w.headMult });
+  ctx.events.push({ k: 'fire', t: m.tick, p: p.slot, w: w.id, o: V(o), e: V(at), hit: 'body', v: V(via) });
+}
+
 function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
   const t = m.tick;
   const { arena, rng } = ctx;
@@ -639,8 +675,13 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
   p.revealUntil = t + TICK_RATE;
   if (w.fireKind === 'hitscan') {
     if (hasPowerup(p, 'homing', t)) {
-      const q = findHomingTarget(m, arena, p, origin, dir, (5 * Math.PI) / 180, w.range);
+      const q = findHomingTarget(m, arena, p, origin, dir, HOMING_CONE, w.range);
       if (q) dir = norm(sub(playerHitbox(m, arena, q, q.exposure, p).head, origin));
+      else if (!w.strike) {
+        // nobody up in the cone: homing rounds can still curve down into a ducked player's hole
+        const dive = findHomingDive(m, arena, p, origin, dir, w.range);
+        if (dive) return homingDive(m, ctx, p, w, origin, dive);
+      }
     }
     const pellets = w.pellets ?? 1;
     for (let i = 0; i < pellets; i++) {
@@ -669,6 +710,7 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
       bounces: 0,
       target,
       fuseAt: def.fuse ? t + secToTicks(def.fuse) : 0,
+      y0: origin.y,
     };
     m.projectiles.push(pr);
     ctx.events.push({ k: 'proj', t, id: pr.id, p: p.slot, w: w.id, pos: [pr.x, pr.y, pr.z].map(round2) as Vec3T, vel: [pr.vx, pr.vy, pr.vz].map(round2) as Vec3T, tgt: target });
@@ -689,8 +731,9 @@ export function traceRay(m: MatchState, arena: Arena, shooter: PlayerState | nul
   const hits: TraceHit[] = [];
   for (const q of m.players) {
     if (!q || q === shooter || !q.alive) continue;
-    // ducked players are only reachable from above, through the mouth (rayHitbox)
-    const e = exposureAt(m, q.slot, rewindTick);
+    // ducked players are only reachable from high above, through the mouth (rayHitbox). Lag compensation favours the
+    // ducker: someone who has ducked since the shooter's view can't be hit where they were.
+    const e = Math.min(exposureAt(m, q.slot, rewindTick), q.exposure);
     const hb = playerHitbox(m, arena, q, e, shooter, rewindTick);
     const h = rayHitbox(o, d, hb);
     if (h && h.t < world) hits.push({ t: h.t, kind: 'player', slot: q.slot, head: h.head });
@@ -707,7 +750,7 @@ export function traceRay(m: MatchState, arena: Arena, shooter: PlayerState | nul
 function rewindTickFor(m: MatchState, p: PlayerState): number {
   if (p.kind === 'bot') return m.tick;
   const maxBack = Math.round((m.settings.maxRewindMs / 1000) * TICK_RATE);
-  return clamp(Math.round(p.vt), m.tick - Math.min(maxBack, HISTORY - 2), m.tick);
+  return clamp(p.vt, m.tick - Math.min(maxBack, HISTORY - 2), m.tick);
 }
 
 function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx: StepContext) {
@@ -879,7 +922,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
       if (!q || !q.alive) continue;
       if (q.slot === pr.owner && t - pr.born < 20) continue;
       const hb = playerHitbox(m, arena, q, q.exposure, owner ?? null);
-      const h = rayHitbox(prev, d, hb, def.radius);
+      const h = rayHitbox(prev, d, hb, def.radius, pr.y0);
       if (h && h.t < bestT) {
         bestT = h.t;
         // came down through the mouth: it's in their hole (grenades must still kill ducked players)
@@ -905,7 +948,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     if (owner && wantNearMisses(m, w)) {
       for (const q of m.players) {
         if (!q || q === owner || !q.alive || q.slot === hitPlayer?.slot || ((pr.near ?? 0) & (1 << q.slot)) !== 0 || t - q.nearAt < NEAR_GAP) continue;
-        const h = rayHitbox(prev, d, playerHitbox(m, arena, q, q.exposure, owner), def.radius + NEAR_R);
+        const h = rayHitbox(prev, d, playerHitbox(m, arena, q, q.exposure, owner), def.radius + NEAR_R, pr.y0);
         if (h && h.t <= bestT) {
           pr.near = (pr.near ?? 0) | (1 << q.slot);
           q.nearAt = t;

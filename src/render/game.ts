@@ -9,12 +9,12 @@ import { angleDiff, dirFromYawPitch, yawPitchOf } from '../shared/vec';
 import { Arena, MOUTH_R, RIM_OUT, WELL_DEPTH } from '../sim/arena';
 import { sauceAimScale, sauceLeft } from '../sim/sauce';
 import { SPRING_TICKS, inFlight, springLift } from '../sim/spring';
-import { FIRE_EXPOSURE, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
+import { FIRE_EXPOSURE, HEAD_R, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
 import { raySphere } from '../sim/geom';
-import { drop, eyePos, hitboxOf, rayHitbox } from '../sim/hitbox';
+import { bigHeadShift, drop, eyePos, hitboxOf, rayHitbox } from '../sim/hitbox';
 import { ORB_R, orbPos } from '../sim/orbs';
 import { POWERUPS, type PowerUpId } from '../sim/powerups';
-import type { Projectile, SimEvent } from '../sim/types';
+import type { Projectile, SimEvent, Vec3T } from '../sim/types';
 import { WEAPONS, weaponByIndex, type WeaponId } from '../sim/weapons';
 import { setHtml, setStyle } from '../ui/dom';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
@@ -971,7 +971,7 @@ export class Game {
       const id = `L${++this.pred.localId}`;
       const start = eye.clone().addScaledVector(dir, 0.6);
       const born = Math.floor(s.hostTick);
-      const pr: Projectile = { id: -1, owner: s.slot, weapon: w.id, x: start.x, y: start.y - 0.1, z: start.z, vx: dir.x * def.speed, vy: dir.y * def.speed, vz: dir.z * def.speed, born, bounces: 0, target: -1, fuseAt: def.fuse ? born + Math.round(def.fuse * TICK_RATE) : 0 };
+      const pr: Projectile = { id: -1, owner: s.slot, weapon: w.id, x: start.x, y: start.y - 0.1, z: start.z, vx: dir.x * def.speed, vy: dir.y * def.speed, vz: dir.z * def.speed, born, bounces: 0, target: -1, fuseAt: def.fuse ? born + Math.round(def.fuse * TICK_RATE) : 0, y0: start.y };
       this.addProjectile(id, pr, true);
     }
   }
@@ -1002,7 +1002,7 @@ export class Game {
             // already flashed, kicked and sounded here; with homing rounds only the host knows where it went
             if (w.fireKind === 'hitscan' && this.hasPu('homing')) {
               const to = new THREE.Vector3(...e.e);
-              this.tracer(this.muzzleOf(e.p), to, e.w);
+              this.tracer(this.muzzleOf(e.p), to, e.w, e.v);
               if (e.hit === 'world') this.impact(to, e.w);
             }
             break;
@@ -1013,7 +1013,7 @@ export class Game {
           if (w.trigger !== 'beam') {
             this.muzzleFlash(from, to.clone().sub(from).normalize(), e.w, fp);
             if (w.fireKind === 'hitscan') {
-              this.tracer(from, to, e.w);
+              this.tracer(from, to, e.w, e.v);
               if (e.hit === 'world') this.impact(to, e.w);
             }
           }
@@ -1026,7 +1026,7 @@ export class Game {
         }
         case 'proj': {
           if (e.p === mySlot && this.ownShotPredicted(e.w) && !WEAPONS[e.w].projectile?.homing) break;
-          const pr: Projectile = { id: e.id, owner: e.p, weapon: e.w, x: e.pos[0], y: e.pos[1], z: e.pos[2], vx: e.vel[0], vy: e.vel[1], vz: e.vel[2], born: e.t, bounces: 0, target: e.tgt, fuseAt: 0 };
+          const pr: Projectile = { id: e.id, owner: e.p, weapon: e.w, x: e.pos[0], y: e.pos[1], z: e.pos[2], vx: e.vel[0], vy: e.vel[1], vz: e.vel[2], born: e.t, bounces: 0, target: e.tgt, fuseAt: 0, y0: e.pos[1] };
           this.addProjectile(String(e.id), pr, false);
           break;
         }
@@ -1370,7 +1370,14 @@ export class Game {
     if (!mine && this.q.flashLights > 1) this.lights.flash(pos, c, 3, 6, 0.08);
   }
 
-  private tracer(from: THREE.Vector3, to: THREE.Vector3, w: WeaponId) {
+  /** `via`: homing rounds that curved down into a hole bend over this point. */
+  private tracer(from: THREE.Vector3, to: THREE.Vector3, w: WeaponId, via?: Vec3T) {
+    if (via) {
+      const v = new THREE.Vector3(...via);
+      this.tracer(from, v, w);
+      this.tracer(v, to, w);
+      return;
+    }
     const def = WEAPONS[w];
     switch (def.fx.tracer) {
       case 'rail':
@@ -1488,8 +1495,9 @@ export class Game {
       if (hs !== sv.headScale) {
         sv.headScale = hs;
         sv.parts.head.scale.setScalar(hs);
-        sv.parts.head.position.y = 0.37 + (hs - 1) * 0.2;
       }
+      // a big head sinks back under the rim when its owner ducks (same as the hitbox)
+      sv.parts.head.position.y = 0.37 + bigHeadShift((hs - 1) * HEAD_R, p.exposure);
       // weapon
       if (sv.weapon !== p.weapon) {
         if (sv.weaponModel) {
@@ -1752,12 +1760,12 @@ export class Game {
   }
 
   /** What my own predicted shots stop on: the other players as I see them, and power-up orbs. */
-  private ownShotTargets: TargetTest = (o, d, L, tick, r) => {
+  private ownShotTargets: TargetTest = (o, d, L, tick, r, from) => {
     const s = this.session;
     let best = Infinity;
     for (const p of s.players) {
       if (!p || p.slot === s.slot || !p.alive) continue;
-      const h = rayHitbox(o, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p)), r);
+      const h = rayHitbox(o, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p)), r, from);
       if (h && h.t < L && h.t < best) best = h.t;
     }
     for (const orb of s.orbs.values()) {

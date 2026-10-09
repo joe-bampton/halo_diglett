@@ -9,11 +9,12 @@ export const TORSO_Y0 = 0.05;
 export const TORSO_Y1 = 0.55;
 export const TORSO_R = 0.34;
 export const EYE_Y = 0.88;
-export const DUCK_DROP = 1.35; // how far everything drops when fully ducked
+export const DUCK_DROP = 1.65; // how far everything drops when fully ducked: the head ends up 0.45 m under the rim
 export const RISE_TIME = 0.22;
 export const LOWER_TIME = 0.16;
 export const FIRE_EXPOSURE = 0.6; // must be this far up to fire
-export const HIDDEN_EXPOSURE = 0.09; // below this the head is under the rim
+/** below this the top of the head is under the rim */
+export const HIDDEN_EXPOSURE = 1 - (HEAD_Y + HEAD_R) / DUCK_DROP;
 
 export const SHIELD_MAX = 70;
 export const HEALTH_MAX = 45;

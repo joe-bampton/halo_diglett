@@ -129,6 +129,8 @@ export interface Projectile {
   bounces: number;
   target: number;
   fuseAt: number;
+  /** height it was fired from (only shots from high above can come down into a hole) */
+  y0?: number;
   /** players it has already whizzed past (bitmask by slot; Pitre near misses) */
   near?: number;
 }
@@ -179,7 +181,8 @@ export type Vec3T = [number, number, number];
 export type HitKind = 'head' | 'body' | 'orb' | 'world' | 'none';
 
 export type SimEvent =
-  | { k: 'fire'; t: number; p: number; w: WeaponId; o: Vec3T; e: Vec3T; hit: HitKind }
+  /** `v`: homing rounds that curved down into a hole went over this point */
+  | { k: 'fire'; t: number; p: number; w: WeaponId; o: Vec3T; e: Vec3T; hit: HitKind; v?: Vec3T }
   | { k: 'proj'; t: number; id: number; p: number; w: WeaponId; pos: Vec3T; vel: Vec3T; tgt: number }
   /** a projectile ended; `gone`: it just ran out (life or fuse) without hitting anything */
   | { k: 'pend'; t: number; id: number; pos: Vec3T; gone?: boolean }
