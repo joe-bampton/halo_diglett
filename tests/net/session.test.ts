@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ClientSession } from '../../src/net/client';
-import { HostSession } from '../../src/net/host';
+import { HostSession, PLAYER_COLORS } from '../../src/net/host';
 import { loopbackPair } from '../../src/net/transport';
 import { Rng } from '../../src/shared/rng';
 import { yawPitchOf } from '../../src/shared/vec';
 import { eyePos, hitboxOf } from '../../src/sim/hitbox';
+import { MAX_BOTS, MAX_HUMANS } from '../../src/sim/constants';
 import { damagePlayer } from '../../src/sim/match';
 import { FakeWorld, LagHub } from './laglink';
 
@@ -234,5 +235,38 @@ describe('rejoin robustness', () => {
     a2.clock = () => w.now;
     w.advance(200);
     expect(a2.slot).not.toBe(c.slot);
+  });
+});
+
+describe('lobby capacity', () => {
+  it('seats 8 humans plus 6 bots with distinct colours, and turns a 9th human away', () => {
+    const w = new FakeWorld();
+    const hub = new LagHub(w);
+    const host = new HostSession(hub, 'FULL', true);
+    host.clock = () => w.now;
+    const mk = (peer: string) => {
+      // everyone asks for the same armour: the host hands out free colours instead
+      const c = new ClientSession(hub.connect(peer, 15), { name: peer, color: PLAYER_COLORS[0]!, token: peer });
+      c.clock = () => w.now;
+      return c;
+    };
+    const humans = Array.from({ length: MAX_HUMANS }, (_, i) => mk(`P${i}`));
+    w.advance(300);
+    for (let i = 0; i < MAX_BOTS; i++) host.addBot('normal');
+    w.advance(100);
+    expect(humans.every((c) => c.state === 'lobby' && c.slot >= 0)).toBe(true);
+    expect(host.lobby.slots.length).toBe(MAX_HUMANS + MAX_BOTS);
+    const colours = host.lobby.slots.map((s) => s.color);
+    expect(new Set(colours).size).toBe(colours.length);
+    const late = mk('late');
+    w.advance(300);
+    expect(late.state).toBe('closed');
+    expect(late.closeReason).toContain(`${MAX_HUMANS} players max`);
+    // a full house still starts, everyone in their own hole
+    host.startMatch(11);
+    w.advance(300);
+    const holes = host.match!.players.filter(Boolean).map((p) => p!.hole);
+    expect(holes.length).toBe(MAX_HUMANS + MAX_BOTS);
+    expect(new Set(holes).size).toBe(holes.length);
   });
 });

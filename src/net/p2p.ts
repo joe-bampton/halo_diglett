@@ -1,4 +1,4 @@
-import { CH_CTL, CH_IN, CH_SNAP, type Channel } from './protocol';
+import { CH_CTL, CH_EV, CH_IN, CH_SNAP, type Channel } from './protocol';
 import type { ClientNet, HostNet, VoiceLink, VoicePeerInfo } from './transport';
 
 export const APP_ID = 'halo-diglett-v1';
@@ -41,12 +41,18 @@ export function turnConfig(): TurnServer[] | undefined {
 }
 
 type Strategy = 'nostr' | 'torrent';
-type Room = Awaited<ReturnType<typeof openRoom>>['room'];
+
+/**
+ * Public Nostr relays to meet on. Trystero's default is 5, picked from a list of volunteer-run relays: a few spares
+ * mean one or two of them being down doesn't leave friends unable to find the host.
+ */
+const NOSTR_RELAYS = 8;
 
 async function openRoom(code: string, strategy: Strategy, onError: (msg: string) => void) {
   const mod = strategy === 'nostr' ? await import('trystero') : await import('@trystero-p2p/torrent');
   const joinRoom = mod.joinRoom as typeof import('trystero').joinRoom;
   const cfg: Parameters<typeof joinRoom>[0] = { appId: APP_ID, password: `hd-${code}` };
+  if (strategy === 'nostr') cfg.relayConfig = { redundancy: NOSTR_RELAYS };
   const turn = turnConfig();
   if (turn) cfg.turnConfig = turn;
   const room = joinRoom(cfg, `room-${code}`, {
@@ -56,6 +62,7 @@ async function openRoom(code: string, strategy: Strategy, onError: (msg: string)
     [CH_CTL]: room.makeAction(CH_CTL),
     [CH_IN]: room.makeAction(CH_IN),
     [CH_SNAP]: room.makeAction(CH_SNAP),
+    [CH_EV]: room.makeAction(CH_EV),
   };
   // several listeners (game session + voice chat) share the room's single peer callbacks
   const joins = new Set<(peer: string) => void>();
@@ -64,6 +71,71 @@ async function openRoom(code: string, strategy: Strategy, onError: (msg: string)
   room.onPeerLeave = (p) => leaves.forEach((f) => f(p));
   const voice = roomVoice(room, joins, leaves);
   return { room, actions, joins, leaves, voice };
+}
+
+// ------------------------------------------------------------------------------------------------
+// Low-latency channel
+// ------------------------------------------------------------------------------------------------
+
+/** `?fastnet=0` switches it off: everything then goes over Trystero's reliable channel, as before. */
+const FAST_ON = typeof location === 'undefined' || new URLSearchParams(location.search).get('fastnet') !== '0';
+/** both ends open the channel with this id themselves (negotiated: no extra signalling); Trystero's own is 0 or 1 */
+const FAST_ID = 7;
+/** bigger messages go reliably (an unreliable one this size would rarely make it whole) */
+const FAST_MAX = 16_000;
+/** when this much is still waiting to go out, skip a message rather than queue it */
+const FAST_BACKLOG = 64 * 1024;
+
+/**
+ * A second data channel next to Trystero's: unordered and never retransmitted, for state snapshots and inputs. On a
+ * reliable channel one lost packet on a phone's Wi-Fi or 4G holds up everything behind it until it's resent — the
+ * whole field freezes, then jumps. Here a lost snapshot is just skipped: the next one is 50 ms behind it.
+ */
+interface FastLink {
+  ch: RTCDataChannel;
+  /** we've heard from the other end on it, so it's listening */
+  heard: boolean;
+}
+
+function openFast(pc: RTCPeerConnection | undefined, onData: (data: unknown) => void, onClose: () => void): FastLink | null {
+  if (!FAST_ON || !pc || pc.connectionState === 'closed' || typeof pc.createDataChannel !== 'function') return null;
+  try {
+    const ch = pc.createDataChannel('hd-fast', { negotiated: true, id: FAST_ID, ordered: false, maxRetransmits: 0 });
+    const link: FastLink = { ch, heard: false };
+    ch.onmessage = (e) => {
+      if (typeof e.data !== 'string') return;
+      let data: unknown;
+      try {
+        data = JSON.parse(e.data);
+      } catch {
+        return;
+      }
+      link.heard = true;
+      onData(data);
+    };
+    ch.onclose = () => {
+      link.heard = false;
+      onClose();
+    };
+    return link;
+  } catch (e) {
+    console.warn('low-latency channel unavailable', e);
+    return null;
+  }
+}
+
+/** Send on the fast channel. False: it isn't there or open (send reliably instead). A full backlog skips the message. */
+function sendOn(link: FastLink | null | undefined, data: unknown): boolean {
+  if (!link || link.ch.readyState !== 'open') return false;
+  if (link.ch.bufferedAmount > FAST_BACKLOG) return true;
+  const str = JSON.stringify(data);
+  if (str.length > FAST_MAX) return false;
+  try {
+    link.ch.send(str);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Voice chat over one Trystero room: every player streams their mic straight to every other player. */
@@ -127,11 +199,17 @@ export async function trysteroHosts(code: string, onError: (msg: string) => void
 
 async function trysteroHost(code: string, strategy: Strategy, onError: (msg: string) => void): Promise<HostNet> {
   const { room, actions, joins, leaves, voice } = await openRoom(code, strategy, onError);
+  const fast = new Map<string, FastLink>();
   const net: HostNet = {
     kind: `trystero-${strategy}`,
     voice,
     send(peer, ch, data) {
       return actions[ch].send(data as never, { target: peer });
+    },
+    // only once that player's inputs arrive on it: then we know their end is open too
+    sendFast: (peer, data) => {
+      const link = fast.get(peer);
+      return !!link?.heard && sendOn(link, data);
     },
     broadcast(ch, data) {
       void actions[ch].send(data as never);
@@ -141,12 +219,28 @@ async function trysteroHost(code: string, strategy: Strategy, onError: (msg: str
     onLeave: null,
     ping: (peer) => room.ping(peer),
     close() {
-      void room.leave();
+      for (const l of fast.values()) l.ch.close();
+      fast.clear();
+      release(room);
     },
   };
   for (const ch of [CH_CTL, CH_IN] as Channel[]) actions[ch].onMessage = (data, { peerId }) => net.onMessage?.(peerId, ch, data);
-  joins.add((p) => net.onJoin?.(p));
-  leaves.add((p) => net.onLeave?.(p));
+  joins.add((p) => {
+    const link = openFast(
+      room.getPeers()[p],
+      (data) => net.onMessage?.(p, CH_IN, data),
+      () => {
+        if (fast.get(p) === link) fast.delete(p);
+      },
+    );
+    if (link) fast.set(p, link);
+    net.onJoin?.(p);
+  });
+  leaves.add((p) => {
+    fast.get(p)?.ch.close();
+    fast.delete(p);
+    net.onLeave?.(p);
+  });
   keep(room);
   return net;
 }
@@ -175,6 +269,7 @@ export async function trysteroClient(code: string, onError: (msg: string) => voi
     onPeerInfo: null,
     onPeerGone: null,
   };
+  let fast: FastLink | null = null;
   const net: ClientNet = {
     kind: 'trystero',
     voice,
@@ -182,11 +277,17 @@ export async function trysteroClient(code: string, onError: (msg: string) => voi
       if (!host || !current) return;
       return current.actions[ch].send(data as never, { target: host });
     },
+    // sent whenever it's open (that's how the host learns it's there); trusted once snapshots arrive on it
+    sendFast(data) {
+      return sendOn(fast, data) && !!fast?.heard;
+    },
     onMessage: null,
     onClose: null,
     close() {
       closed = true;
-      void current?.room.leave();
+      fast?.ch.close();
+      fast = null;
+      if (current) release(current.room);
     },
   };
   const attach = async (strategy: Strategy) => {
@@ -195,15 +296,26 @@ export async function trysteroClient(code: string, onError: (msg: string) => voi
       void r.room.leave();
       return;
     }
+    keep(r.room);
     current = r;
     r.actions[CH_CTL].onMessage = (data, { peerId }) => {
       const msg = data as { t?: string };
-      if (msg?.t === 'host' && !host) host = peerId;
+      if (msg?.t === 'host' && !host) {
+        host = peerId;
+        fast = openFast(
+          r.room.getPeers()[peerId],
+          (d) => net.onMessage?.(CH_SNAP, d),
+          () => (fast = null),
+        );
+      }
       if (peerId !== host) return;
       net.onMessage?.(CH_CTL, data);
     };
     r.actions[CH_SNAP].onMessage = (data, { peerId }) => {
       if (peerId === host) net.onMessage?.(CH_SNAP, data);
+    };
+    r.actions[CH_EV].onMessage = (data, { peerId }) => {
+      if (peerId === host) net.onMessage?.(CH_EV, data);
     };
     r.leaves.add((p) => {
       if (p === host) net.onClose?.('The host left the game.');
@@ -213,22 +325,27 @@ export async function trysteroClient(code: string, onError: (msg: string) => voi
     r.voice.onPeerGone = (p) => voice.onPeerGone?.(p);
     if (myStream) r.voice.setStream(myStream);
     if (mySlot >= 0) r.voice.announce(mySlot);
-    keep(r.room);
   };
   await attach('nostr');
   setTimeout(() => {
     if (host || closed) return;
     const old = current;
     current = null;
-    void old?.room.leave();
+    if (old) release(old.room);
     attach('torrent').catch((e) => console.warn('torrent matchmaking unavailable', e));
   }, 9000);
   return net;
 }
 
-const rooms: Room[] = [];
+/** Rooms in use (left and forgotten when the game is closed, so a long evening of games doesn't pile them up). */
+type Room = Awaited<ReturnType<typeof openRoom>>['room'];
+const rooms = new Set<Room>();
 function keep(r: Room) {
-  rooms.push(r);
+  rooms.add(r);
+}
+function release(r: Room) {
+  if (!rooms.delete(r)) return;
+  void r.leave();
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -313,4 +430,60 @@ export function bcClient(code: string): ClientNet {
   };
   hello();
   return net;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Test hook (?test): the low-latency channel in a real browser, without any matchmaking
+// ------------------------------------------------------------------------------------------------
+
+/**
+ * Two connections inside this page, joined directly, each opening the low-latency channel the way a host and a friend
+ * do: the reliable channel first, the host's end at once, the friend's a moment later (once it knows who the host is).
+ */
+export async function fastChannelSelfTest(timeoutMs = 15_000) {
+  const res = { enabled: FAST_ON, connected: false, reliable: false, ordered: null as boolean | null, maxRetransmits: null as number | null, hostGot: 0, friendGot: 0 };
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const until = async (ok: () => boolean) => {
+    for (const end = performance.now() + timeoutMs; !ok(); ) {
+      if (performance.now() > end) throw new Error('timed out');
+      await sleep(30);
+    }
+  };
+  // no network needed: browsers name local addresses *.local, which only resolve over multicast DNS
+  const local = (sdp: string) => sdp.replace(/ (\S+\.local) (\d+) typ host/g, ' 127.0.0.1 $2 typ host');
+  const a = new RTCPeerConnection({ iceServers: [] });
+  const b = new RTCPeerConnection({ iceServers: [] });
+  try {
+    const data = a.createDataChannel('data');
+    b.ondatachannel = (e) => (e.channel.onmessage = () => (res.reliable = true));
+    const host = openFast(a, () => res.hostGot++, () => {});
+    // (some sandboxes never call gathering "complete": a first candidate is enough here)
+    const gathered = (pc: RTCPeerConnection) => () => pc.iceGatheringState === 'complete' || /a=candidate/.test(pc.localDescription?.sdp ?? '');
+    await a.setLocalDescription(await a.createOffer());
+    await until(gathered(a));
+    await b.setRemoteDescription({ type: 'offer', sdp: local(a.localDescription!.sdp) });
+    await b.setLocalDescription(await b.createAnswer());
+    await until(gathered(b));
+    await a.setRemoteDescription({ type: 'answer', sdp: local(b.localDescription!.sdp) });
+    await until(() => data.readyState === 'open');
+    res.connected = true;
+    data.send('hello');
+    const friend = openFast(b, () => res.friendGot++, () => {});
+    if (!host || !friend) return res;
+    res.ordered = friend.ch.ordered;
+    res.maxRetransmits = friend.ch.maxRetransmits;
+    await until(() => host.ch.readyState === 'open' && friend.ch.readyState === 'open');
+    // the friend's inputs open the way; the host answers only once it has heard from them
+    for (let i = 0; i < 100 && !(res.hostGot && res.friendGot && res.reliable); i++) {
+      sendOn(friend, { s: i });
+      if (host.heard) sendOn(host, { k: i });
+      await sleep(30);
+    }
+  } catch (e) {
+    console.warn('fast channel self-test:', e);
+  } finally {
+    a.close();
+    b.close();
+  }
+  return res;
 }

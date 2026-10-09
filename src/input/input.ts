@@ -81,6 +81,16 @@ export function saveOptions(o: Options) {
   }
 }
 
+/**
+ * Aim speed while zoomed. Scaling by tan(fov/2) keeps a given mouse/stick/finger movement moving the view the same
+ * distance *on screen* at every zoom level (and smoothly through the zoom-in), which is what a scope should feel like.
+ */
+export function zoomSensitivity(fovDeg: number, baseFovDeg: number): number {
+  if (!(fovDeg > 0) || !(baseFovDeg > 0)) return 1;
+  const k = Math.tan((fovDeg * Math.PI) / 360) / Math.tan((baseFovDeg * Math.PI) / 360);
+  return Math.min(2, Math.max(0.01, k));
+}
+
 export interface AssistInfo {
   /** angular offset (rad) from crosshair to nearest target centre, and its angular radius */
   dYaw: number;
@@ -101,6 +111,8 @@ export interface InputHooks {
   canSpring(): boolean;
   /** aim speed multiplier (Gerry Sauce slows you down) */
   aimScale(): number;
+  /** aim speed for the current zoom: see zoomSensitivity (1 when not zoomed) */
+  fovScale(): number;
 }
 
 /** Unified keyboard+mouse / gamepad / touch input. */
@@ -118,6 +130,7 @@ export class InputManager {
   private touchSpringTap = false;
   device: 'kbm' | 'pad' | 'touch' = matchMedia('(pointer: coarse)').matches ? 'touch' : 'kbm';
   enabled = false;
+  private _suspended = false;
   /** test hooks */
   testStand = false;
   testTrigger = false;
@@ -142,13 +155,40 @@ export class InputManager {
     this.bind();
   }
 
-  private on<K extends keyof WindowEventMap | 'pointerlockchange'>(t: Window | Document | HTMLElement, type: K, fn: (e: K extends keyof WindowEventMap ? WindowEventMap[K] : Event) => void, opts?: AddEventListenerOptions) {
+  private on<K extends keyof WindowEventMap | 'pointerlockchange' | 'visibilitychange'>(t: Window | Document | HTMLElement, type: K, fn: (e: K extends keyof WindowEventMap ? WindowEventMap[K] : Event) => void, opts?: AddEventListenerOptions) {
     t.addEventListener(type, fn as EventListener, opts);
     this.unsub.push(() => t.removeEventListener(type, fn as EventListener, opts));
   }
 
   get mode() {
     return this._mode;
+  }
+
+  /**
+   * A menu or the Options screen is open over the match: nothing reaches your Spartan (you duck, stop firing), only
+   * Esc / the controller's Menu button get through (to close it again).
+   */
+  get suspended() {
+    return this._suspended;
+  }
+
+  set suspended(on: boolean) {
+    if (on === this._suspended) return;
+    this._suspended = on;
+    this.releaseAll();
+  }
+
+  /** Let go of everything held or toggled (focus lost, app switched, a menu opened): you duck and stop firing. */
+  releaseAll() {
+    this.keysStand = this.toggleStand = false;
+    this.mouseFire = this.touchFire = this.padFire = false;
+    this.touchStandHold = this.touchStandToggle = false;
+    this.padStandHold = this.padStandToggle = false;
+    this.touchSpringTap = false;
+    this.aimTouches.clear();
+    this.pinchD = 0;
+    this.touchRoot?.querySelectorAll('.tbtn.down').forEach((b) => b.classList.remove('down'));
+    this.hooks.onScoreboard(false);
   }
 
   set mode(m: 'play' | 'spectate') {
@@ -180,13 +220,13 @@ export class InputManager {
 
   private bind() {
     this.on(document, 'mousemove', (e) => {
-      if (!this.enabled || document.pointerLockElement !== this.canvas) return;
+      if (!this.enabled || this._suspended || document.pointerLockElement !== this.canvas) return;
       const dx = clamp(e.movementX, -300, 300), dy = clamp(e.movementY, -300, 300);
-      const k = 0.0022 * this.opts.mouseSens / this.zoomFactor();
+      const k = 0.0022 * this.opts.mouseSens * this.zoomScale();
       this.look(-dx * k, -dy * k * (this.opts.invertY ? -1 : 1));
     });
     this.on(this.canvas, 'mousedown', (e) => {
-      if (!this.enabled) return;
+      if (!this.enabled || this._suspended) return;
       this.setDevice('kbm');
       if (document.pointerLockElement !== this.canvas) {
         this.lock();
@@ -206,7 +246,7 @@ export class InputManager {
       this.canvas,
       'wheel',
       (e) => {
-        if (!this.enabled || this._mode !== 'spectate') return;
+        if (!this.enabled || this._suspended || this._mode !== 'spectate') return;
         e.preventDefault();
         this.specZoom(Math.exp(clamp(e.deltaY, -300, 300) * 0.0015));
       },
@@ -218,7 +258,12 @@ export class InputManager {
     this.on(this.canvas, 'contextmenu', (e) => e.preventDefault());
     this.on(window, 'keydown', (e) => {
       if (!this.enabled) return;
-      if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+      if (this._suspended) {
+        if (e.code === 'Escape') this.hooks.onMenu();
+        return;
+      }
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       this.setDevice('kbm');
       switch (e.code) {
         case 'Space':
@@ -273,15 +318,15 @@ export class InputManager {
       if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'KeyW') this.keysStand = false;
       if (e.code === 'Tab') this.hooks.onScoreboard(false);
     });
-    this.on(window, 'blur', () => {
-      this.keysStand = false;
-      this.mouseFire = false;
-      this.hooks.onScoreboard(false);
+    // focus moved away (alt-tab, a notification, another app): nothing stays held down
+    this.on(window, 'blur', () => this.releaseAll());
+    this.on(document, 'visibilitychange', () => {
+      if (document.hidden) this.releaseAll();
     });
     this.on(window, 'gamepadconnected', () => this.setDevice('pad'));
     // touch aiming: any finger that isn't on a button
     this.on(this.canvas, 'pointerdown', (e) => {
-      if (e.pointerType !== 'touch' || !this.enabled) return;
+      if (e.pointerType !== 'touch' || !this.enabled || this._suspended) return;
       this.setDevice('touch');
       this.aimTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     });
@@ -298,7 +343,7 @@ export class InputManager {
         this.pinchD = d;
         return;
       }
-      const k = 0.0055 * this.opts.touchSens / this.zoomFactor();
+      const k = 0.0055 * this.opts.touchSens * this.zoomScale();
       this.look(-(e.clientX - t.x) * k, -(e.clientY - t.y) * k * (this.opts.invertY ? -1 : 1));
       t.x = e.clientX;
       t.y = e.clientY;
@@ -318,7 +363,7 @@ export class InputManager {
   }
 
   lock() {
-    if (!this.hooks.canLock() || this.device === 'touch') return;
+    if (!this.hooks.canLock() || this.device === 'touch' || this._suspended) return;
     const c = this.canvas as HTMLElement & { requestPointerLock(o?: unknown): Promise<void> | void };
     try {
       const r = c.requestPointerLock({ unadjustedMovement: true });
@@ -352,8 +397,9 @@ export class InputManager {
     }
   }
 
-  private zoomFactor() {
-    return this.s.zoom > 0 && this._mode === 'play' ? [1, 2.5, 6][this.s.zoom] ?? 1 : 1;
+  /** Scoped aim speed. The spectator camera is never zoomed by the player, so it always turns at full speed. */
+  private zoomScale() {
+    return this._mode === 'play' ? this.hooks.fovScale() : 1;
   }
 
   private look(dYaw: number, dPitch: number) {
@@ -409,6 +455,12 @@ export class InputManager {
   /** Called every frame. */
   update(dt: number) {
     this.pollPad(dt);
+    if (this._suspended) {
+      this.s.stand = false;
+      this.s.trigger = false;
+      this.s.zoom = 0;
+      return;
+    }
     if (this._mode === 'spectate') {
       this.s.stand = false;
       this.s.trigger = false;
@@ -447,7 +499,8 @@ export class InputManager {
       this.prevPad = gp.buttons.map((x) => x.pressed);
       return;
     }
-    if (!this.enabled) {
+    if (!this.enabled || this._suspended) {
+      if (this.enabled && edge(9)) this.hooks.onMenu();
       this.prevPad = gp.buttons.map((x) => x.pressed);
       return;
     }
@@ -458,7 +511,7 @@ export class InputManager {
     if (mag > dz) {
       const m = Math.min(1, (mag - dz) / (1 - dz));
       const curve = m * m * 0.7 + m * 0.3;
-      let rate = 3.4 * this.opts.padSens * curve / this.zoomFactor();
+      let rate = 3.4 * this.opts.padSens * curve * this.zoomScale();
       // aim-assist friction when over a target
       const a = this._mode === 'play' && this.hooks.assistStrength() > 0 ? this.hooks.assist() : null;
       if (a && Math.hypot(a.dYaw, a.dPitch) < a.radius * 2.5) rate *= 1 - 0.45 * this.hooks.assistStrength();
@@ -514,6 +567,7 @@ export class InputManager {
       btn.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (this._suspended && act !== 'menu') return;
         btn.setPointerCapture(e.pointerId);
         this.setDevice('touch');
         btn.classList.add('down');
@@ -560,7 +614,7 @@ export class InputManager {
       btn.addEventListener('pointermove', (e) => {
         if (act !== 'fire' || !last) return;
         // dragging the fire button also aims
-        const k = 0.0055 * this.opts.touchSens / this.zoomFactor();
+        const k = 0.0055 * this.opts.touchSens * this.zoomScale();
         this.look(-(e.clientX - last.x) * k, -(e.clientY - last.y) * k * (this.opts.invertY ? -1 : 1));
         last = { x: e.clientX, y: e.clientY };
       });

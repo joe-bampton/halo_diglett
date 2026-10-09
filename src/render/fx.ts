@@ -59,10 +59,25 @@ const particleFS = /* glsl */ `
     gl_FragColor = displayColor(vec4(c, a * vCol.a));
   }`;
 
-/** CPU-simulated billboard particles, one draw call per system. */
+const deadParticle = (): Particle => ({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, g: 0, drag: 0, life: 0, age: 1, s0: 0, s1: 0, r: 0, gg: 0, b: 0, r1: 0, g1: 0, b1: 0, a0: 0, a1: 0 });
+const c0 = new THREE.Color();
+const c1 = new THREE.Color();
+
+/** Only the live part of an instanced attribute goes to the GPU. */
+function upload(a: THREE.BufferAttribute, items: number) {
+  a.clearUpdateRanges();
+  if (items > 0) a.addUpdateRange(0, items * a.itemSize);
+  a.needsUpdate = true;
+}
+
+/**
+ * CPU-simulated billboard particles, one draw call per system. A fixed ring of particles: emitting reuses the oldest
+ * slot (once it's full the oldest particle makes way), so nothing is allocated while effects play.
+ */
 export class Particles {
   readonly mesh: THREE.Mesh;
-  private ps: Particle[] = [];
+  private pool: Particle[];
+  private head = 0;
   private pos: Float32Array;
   private col: Float32Array;
   private size: Float32Array;
@@ -72,6 +87,7 @@ export class Particles {
     const g = new THREE.InstancedBufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0], 3));
     g.setIndex([0, 1, 2, 0, 2, 3]);
+    this.pool = Array.from({ length: max }, deadParticle);
     this.pos = new Float32Array(max * 3);
     this.col = new Float32Array(max * 4);
     this.size = new Float32Array(max);
@@ -94,13 +110,15 @@ export class Particles {
   }
 
   emit(o: EmitOpts) {
+    if (!this.max) return;
     const n = o.count ?? 10;
     // the shader writes colours out untouched, so "exact" colours skip the sRGB → linear conversion
     const cs = this.solid ? THREE.LinearSRGBColorSpace : THREE.SRGBColorSpace;
-    const c0 = new THREE.Color().setHex(o.color ?? 0xffffff, cs);
-    const c1 = new THREE.Color().setHex(o.color1 ?? o.color ?? 0xffffff, cs);
+    c0.setHex(o.color ?? 0xffffff, cs);
+    c1.setHex(o.color1 ?? o.color ?? 0xffffff, cs);
     for (let i = 0; i < n; i++) {
-      if (this.ps.length >= this.max) this.ps.shift();
+      const p = this.pool[this.head]!;
+      this.head = (this.head + 1) % this.max;
       const sp = o.speed ? o.speed[0] + Math.random() * (o.speed[1] - o.speed[0]) : 1;
       let dx = Math.random() * 2 - 1, dy = Math.random() * 2 - 1, dz = Math.random() * 2 - 1;
       const l = Math.hypot(dx, dy, dz) || 1;
@@ -112,22 +130,33 @@ export class Particles {
         dx /= l2; dy /= l2; dz /= l2;
       }
       const j = o.jitter ?? 0;
-      const life = o.life ? o.life[0] + Math.random() * (o.life[1] - o.life[0]) : 0.6;
-      this.ps.push({
-        x: o.pos.x + (Math.random() - 0.5) * j, y: o.pos.y + (Math.random() - 0.5) * j, z: o.pos.z + (Math.random() - 0.5) * j,
-        vx: dx * sp, vy: dy * sp, vz: dz * sp,
-        g: o.gravity ?? 0, drag: o.drag ?? 0, life, age: 0,
-        s0: o.size?.[0] ?? 0.3, s1: o.size?.[1] ?? 0.1,
-        r: c0.r, gg: c0.g, b: c0.b, r1: c1.r, g1: c1.g, b1: c1.b,
-        a0: o.alpha?.[0] ?? 1, a1: o.alpha?.[1] ?? 0,
-      });
+      p.x = o.pos.x + (Math.random() - 0.5) * j;
+      p.y = o.pos.y + (Math.random() - 0.5) * j;
+      p.z = o.pos.z + (Math.random() - 0.5) * j;
+      p.vx = dx * sp;
+      p.vy = dy * sp;
+      p.vz = dz * sp;
+      p.g = o.gravity ?? 0;
+      p.drag = o.drag ?? 0;
+      p.life = o.life ? o.life[0] + Math.random() * (o.life[1] - o.life[0]) : 0.6;
+      p.age = 0;
+      p.s0 = o.size?.[0] ?? 0.3;
+      p.s1 = o.size?.[1] ?? 0.1;
+      p.r = c0.r;
+      p.gg = c0.g;
+      p.b = c0.b;
+      p.r1 = c1.r;
+      p.g1 = c1.g;
+      p.b1 = c1.b;
+      p.a0 = o.alpha?.[0] ?? 1;
+      p.a1 = o.alpha?.[1] ?? 0;
     }
   }
 
   update(dt: number) {
     let k = 0;
-    const keep: Particle[] = [];
-    for (const p of this.ps) {
+    for (const p of this.pool) {
+      if (p.age >= p.life) continue;
       p.age += dt;
       if (p.age >= p.life) continue;
       const damp = Math.exp(-p.drag * dt);
@@ -140,18 +169,18 @@ export class Particles {
       this.col[k * 4 + 2] = p.b + (p.b1 - p.b) * t;
       this.col[k * 4 + 3] = p.a0 + (p.a1 - p.a0) * t;
       this.size[k] = p.s0 + (p.s1 - p.s0) * t;
-      keep.push(p);
       k++;
     }
-    this.ps = keep;
+    const was = this.geo.instanceCount;
     this.geo.instanceCount = k;
-    (this.geo.getAttribute('iPos') as THREE.InstancedBufferAttribute).needsUpdate = true;
-    (this.geo.getAttribute('iCol') as THREE.InstancedBufferAttribute).needsUpdate = true;
-    (this.geo.getAttribute('iSize') as THREE.InstancedBufferAttribute).needsUpdate = true;
+    if (k === 0 && was === 0) return;
+    upload(this.geo.getAttribute('iPos') as THREE.BufferAttribute, k);
+    upload(this.geo.getAttribute('iCol') as THREE.BufferAttribute, k);
+    upload(this.geo.getAttribute('iSize') as THREE.BufferAttribute, k);
   }
 
   clear() {
-    this.ps = [];
+    for (const p of this.pool) p.age = p.life;
     this.geo.instanceCount = 0;
   }
 
@@ -231,34 +260,34 @@ export class Ribbons {
 
   update(dt: number) {
     let k = 0;
-    const keep: Ribbon[] = [];
-    const tmpA = new THREE.Vector3();
-    const tmpB = new THREE.Vector3();
     for (const r of this.rs) {
       r.age += dt;
       if (r.age >= r.life) continue;
       const t = r.age / r.life;
-      tmpA.copy(r.a);
-      tmpB.copy(r.b);
+      rA.copy(r.a);
+      rB.copy(r.b);
       if (r.grow) {
         // moving bullet streak: a short segment travelling from a to b
         const L = r.a.distanceTo(r.b);
         const head = Math.min(L, r.grow * r.age);
         const tail = Math.max(0, head - Math.min(12, L * 0.4));
-        const dir = tmpB.clone().sub(r.a).normalize();
-        tmpB.copy(r.a).addScaledVector(dir, head);
-        tmpA.copy(r.a).addScaledVector(dir, tail);
+        rDir.copy(r.b).sub(r.a).normalize();
+        rB.copy(r.a).addScaledVector(rDir, head);
+        rA.copy(r.a).addScaledVector(rDir, tail);
       }
-      this.A.set([tmpA.x, tmpA.y, tmpA.z], k * 3);
-      this.B.set([tmpB.x, tmpB.y, tmpB.z], k * 3);
-      this.C.set([r.c.r, r.c.g, r.c.b, r.alpha * (1 - t) * (1 - t)], k * 4);
+      const A = this.A, B = this.B, C = this.C;
+      A[k * 3] = rA.x; A[k * 3 + 1] = rA.y; A[k * 3 + 2] = rA.z;
+      B[k * 3] = rB.x; B[k * 3 + 1] = rB.y; B[k * 3 + 2] = rB.z;
+      C[k * 4] = r.c.r; C[k * 4 + 1] = r.c.g; C[k * 4 + 2] = r.c.b; C[k * 4 + 3] = r.alpha * (1 - t) * (1 - t);
       this.W[k] = r.w * (1 - t * 0.5);
-      keep.push(r);
-      k++;
+      // keep the live ones, in order, at the front
+      this.rs[k++] = r;
     }
-    this.rs = keep;
+    this.rs.length = k;
+    const was = this.geo.instanceCount;
     this.geo.instanceCount = k;
-    for (const n of ['iA', 'iB', 'iCol', 'iW']) (this.geo.getAttribute(n) as THREE.InstancedBufferAttribute).needsUpdate = true;
+    if (k === 0 && was === 0) return;
+    for (const n of ['iA', 'iB', 'iCol', 'iW']) upload(this.geo.getAttribute(n) as THREE.BufferAttribute, k);
   }
 
   clear() {
@@ -267,18 +296,26 @@ export class Ribbons {
   }
 }
 
-/** Handful of pooled point lights for muzzle flashes & explosions. */
+const rA = new THREE.Vector3();
+const rB = new THREE.Vector3();
+const rDir = new THREE.Vector3();
+
+/**
+ * Handful of pooled point lights for muzzle flashes & explosions. They stay in the scene at all times (dark when idle):
+ * showing or hiding a light changes the scene's light count, and every lit material then needs a different shader,
+ * a big hitch right when the first shot or explosion happens.
+ */
 export class FlashLights {
   private lights: { l: THREE.PointLight; life: number; age: number; i0: number }[] = [];
   constructor(private scene: THREE.Scene, n = 3) {
     for (let i = 0; i < n; i++) {
       const l = new THREE.PointLight(0xffaa55, 0, 20, 2);
-      l.visible = false;
       scene.add(l);
       this.lights.push({ l, life: 1, age: 1, i0: 0 });
     }
   }
   flash(pos: THREE.Vector3, color: number, intensity: number, range: number, life: number) {
+    if (!this.lights.length) return;
     const slot = this.lights.reduce((a, b) => (a.age / a.life > b.age / b.life ? a : b));
     slot.l.position.copy(pos);
     slot.l.color.setHex(color);
@@ -286,12 +323,12 @@ export class FlashLights {
     slot.i0 = intensity;
     slot.life = life;
     slot.age = 0;
-    slot.l.visible = true;
+    slot.l.intensity = intensity;
   }
   update(dt: number) {
     for (const s of this.lights) {
       if (s.age >= s.life) {
-        s.l.visible = false;
+        s.l.intensity = 0;
         continue;
       }
       s.age += dt;

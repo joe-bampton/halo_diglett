@@ -8,6 +8,7 @@ import type { Settings } from './sim/settings';
 import type { WeaponId } from './sim/weapons';
 import { eyePos, hitboxOf } from './sim/hitbox';
 import { damagePlayer, grantPowerup } from './sim/match';
+import { fastChannelSelfTest } from './net/p2p';
 import type { PowerUpId } from './sim/powerups';
 import { springLift } from './sim/spring';
 import { yawPitchOf } from './shared/vec';
@@ -63,6 +64,8 @@ if (!webglOk()) {
       },
       audio,
       voice,
+      /** the low-latency WebRTC channel, tested inside this page */
+      netSelfTest: () => fastChannelSelfTest(),
       stand(on = true) {
         if (app.game) app.game.input.testStand = on;
       },

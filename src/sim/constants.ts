@@ -24,6 +24,6 @@ export const HEALTH_RATE = 30;
 export const MULTIKILL_WINDOW = 4.5;
 export const HISTORY = 64; // ticks of exposure history kept for lag compensation
 
-export const MAX_HUMANS = 7;
+export const MAX_HUMANS = 8;
 export const MAX_BOTS = 6;
 export const MAX_SLOTS = MAX_HUMANS + MAX_BOTS;

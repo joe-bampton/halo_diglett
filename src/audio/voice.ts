@@ -119,6 +119,8 @@ export class VoiceChat {
   private micMeter: Meter | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private speakKey = '';
+  /** bumped when leaving a game: a microphone that was still starting then must not stay on */
+  private gen = 0;
   private readonly listeners = new Set<() => void>();
   readonly deps: VoiceDeps;
 
@@ -176,6 +178,7 @@ export class VoiceChat {
   }
 
   detach() {
+    this.gen++;
     if (this.link) {
       this.link.setStream(null);
       this.link.onStream = this.link.onPeerInfo = this.link.onPeerGone = null;
@@ -227,9 +230,16 @@ export class VoiceChat {
     }
     this.starting = true;
     this.emit();
+    const gen = this.gen;
     try {
       const stream = await this.deps.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
       this.starting = false;
+      if (gen !== this.gen) {
+        // the player left the game while the browser was asking: don't leave the mic recording
+        for (const t of stream.getTracks()) t.stop();
+        this.emit();
+        return false;
+      }
       this.micStream = stream;
       this.prefs.micWanted = true;
       this.save();

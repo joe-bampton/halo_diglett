@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { audio, type SoundHandle } from '../audio/audio';
 import { PITRE_SLOT, PitreHitTracker, PitreVoiceThrottle, pitreCues, type PitreCue } from '../audio/pitre';
 import type { SfxId } from '../audio/synth';
-import { InputManager, type AssistInfo } from '../input/input';
+import { InputManager, zoomSensitivity, type AssistInfo } from '../input/input';
 import type { ClientSession, ViewPlayer } from '../net/client';
 import { F_BEAM, F_BURNING, F_CAMO, F_CHARGING, F_DAMAGE, F_INVINCIBLE, F_OVERSHIELD, F_RELOAD, F_SAUCED } from '../net/protocol';
 import { angleDiff, dirFromYawPitch, yawPitchOf } from '../shared/vec';
@@ -10,18 +10,21 @@ import { Arena, MOUTH_R, RIM_OUT, WELL_DEPTH } from '../sim/arena';
 import { sauceAimScale, sauceLeft } from '../sim/sauce';
 import { SPRING_TICKS, inFlight, springLift } from '../sim/spring';
 import { FIRE_EXPOSURE, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
+import { raySphere } from '../sim/geom';
 import { drop, eyePos, hitboxOf, rayHitbox } from '../sim/hitbox';
-import { integrateProjectile } from '../sim/match';
-import { orbPos } from '../sim/orbs';
+import { ORB_R, orbPos } from '../sim/orbs';
 import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import type { Projectile, SimEvent } from '../sim/types';
 import { WEAPONS, weaponByIndex, type WeaponId } from '../sim/weapons';
+import { setHtml, setStyle } from '../ui/dom';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
 import { Decals, FlashLights, Particles, Ribbons, Shockwaves } from './fx';
 import { loadDetailedModels } from './assets';
 import { GLB, SHARED, buildCan, buildOrb, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
 import { PAL, SAUCE } from './palette';
 import type { PostFx } from './post';
+import { DynRes } from './dynres';
+import { MAX_CATCHUP, newTrack, stepTrack, trackPos, type ProjTrack, type TargetTest } from './projtrack';
 import { QUALITY, type QualityPreset } from './quality';
 import { Grass, buildFence, buildFlowers, buildHoles, buildSky, buildTerrain, buildTrees } from './world';
 
@@ -51,13 +54,18 @@ interface SpartanView {
   sauce: THREE.Mesh[];
 }
 
+/** Events that are only sound and light: skipped when they arrive late (a connection that stalled, then caught up). */
+const STALE_FX = new Set<SimEvent['k']>(['fire', 'proj', 'pend', 'dmg', 'near', 'reload', 'callout', 'boom', 'forced']);
+const STALE_FX_TICKS = Math.round(0.5 * TICK_RATE);
+
 /** On-screen text for voice callouts. */
 const CALLOUT_TEXT: Record<string, string> = { 'jerry.suppress': 'SUPPRESSING FIRE!' };
 
 interface ProjView {
-  pr: Projectile;
+  track: ProjTrack;
   obj: THREE.Object3D | null;
   weapon: WeaponId;
+  /** my own shot, predicted here (the host's copy of it is never drawn) */
   local: boolean;
   trailAcc: number;
 }
@@ -123,6 +131,7 @@ function projMesh(kind: string): THREE.Object3D | null {
 
 const tmpV = new THREE.Vector3();
 const tmpV2 = new THREE.Vector3();
+const tmpP = { x: 0, y: 0, z: 0 };
 /** the "running slow?" hint shows once per visit */
 let slowHintShown = false;
 
@@ -168,6 +177,10 @@ export class Game {
   private ribbons: Ribbons;
   private lights: FlashLights;
   private spartans = new Map<number, SpartanView>();
+  /** scratch (per-frame code must not allocate: garbage collection pauses are hitches on phones) */
+  private camPos = new THREE.Vector3();
+  private tagHead = new THREE.Vector3();
+  private seenSlots = new Set<number>();
   private orbs = new Map<number, OrbView>();
   private projs = new Map<string, ProjView>();
   private strikes = new Map<number, StrikeView>();
@@ -181,8 +194,8 @@ export class Game {
   private time = 0;
   private shake = 0;
   private camKick = 0;
-  private dynScale = 1;
-  private frameTimes: number[] = [];
+  /** dynamic resolution (Low / Medium, or switched on in Advanced) */
+  private dynRes: DynRes | null = null;
   private grassAt = new THREE.Vector2(NaN, NaN);
   /** spectating while dead: who we watch and how (the orbit angles/zoom live in input.spec) */
   private spec = { active: false, target: -1, view: 'third' as 'first' | 'third', snap: true, pos: new THREE.Vector3(), yaw: 0, pitch: 0, reload: 0 };
@@ -196,6 +209,7 @@ export class Game {
   private lowShieldAt = 0;
   private prevShield = 70;
   private showScores = false;
+  private boardShown = false;
   private scoreboardEl: HTMLElement;
   private clickToPlay: HTMLElement;
   private touchEl: HTMLElement;
@@ -307,6 +321,8 @@ export class Game {
       canLock: () => !this.hooks.isMenuOpen(),
       canSpring: () => this.canSpring(),
       aimScale: () => this.aimScale(),
+      // the camera's own (smoothly zooming) field of view, so aim speed always matches what's on screen
+      fovScale: () => zoomSensitivity(this.camera.fov, this.input.opts.fov),
     });
     this.input.mountTouch(this.touchEl);
     this.applyDevice();
@@ -315,14 +331,17 @@ export class Game {
       this.perfEl.className = 'perf';
       container.appendChild(this.perfEl);
     }
+    this.makeDynRes();
     this.onResize();
     window.addEventListener('resize', this.onResize);
+    document.addEventListener('visibilitychange', this.onVisibility);
     canvas.addEventListener('webglcontextlost', (e) => e.preventDefault());
     this.renderer.setClearColor(PAL.horizon);
     this.setupPost();
     this.applyEnv();
     if (quality.models === 'detailed') void loadDetailedModels();
     if (quality.shadows === 'static') this.bakeStaticShadows();
+    this.warmUpShaders();
     // every announcer line (medals, power-ups…): a line that isn't decoded yet when it's due is skipped
     audio.preloadPrefix('ann.');
     audio.preload(Object.keys(CALLOUT_TEXT));
@@ -338,7 +357,7 @@ export class Game {
   private onResize = () => {
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
-    const dpr = Math.min(window.devicePixelRatio || 1, this.q.dprCap) * this.q.renderScale * this.dynScale;
+    const dpr = Math.min(window.devicePixelRatio || 1, this.q.dprCap) * this.q.renderScale * (this.dynRes?.scale ?? 1);
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(w, h, false);
     this.post?.setSize(w, h, dpr);
@@ -346,6 +365,11 @@ export class Game {
     this.camera.updateProjectionMatrix();
     this.vmCamera.aspect = w / h;
     this.vmCamera.updateProjectionMatrix();
+  };
+
+  /** Back from another app or tab: the first frames are slow (everything wakes up) and say nothing about the GPU. */
+  private onVisibility = () => {
+    if (!document.hidden) this.dynRes?.pause();
   };
 
   start() {
@@ -363,6 +387,7 @@ export class Game {
     this.destroyed = true;
     cancelAnimationFrame(this.raf);
     window.removeEventListener('resize', this.onResize);
+    document.removeEventListener('visibilitychange', this.onVisibility);
     this.input.unlock();
     this.input.destroy();
     for (const s of this.spartans.values()) {
@@ -386,8 +411,7 @@ export class Game {
   applyGraphics(next: QualityPreset) {
     const prev = this.q;
     this.q = next;
-    this.dynScale = 1;
-    this.frameTimes = [];
+    this.makeDynRes();
     if (prev.shadows !== next.shadows || prev.shadowSize !== next.shadowSize) this.applyShadows(prev.shadows !== 'none');
     if (prev.particles !== next.particles) this.buildParticles();
     if (prev.flashLights !== next.flashLights) {
@@ -466,6 +490,36 @@ export class Game {
     // the next frame draws over this one
     this.renderer.render(this.scene, this.camera);
     for (const o of hidden) o.visible = true;
+  }
+
+  /**
+   * Compile the shaders of everything that first shows up mid-match (power-up orbs or cans, projectiles, the spring,
+   * custard, name tags, Spartans and every gun) while the intro plays, instead of hitching the first time each appears.
+   */
+  private warmUpShaders() {
+    const pbr = this.q.pbr, det = this.detailed;
+    const world = new THREE.Group();
+    const vm = new THREE.Group();
+    world.visible = vm.visible = false;
+    for (const k of ['rocket', 'bolt', 'grenade', 'needle']) {
+      const o = projMesh(k);
+      if (o) world.add(o);
+    }
+    world.add(this.cans() ? buildCan(0xffffff, pbr, det) : buildOrb(0xffffff, pbr), buildSpring(det), buildSauceBlob(), textSprite('·'));
+    world.add(buildSpartan(0xffffff, pbr, det).root);
+    for (const w of Object.keys(WEAPONS) as WeaponId[]) {
+      world.add(buildWeaponModel(w, pbr, det));
+      vm.add(buildWeaponModel(w, pbr, det));
+    }
+    this.scene.add(world);
+    this.vmScene.add(vm);
+    const done = () => {
+      this.scene.remove(world);
+      this.vmScene.remove(vm);
+      disposeTree(world);
+      disposeTree(vm);
+    };
+    Promise.all([this.renderer.compileAsync(this.scene, this.camera), this.renderer.compileAsync(this.vmScene, this.vmCamera)]).then(done, done);
   }
 
   /** Post-processing code is only downloaded when it's switched on (it draws straight to the canvas until then). */
@@ -601,9 +655,9 @@ export class Game {
     return !!this.session.me?.al && this.hasPu('spring') && !!me && !inFlight(me.springAt, this.session.hostTick);
   }
 
-  private headPos(p: ViewPlayer): THREE.Vector3 {
+  private headPos(p: ViewPlayer, out = new THREE.Vector3()): THREE.Vector3 {
     const hb = hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p));
-    return new THREE.Vector3(hb.head.x, hb.head.y, hb.head.z);
+    return out.set(hb.head.x, hb.head.y, hb.head.z);
   }
 
   private headScaleFor(_p: ViewPlayer): number {
@@ -624,10 +678,14 @@ export class Game {
   }
 
   private eye(): THREE.Vector3 {
+    return this.eyeInto(new THREE.Vector3());
+  }
+
+  private eyeInto(out: THREE.Vector3): THREE.Vector3 {
     const me = this.me;
-    if (!me) return new THREE.Vector3(0, 5, 0);
+    if (!me) return out.set(0, 5, 0);
     const e = eyePos(this.myHole(), this.session.myExposure, this.liftOf(me));
-    return new THREE.Vector3(e.x, e.y, e.z);
+    return out.set(e.x, e.y, e.z);
   }
 
   private muzzleOf(slot: number): THREE.Vector3 {
@@ -689,35 +747,50 @@ export class Game {
     return this.predicted(w) && performance.now() - this.pred.lastShot < 350;
   }
 
+  /**
+   * The enemy nearest the crosshair that's in sight (aim assist, red reticle). Asked several times a frame, so the
+   * expensive part — line of sight through the terrain — is settled once a frame, nearest candidate first; the offset
+   * is always measured from the current aim.
+   */
   private assistInfo(): AssistInfo | null {
     const me = this.me;
     if (!me) return null;
-    const eye = this.eye();
-    let best: AssistInfo | null = null;
-    let bd = Infinity;
-    for (const p of this.session.players) {
-      if (!p || p.slot === me.slot || !p.alive || p.exposure < 0.2 || p.flags & F_CAMO) continue;
-      const hb = hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p));
-      const target = { x: hb.head.x, y: (hb.head.y + hb.torsoB.y) / 2, z: hb.head.z };
-      const dist = Math.hypot(target.x - eye.x, target.y - eye.y, target.z - eye.z);
-      const a = yawPitchOf({ x: target.x - eye.x, y: target.y - eye.y, z: target.z - eye.z });
-      const dYaw = angleDiff(a.yaw, this.input.s.yaw);
-      const dPitch = a.pitch - this.input.s.pitch;
-      const d = Math.hypot(dYaw, dPitch);
-      if (d < bd && d < 0.2 && this.arena.lineClear(eye, target, 0.5)) {
-        bd = d;
-        best = { dYaw, dPitch, radius: Math.max(0.006, 0.45 / dist) };
+    const eye = this.eyeInto(this.assistEye);
+    const t = this.assistTarget;
+    if (t.frame !== this.frames) {
+      t.frame = this.frames;
+      t.slot = -1;
+      const cands: { d: number; slot: number; x: number; y: number; z: number }[] = [];
+      for (const p of this.session.players) {
+        if (!p || p.slot === me.slot || !p.alive || p.exposure < 0.2 || p.flags & F_CAMO) continue;
+        const hb = hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p));
+        const x = hb.head.x, y = (hb.head.y + hb.torsoB.y) / 2, z = hb.head.z;
+        const a = yawPitchOf({ x: x - eye.x, y: y - eye.y, z: z - eye.z });
+        const d = Math.hypot(angleDiff(a.yaw, this.input.s.yaw), a.pitch - this.input.s.pitch);
+        if (d < 0.2) cands.push({ d, slot: p.slot, x, y, z });
+      }
+      cands.sort((a, b) => a.d - b.d);
+      for (const c of cands) {
+        if (!this.arena.lineClear(eye, c, 0.5)) continue;
+        Object.assign(t, { slot: c.slot, x: c.x, y: c.y, z: c.z });
+        break;
       }
     }
-    return best;
+    if (t.slot < 0) return null;
+    const dist = Math.hypot(t.x - eye.x, t.y - eye.y, t.z - eye.z);
+    const a = yawPitchOf({ x: t.x - eye.x, y: t.y - eye.y, z: t.z - eye.z });
+    return { dYaw: angleDiff(a.yaw, this.input.s.yaw), dPitch: a.pitch - this.input.s.pitch, radius: Math.max(0.006, 0.45 / dist) };
   }
+  private assistTarget = { frame: -1, slot: -1, x: 0, y: 0, z: 0 };
+  private assistEye = new THREE.Vector3();
 
   // -------------------------------------------------------------------------------------------
   // frame
   // -------------------------------------------------------------------------------------------
 
   private frame(now: number) {
-    const dt = Math.min(0.1, (now - this.last) / 1000);
+    const rawDt = (now - this.last) / 1000;
+    const dt = Math.min(0.1, rawDt);
     this.last = now;
     this.time += dt;
     this.frames++;
@@ -734,7 +807,16 @@ export class Game {
       this.lastStand = inp.stand;
       if (s.me?.al) audio.play('rustle', { gain: 0.35, rate: inp.stand ? 1.2 : 0.9 });
     }
-    Object.assign(s.input, { yaw: inp.yaw, pitch: inp.pitch, stand: inp.stand, trigger: inp.trigger, presses: inp.presses, reloads: inp.reloads, respawns: inp.respawns, springs: inp.springs, zoom: inp.zoom });
+    const si = s.input;
+    si.yaw = inp.yaw;
+    si.pitch = inp.pitch;
+    si.stand = inp.stand;
+    si.trigger = inp.trigger;
+    si.presses = inp.presses;
+    si.reloads = inp.reloads;
+    si.respawns = inp.respawns;
+    si.springs = inp.springs;
+    si.zoom = inp.zoom;
     if (this.pred.pending || inp.respawns !== this.lastRespawns || inp.springs !== this.lastSprings) {
       this.lastRespawns = inp.respawns;
       this.lastSprings = inp.springs;
@@ -786,35 +868,29 @@ export class Game {
         this.renderer.render(this.vmScene, this.vmCamera);
       }
     }
-    this.dynamicResolution(dt);
+    if (this.dynRes?.frame(rawDt)) this.onResize();
     this.watchFps(dt);
-    this.clickToPlay.style.display = this.input.device === 'kbm' && !this.input.locked && !this.hooks.isMenuOpen() && s.state === 'match' ? '' : 'none';
+    setStyle(this.clickToPlay, 'display', this.input.device === 'kbm' && !this.input.locked && !this.hooks.isMenuOpen() && !this.input.suspended && s.state === 'match' ? '' : 'none');
     if (this.perfEl && this.frames % 15 === 0) {
       const info = this.renderer.info.render;
-      this.perfEl.textContent = `${(1 / Math.max(1e-3, dt)).toFixed(0)}fps ${info.calls}dc ${(info.triangles / 1000).toFixed(0)}k tri x${this.dynScale.toFixed(2)} ${s.interpDelay.toFixed(1)}t`;
+      this.perfEl.textContent = `${(1 / Math.max(1e-3, dt)).toFixed(0)}fps ${info.calls}dc ${(info.triangles / 1000).toFixed(0)}k tri x${(this.dynRes?.scale ?? 1).toFixed(2)} ${s.interpDelay.toFixed(1)}t ${s.stalledFrames}st`;
     }
   }
 
-  private dynamicResolution(dt: number) {
+  /** The preset's dynamic-resolution floor is a pixel ratio: never render coarser than that. */
+  private makeDynRes() {
     const range = this.q.dynamicRes;
-    if (!range) return;
-    this.frameTimes.push(dt);
-    if (this.frameTimes.length < 90) return;
-    const avg = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length;
-    this.frameTimes = [];
-    const lo = range[0] / Math.min(window.devicePixelRatio || 1, this.q.dprCap);
-    if (avg > 1 / 50 && this.dynScale > lo) {
-      this.dynScale = Math.max(lo, this.dynScale - 0.1);
-      this.onResize();
-    } else if (avg < 1 / 75 && this.dynScale < 1) {
-      this.dynScale = Math.min(1, this.dynScale + 0.1);
-      this.onResize();
+    if (!range) {
+      this.dynRes = null;
+      return;
     }
+    const eff = Math.min(window.devicePixelRatio || 1, this.q.dprCap) * this.q.renderScale;
+    this.dynRes = new DynRes(Math.min(1, range[0] / eff));
   }
 
   renderInfo() {
     const i = this.renderer.info.render;
-    return { calls: i.calls, triangles: i.triangles, dynScale: this.dynScale, post: !!this.post, pbr: this.q.pbr, shadows: this.renderer.shadowMap.enabled, level: this.q.level, particles: this.q.particles, dpr: this.renderer.getPixelRatio(), models: this.detailed && this.glbSeen > 0 ? 'detailed' : 'simple' };
+    return { calls: i.calls, triangles: i.triangles, dynScale: this.dynRes?.scale ?? 1, post: !!this.post, pbr: this.q.pbr, shadows: this.renderer.shadowMap.enabled, level: this.q.level, particles: this.q.particles, dpr: this.renderer.getPixelRatio(), models: this.detailed && this.glbSeen > 0 ? 'detailed' : 'simple' };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -875,6 +951,8 @@ export class Game {
     this.playFireSound(s.slot, w.id, null);
     this.pitreLocalCue({ speaker: s.slot, line: 'brap', delayMs: 0, priority: 1 }, w.id);
     if (w.fireKind === 'hitscan') {
+      // homing rounds bend the shot on the host: its own tracer is drawn instead (see 'fire')
+      if (this.hasPu('homing')) return;
       // cosmetic trace: terrain + interpolated players
       let end = Math.min(w.range, this.arena.raycast(eye, d, w.range));
       for (const p of s.players) {
@@ -885,11 +963,13 @@ export class Game {
       const endP = eye.clone().addScaledVector(dir, end);
       this.tracer(this.muzzleOf(s.slot), endP, w.id);
       if (end < w.range) this.impact(endP, w.id);
-    } else if (w.projectile) {
+    } else if (w.projectile && !w.projectile.homing) {
+      // (homing needles pick their target on the host: those are drawn from the host's copy)
       const def = w.projectile;
       const id = `L${++this.pred.localId}`;
       const start = eye.clone().addScaledVector(dir, 0.6);
-      const pr: Projectile = { id: -1, owner: s.slot, weapon: w.id, x: start.x, y: start.y - 0.1, z: start.z, vx: dir.x * def.speed, vy: dir.y * def.speed, vz: dir.z * def.speed, born: s.hostTick, bounces: 0, target: -1, fuseAt: def.fuse ? s.hostTick + def.fuse * TICK_RATE : 0 };
+      const born = Math.floor(s.hostTick);
+      const pr: Projectile = { id: -1, owner: s.slot, weapon: w.id, x: start.x, y: start.y - 0.1, z: start.z, vx: dir.x * def.speed, vy: dir.y * def.speed, vz: dir.z * def.speed, born, bounces: 0, target: -1, fuseAt: def.fuse ? born + Math.round(def.fuse * TICK_RATE) : 0 };
       this.addProjectile(id, pr, true);
     }
   }
@@ -898,16 +978,33 @@ export class Game {
   // events
   // -------------------------------------------------------------------------------------------
 
-  private handleEvents(events: SimEvent[]) {
+  private handleEvents(all: SimEvent[]) {
     const s = this.session;
     const mySlot = s.slot;
     const settings = s.start?.settings;
+    // after a stalled connection catches up, old gunfire, hits and blasts aren't replayed all at once
+    const events: SimEvent[] = [];
+    for (const e of all) {
+      if (!s.isLocal && STALE_FX.has(e.k) && s.hostTick - e.t > STALE_FX_TICKS) {
+        if (e.k === 'pend') this.removeProjectile(String(e.id));
+        continue;
+      }
+      events.push(e);
+    }
     for (const e of events) {
       this.eventCounts[e.k] = (this.eventCounts[e.k] ?? 0) + 1;
       switch (e.k) {
         case 'fire': {
-          if (e.p === mySlot && this.ownShotPredicted(e.w)) break;
           const w = WEAPONS[e.w];
+          if (e.p === mySlot && this.ownShotPredicted(e.w)) {
+            // already flashed, kicked and sounded here; with homing rounds only the host knows where it went
+            if (w.fireKind === 'hitscan' && this.hasPu('homing')) {
+              const to = new THREE.Vector3(...e.e);
+              this.tracer(this.muzzleOf(e.p), to, e.w);
+              if (e.hit === 'world') this.impact(to, e.w);
+            }
+            break;
+          }
           const from = this.muzzleOf(e.p);
           const to = new THREE.Vector3(...e.e);
           const fp = e.p === this.viewSlot();
@@ -926,7 +1023,7 @@ export class Game {
           break;
         }
         case 'proj': {
-          if (e.p === mySlot && this.ownShotPredicted(e.w)) break;
+          if (e.p === mySlot && this.ownShotPredicted(e.w) && !WEAPONS[e.w].projectile?.homing) break;
           const pr: Projectile = { id: e.id, owner: e.p, weapon: e.w, x: e.pos[0], y: e.pos[1], z: e.pos[2], vx: e.vel[0], vy: e.vel[1], vz: e.vel[2], born: e.t, bounces: 0, target: e.tgt, fuseAt: 0 };
           this.addProjectile(String(e.id), pr, false);
           break;
@@ -1345,11 +1442,12 @@ export class Game {
     const s = this.session;
     const settings = s.start?.settings;
     // name tags are aimed with the camera (last frame's is fine)
-    const eye = this.camera.position.clone();
+    const eye = this.camPos.copy(this.camera.position);
     const look = yawPitchOf(this.camera.getWorldDirection(tmpV));
     const hidden = this.viewSlot();
     const xray = this.hasPu('xray');
-    const seen = new Set<number>();
+    const seen = this.seenSlots;
+    seen.clear();
     for (const p of s.players) {
       if (!p) continue;
       seen.add(p.slot);
@@ -1449,7 +1547,6 @@ export class Game {
         const chest = buildSauceBlob();
         chest.scale.set(0.24, 0.2, 0.18);
         chest.position.set(-0.08, 0.42, -0.2);
-        SHARED.add(head.geometry).add(head.material);
         sv.parts.head.add(head);
         sv.parts.body.add(chest);
         sv.sauce = [head, chest];
@@ -1471,7 +1568,7 @@ export class Game {
         sv.beamSound = null;
       }
       // name tag when aimed at
-      const head = this.headPos(p);
+      const head = this.headPos(p, this.tagHead);
       const a = yawPitchOf({ x: head.x - eye.x, y: head.y - eye.y, z: head.z - eye.z });
       const off = Math.hypot(angleDiff(a.yaw, look.yaw), a.pitch - look.pitch);
       const showTag = off < 0.05 && !camo && p.exposure > 0.3;
@@ -1494,7 +1591,8 @@ export class Game {
           const dist = head.distanceTo(eye);
           const k = (0.9 + dist * 0.05) * (this.camera.fov / this.input.opts.fov);
           const aspect = sv.bubble.userData.aspect ?? (sv.bubble.userData.aspect = sv.bubble.scale.x / sv.bubble.scale.y);
-          sv.bubble.position.copy(head).add(new THREE.Vector3(0, 0.75 + dist * 0.02, 0));
+          sv.bubble.position.copy(head);
+          sv.bubble.position.y += 0.75 + dist * 0.02;
           sv.bubble.scale.set(k * aspect * 0.5, k * 0.5, 1);
         }
       }
@@ -1502,7 +1600,8 @@ export class Game {
         sv.tag.visible = showTag;
         if (showTag) {
           const dist = head.distanceTo(eye);
-          sv.tag.position.copy(head).add(new THREE.Vector3(0, 0.45 + dist * 0.012, 0));
+          sv.tag.position.copy(head);
+          sv.tag.position.y += 0.45 + dist * 0.012;
           const k = (0.6 + dist * 0.035) * (this.camera.fov / this.input.opts.fov);
           const aspect = sv.tag.scale.x / sv.tag.scale.y;
           sv.tag.scale.set(k * aspect * 0.5, k * 0.5, 1);
@@ -1574,8 +1673,11 @@ export class Game {
   private addProjectile(id: string, pr: Projectile, local: boolean) {
     const w = pr.weapon;
     const obj = projMesh(WEAPONS[w].fx.tracer);
-    if (obj) this.scene.add(obj);
-    this.projs.set(id, { pr, obj, weapon: w, local, trailAcc: 0 });
+    if (obj) {
+      obj.visible = false; // placed on its first update
+      this.scene.add(obj);
+    }
+    this.projs.set(id, { track: newTrack(pr, pr.born), obj, weapon: w, local, trailAcc: 0 });
     if (w === 'rpg') audio.play('rocket', { pos: local ? null : { x: pr.x, y: pr.y, z: pr.z }, gain: 0.5, rate: 1.3, bus: 'guns' });
   }
 
@@ -1586,81 +1688,81 @@ export class Game {
     this.projs.delete(id);
   }
 
+  /**
+   * Projectiles fly one host tick at a time on the host's clock with the host's physics (projtrack.ts), so they move
+   * at the same speed on a 30, 60 or 144 Hz screen and bounce where the host's do. Other players' shots end when the
+   * host says so ('pend'); my own predicted ones end as soon as they hit something.
+   */
   private updateProjectiles(dt: number) {
     const s = this.session;
-    const steps = Math.max(1, Math.round(dt * TICK_RATE));
+    const now = s.hostTick;
     for (const [id, pv] of this.projs) {
       const def = WEAPONS[pv.weapon].projectile!;
-      const pr = pv.pr;
-      const hom = s.homing.get(pr.id);
-      let dead = false;
-      for (let i = 0; i < steps && !dead; i++) {
-        const prev = { x: pr.x, y: pr.y, z: pr.z };
-        if (hom) {
-          pr.x += (hom.x - pr.x) * 0.35;
-          pr.y += (hom.y - pr.y) * 0.35;
-          pr.z += (hom.z - pr.z) * 0.35;
-        } else integrateProjectile(pr, def, null);
-        const seg = { x: pr.x - prev.x, y: pr.y - prev.y, z: pr.z - prev.z };
-        const L = Math.hypot(seg.x, seg.y, seg.z);
-        if (L > 0 && !hom) {
-          const d = { x: seg.x / L, y: seg.y / L, z: seg.z / L };
-          const hit = this.arena.raycast(prev, d, L);
-          if (hit < L && !def.bounce) {
-            if (pv.local) dead = true;
-            pr.x = prev.x + d.x * hit;
-            pr.y = prev.y + d.y * hit;
-            pr.z = prev.z + d.z * hit;
-            pr.vx = pr.vy = pr.vz = 0;
-          } else if (hit < L && def.bounce) {
-            pr.bounces++;
-            if (pv.local && pr.bounces > def.bounce.max) dead = true;
-            pr.vx *= 0.5;
-            pr.vy = Math.abs(pr.vy) * def.bounce.restitution;
-            pr.vz *= 0.5;
-            pr.x = prev.x;
-            pr.y = prev.y + 0.05;
-            pr.z = prev.z;
-          }
-          if (pv.local) {
-            for (const p of s.players) {
-              if (!p || p.slot === s.slot || !p.alive) continue;
-              const h = rayHitbox(prev, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p)), def.radius);
-              if (h && h.t < L) dead = true;
-            }
-          }
+      const tr = pv.track;
+      const hom = pv.local ? null : (s.homing.get(tr.pr.id) ?? null);
+      let ended = false;
+      for (let n = 0; tr.tick + 1 <= now && n < MAX_CATCHUP; n++) {
+        const r = stepTrack(tr, def, this.arena, hom, pv.local ? this.ownShotTargets : null);
+        if (r !== 'fly' && pv.local) {
+          ended = true;
+          break;
         }
       }
-      const age = (s.hostTick - pr.born) / TICK_RATE;
-      if (pv.local && age > def.life + 0.2) dead = true;
-      if (pv.local && pr.fuseAt && s.hostTick >= pr.fuseAt) dead = true;
-      if (!pv.local && age > def.life + 1.5) dead = true;
-      if (dead) {
+      const ageTicks = tr.tick - tr.pr.born;
+      if (ended) {
+        // the host's end-of-flight event names its own copy of this shot, so the impact is drawn here
+        if (!WEAPONS[pv.weapon].splash) this.impact(tmpV.set(tr.pr.x, tr.pr.y, tr.pr.z), pv.weapon);
         this.removeProjectile(id);
         continue;
       }
-      if (pv.obj) {
-        pv.obj.position.set(pr.x, pr.y, pr.z);
-        tmpV.set(pr.vx, pr.vy, pr.vz);
-        if (tmpV.lengthSq() > 0.01) pv.obj.lookAt(tmpV2.set(pr.x, pr.y, pr.z).sub(tmpV));
+      // a safety net: the host's 'pend' normally ends other players' shots long before this
+      if (!pv.local && ageTicks > (def.life + 1.5) * TICK_RATE) {
+        this.removeProjectile(id);
+        continue;
       }
+      const pos = trackPos(tr, now, tmpP);
+      if (pv.obj) {
+        pv.obj.visible = ageTicks >= 0;
+        pv.obj.position.set(pos.x, pos.y, pos.z);
+        const pr = tr.pr;
+        tmpV.set(pr.vx, pr.vy, pr.vz);
+        if (tmpV.lengthSq() > 0.01) pv.obj.lookAt(tmpV2.set(pos.x, pos.y, pos.z).sub(tmpV));
+      }
+      if (tr.stopped || ageTicks < 0) continue;
       // trails
+      const age = ageTicks / TICK_RATE;
       pv.trailAcc += dt;
       const w = pv.weapon;
       if (w === 'flamethrower') {
-        this.fxAdd.emit({ pos: pr, count: 1, speed: [0, 0.6], life: [0.12, 0.25], size: [0.35 + age * 1.6, 0.9 + age * 2], color: 0xffe080, color1: 0xff3000, alpha: [0.9, 0] });
-        if (Math.random() < 0.3) this.fxNorm.emit({ pos: pr, count: 1, speed: [0.3, 1], life: [0.5, 0.9], size: [0.4, 1.2], color: 0x3a3030, alpha: [0.35, 0], gravity: -2 });
+        this.fxAdd.emit({ pos, count: 1, speed: [0, 0.6], life: [0.12, 0.25], size: [0.35 + age * 1.6, 0.9 + age * 2], color: 0xffe080, color1: 0xff3000, alpha: [0.9, 0] });
+        if (Math.random() < 0.3) this.fxNorm.emit({ pos, count: 1, speed: [0.3, 1], life: [0.5, 0.9], size: [0.4, 1.2], color: 0x3a3030, alpha: [0.35, 0], gravity: -2 });
       } else if (pv.trailAcc > 0.02) {
         pv.trailAcc = 0;
         if (w === 'rpg') {
-          this.fxAdd.emit({ pos: pr, count: 1, speed: [0, 0.3], life: [0.1, 0.2], size: [0.4, 0.1], color: 0xffd080, color1: 0xff5000 });
-          this.fxNorm.emit({ pos: pr, count: 1, speed: [0.1, 0.4], life: [0.8, 1.4], size: [0.3, 1.1], color: 0xb0b0b0, alpha: [0.55, 0], gravity: -0.4 });
-        } else if (w === 'crossbow') this.fxAdd.emit({ pos: pr, count: 1, speed: [0, 0.1], life: [0.15, 0.25], size: [0.12, 0.02], color: 0x9fe8ff });
-        else if (w === 'needler') this.fxAdd.emit({ pos: pr, count: 1, speed: [0, 0.1], life: [0.1, 0.2], size: [0.14, 0.02], color: 0xff5fd2 });
-        else if (w === 'grenade') this.fxAdd.emit({ pos: pr, count: 1, speed: [0, 0.1], life: [0.15, 0.3], size: [0.18, 0.02], color: 0x7cff6b });
+          this.fxAdd.emit({ pos, count: 1, speed: [0, 0.3], life: [0.1, 0.2], size: [0.4, 0.1], color: 0xffd080, color1: 0xff5000 });
+          this.fxNorm.emit({ pos, count: 1, speed: [0.1, 0.4], life: [0.8, 1.4], size: [0.3, 1.1], color: 0xb0b0b0, alpha: [0.55, 0], gravity: -0.4 });
+        } else if (w === 'crossbow') this.fxAdd.emit({ pos, count: 1, speed: [0, 0.1], life: [0.15, 0.25], size: [0.12, 0.02], color: 0x9fe8ff });
+        else if (w === 'needler') this.fxAdd.emit({ pos, count: 1, speed: [0, 0.1], life: [0.1, 0.2], size: [0.14, 0.02], color: 0xff5fd2 });
+        else if (w === 'grenade') this.fxAdd.emit({ pos, count: 1, speed: [0, 0.1], life: [0.15, 0.3], size: [0.18, 0.02], color: 0x7cff6b });
       }
     }
   }
+
+  /** What my own predicted shots stop on: the other players as I see them, and power-up orbs. */
+  private ownShotTargets: TargetTest = (o, d, L, tick, r) => {
+    const s = this.session;
+    let best = Infinity;
+    for (const p of s.players) {
+      if (!p || p.slot === s.slot || !p.alive) continue;
+      const h = rayHitbox(o, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p)), r);
+      if (h && h.t < L && h.t < best) best = h.t;
+    }
+    for (const orb of s.orbs.values()) {
+      const to = raySphere(o, d, orbPos(orb, tick, this.arena), ORB_R + r);
+      if (to >= 0 && to < L && to < best) best = to;
+    }
+    return best;
+  };
 
   /** The sauce lands on someone: splat on them, splats around their hole; my own screen gets covered (HUD). */
   private onSauced(slot: number) {
@@ -1826,8 +1928,7 @@ export class Game {
     let fov = settings.fov;
     if (alive) {
       this.spec.active = false;
-      const e = this.eye();
-      this.camera.position.copy(e);
+      this.eyeInto(this.camera.position);
       this.camera.rotation.set(0, 0, 0, 'YXZ');
       this.camera.rotation.y = inp.yaw + sx;
       this.camera.rotation.x = inp.pitch + sy + this.camKick;
@@ -2067,18 +2168,20 @@ export class Game {
     }
     const mode = settings.weaponMode === 'gunGame' ? `GUN GAME · ${settings.gunGameOrder.length} LEVELS` : settings.scoreLimit > 0 ? `SLAYER · FIRST TO ${settings.scoreLimit}` : 'SLAYER';
     hud.timer(timer, `${settings.pitre ? '🎩 PITRE · ' : ''}${mode}`);
-    const rows = this.scoreRows();
-    hud.score(rows, settings.weaponMode === 'gunGame' ? settings.gunGameOrder.length : settings.scoreLimit);
+    // scores change rarely: a few refreshes a second (and at once when the scoreboard opens or closes)
+    const board = this.showScores || s.phase === 'ended';
+    if (this.frames % 6 === 0 || board !== this.boardShown) {
+      this.boardShown = board;
+      const rows = this.scoreRows();
+      hud.score(rows, settings.weaponMode === 'gunGame' ? settings.gunGameOrder.length : settings.scoreLimit);
+      this.scoreboardEl.classList.toggle('on', board);
+      if (board) setHtml(this.scoreboardEl, scoreboardHtml(rows, settings.weaponMode === 'gunGame'));
+    }
     if (!this.introShown && s.phase === 'intro') {
       this.introShown = true;
       hud.message('Get ready', 2200, 'big');
     }
-    if (!s.isLocal) hud.conn(`${s.lobby?.code ?? ''} · ${Math.round(s.interpDelay * 16.7)}ms buffer`);
-    this.scoreboardEl.classList.toggle('on', this.showScores || s.phase === 'ended');
-    if (this.showScores || s.phase === 'ended') {
-      const html = scoreboardHtml(rows, settings.weaponMode === 'gunGame');
-      if (this.scoreboardEl.innerHTML !== html) this.scoreboardEl.innerHTML = html;
-    }
+    if (!s.isLocal) hud.conn(`${s.lobby?.code ?? ''} · ${Math.round((s.interpDelay * 1000) / TICK_RATE)}ms buffer`);
     this.input.updateTouchLabels();
   }
 

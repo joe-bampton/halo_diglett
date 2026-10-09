@@ -473,6 +473,8 @@ export class Grass {
     const m4 = new THREE.Matrix4();
     const quat = new THREE.Quaternion();
     const s = new THREE.Vector3();
+    const at = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
     const c = new THREE.Color();
     const R = this.q.grassRadius;
     let k = 0;
@@ -486,9 +488,9 @@ export class Grass {
       const h = this.arena.nearestHole(x, z);
       if (h && Math.hypot(h.x - x, h.z - z) < RIM_OUT + 0.05) continue;
       const sc = rng.range(0.7, 1.15) * (1 + (d / R) * 0.5) * (d < 6 ? 0.7 : 1);
-      quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rng.range(0, 6.28));
+      quat.setFromAxisAngle(up, rng.range(0, 6.28));
       s.set(sc, sc * rng.range(0.8, 1.3), sc);
-      m4.compose(new THREE.Vector3(x, this.arena.groundAt(x, z) - 0.02, z), quat, s);
+      m4.compose(at.set(x, this.arena.groundAt(x, z) - 0.02, z), quat, s);
       this.mesh.setMatrixAt(k, m4);
       c.setRGB(rng.range(0.85, 1.1), rng.range(0.9, 1.1), rng.range(0.8, 1.0));
       this.mesh.setColorAt(k, c);

@@ -21,7 +21,7 @@ export interface QualityPreset {
   particles: number;
   /** richness of explosions and other effects (1 = Medium) */
   fxScale: number;
-  /** dynamic lights for muzzle flashes and explosions */
+  /** dynamic lights for muzzle flashes and explosions (each one costs every lit pixel, so none on Low / phones) */
   flashLights: number;
   /** bloom + filmic tone mapping */
   post: boolean;
@@ -35,7 +35,7 @@ export interface QualityPreset {
 }
 
 export const QUALITY: Record<QualityLevel, QualityPreset> = {
-  low: { level: 'low', dprCap: 1, renderScale: 1, dynamicRes: [0.6, 1], antialias: false, smaa: false, shadows: 'none', shadowSize: 0, grassClumps: 3500, grassRadius: 28, trees: 60, angularSegs: 180, particles: 180, fxScale: 0.6, flashLights: 1, post: false, pbr: false, models: 'simple', far: 1400, fogNear: 120, fogFar: 1100 },
+  low: { level: 'low', dprCap: 1, renderScale: 1, dynamicRes: [0.6, 1], antialias: false, smaa: false, shadows: 'none', shadowSize: 0, grassClumps: 3500, grassRadius: 28, trees: 60, angularSegs: 180, particles: 180, fxScale: 0.6, flashLights: 0, post: false, pbr: false, models: 'simple', far: 1400, fogNear: 120, fogFar: 1100 },
   medium: { level: 'medium', dprCap: 1.5, renderScale: 1, dynamicRes: [0.75, 1.5], antialias: true, smaa: false, shadows: 'static', shadowSize: 1024, grassClumps: 11000, grassRadius: 45, trees: 130, angularSegs: 300, particles: 420, fxScale: 1, flashLights: 3, post: false, pbr: false, models: 'simple', far: 1600, fogNear: 180, fogFar: 1300 },
   high: { level: 'high', dprCap: 2, renderScale: 1, dynamicRes: null, antialias: true, smaa: false, shadows: 'dynamic', shadowSize: 2048, grassClumps: 22000, grassRadius: 60, trees: 200, angularSegs: 400, particles: 800, fxScale: 1.3, flashLights: 4, post: true, pbr: true, models: 'detailed', far: 1600, fogNear: 200, fogFar: 1400 },
   ultra: { level: 'ultra', dprCap: 2.5, renderScale: 1, dynamicRes: null, antialias: true, smaa: true, shadows: 'dynamic', shadowSize: 4096, grassClumps: 40000, grassRadius: 75, trees: 300, angularSegs: 520, particles: 1600, fxScale: 1.6, flashLights: 6, post: true, pbr: true, models: 'detailed', far: 1800, fogNear: 220, fogFar: 1600 },

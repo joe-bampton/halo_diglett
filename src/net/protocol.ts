@@ -3,7 +3,8 @@ import type { Settings } from '../sim/settings';
 import type { BotDifficulty, MatchPhase, PlayerCommand, RosterEntry, SimEvent } from '../sim/types';
 import type { WeaponId } from '../sim/weapons';
 
-export const PROTOCOL_VERSION = 2;
+/** Bumped whenever host and clients must run the same build (v3: 8 players, fast state channel, CH_EV). */
+export const PROTOCOL_VERSION = 3;
 export const BUILD_ID: string = (import.meta.env?.VITE_BUILD_ID as string | undefined) ?? 'dev';
 
 export interface SlotInfo {
@@ -126,8 +127,14 @@ export interface PrivateState {
   su: number; // ...and gone at
 }
 
+/**
+ * The state of the match as one player sees it, ~20 times a second. Over the low-latency path it comes alone (a lost
+ * one is simply replaced by the next) and the events go reliably in an EventsMsg; otherwise the events ride along.
+ */
 export interface SnapshotMsg {
   k: number; // host tick
+  /** the match it's from (its seed): a late one from the match before must not be taken for this one */
+  id: number;
   ph: MatchPhase;
   a: number; // last input seq applied
   p: PackedPlayer[];
@@ -138,7 +145,14 @@ export interface SnapshotMsg {
   ld: number; // leader
 }
 
+/** Events since the last ones sent (reliable, in order), when the state goes over the low-latency path. */
+export interface EventsMsg {
+  k: number;
+  e: SimEvent[];
+}
+
 export const CH_CTL = 'ctl';
 export const CH_IN = 'in';
 export const CH_SNAP = 'snap';
-export type Channel = typeof CH_CTL | typeof CH_IN | typeof CH_SNAP;
+export const CH_EV = 'ev';
+export type Channel = typeof CH_CTL | typeof CH_IN | typeof CH_SNAP | typeof CH_EV;
