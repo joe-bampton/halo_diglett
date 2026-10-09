@@ -430,9 +430,11 @@ function aoMat(color: number, roughness: number, metalness: number, pbr: boolean
   return new THREE.MeshLambertMaterial(lambert);
 }
 
-/** Pitre Mode energy drink can: radius and height (m). It fits inside the power-up's hit sphere (ORB_R). */
+/** Pitre Mode energy drink can: radius and height (m) as modelled, drawn CAN_SCALE times bigger. Drawn, it fits inside
+ * the cans' hit sphere (CAN_ORB_R). */
 export const CAN_R = 0.3;
 export const CAN_H = 1.44;
+export const CAN_SCALE = 1.4;
 let canParts: { metal: THREE.BufferGeometry; metalMat: THREE.Material; metalPbr: THREE.Material; body: THREE.BufferGeometry; aura: THREE.BufferGeometry } | null = null;
 const canLabels = new Map<string, THREE.Material>();
 
@@ -539,15 +541,18 @@ export function buildCan(color: number, pbr = false, detailed = false): THREE.Gr
     };
   }
   const g = new THREE.Group();
+  const can = new THREE.Group();
+  can.scale.setScalar(CAN_SCALE);
+  g.add(can);
   const metalMat = pbr ? canParts.metalPbr : canParts.metalMat;
   if (detailed && GLB.can) {
     const label = canLabel(color, pbr);
-    g.add(fromGlb('can', 'can', (n) => (n === 'label' ? label : metalMat), false));
-  } else g.add(new THREE.Mesh(canParts.metal, metalMat), new THREE.Mesh(canParts.body, canLabel(color, pbr)));
+    can.add(fromGlb('can', 'can', (n) => (n === 'label' ? label : metalMat), false));
+  } else can.add(new THREE.Mesh(canParts.metal, metalMat), new THREE.Mesh(canParts.body, canLabel(color, pbr)));
   const aura = new THREE.Mesh(canParts.aura, shellMaterial(color));
   aura.scale.set(0.5, 0.98, 0.5);
   (aura.material as THREE.ShaderMaterial).uniforms.strength!.value = 0.9;
-  g.add(aura);
+  can.add(aura);
   g.userData.aura = aura;
   g.userData.kind = 'can';
   return g;

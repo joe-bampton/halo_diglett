@@ -21,7 +21,7 @@ import {
 } from './constants';
 import { pointSegmentDist, raySphere } from './geom';
 import { eyePos, hitboxOf, isExposed, rayHitbox, type Hitbox } from './hitbox';
-import { ORB_R, ORB_RATES, orbPos } from './orbs';
+import { ORB_RATES, orbPos, orbRadius } from './orbs';
 import { POWERUPS, type PowerUpId } from './powerups';
 import { HELD_UNTIL, SPRING_COOLDOWN, SPRING_TICKS, inFlight, springLift } from './spring';
 import type { Settings } from './settings';
@@ -740,7 +740,7 @@ export function traceRay(m: MatchState, arena: Arena, shooter: PlayerState | nul
   }
   for (const orb of m.orbs) {
     const c = orbPos(orb, m.tick, arena);
-    const to = raySphere(o, d, c, ORB_R);
+    const to = raySphere(o, d, c, orbRadius(m.settings));
     if (to >= 0 && to < world) hits.push({ t: to, kind: 'orb', orb: orb.id });
   }
   hits.sort((a, b) => a.t - b.t);
@@ -983,7 +983,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
       }
     }
     for (const orb of m.orbs) {
-      const to = raySphere(prev, d, orbPos(orb, t, arena), ORB_R + def.radius);
+      const to = raySphere(prev, d, orbPos(orb, t, arena), orbRadius(m.settings) + def.radius);
       if (to >= 0 && to < bestT) {
         bestT = to;
         hitPlayer = null;
@@ -1156,7 +1156,7 @@ function explode(m: MatchState, ctx: StepContext, owner: number, weapon: WeaponI
   }
   const shooter = m.players[owner];
   for (const orb of [...m.orbs]) {
-    if (shooter && dist(orbPos(orb, m.tick, arena), pos) < sp.radius + ORB_R) claimOrb(m, ctx, orb.id, shooter);
+    if (shooter && dist(orbPos(orb, m.tick, arena), pos) < sp.radius + orbRadius(m.settings)) claimOrb(m, ctx, orb.id, shooter);
   }
   return hitEnemy;
 }

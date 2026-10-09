@@ -5,6 +5,7 @@ import { MOUTH_R, RIM_H, RIM_OUT, WELL_DEPTH, type Arena } from '../sim/arena';
 import { PAL } from './palette';
 import { DISPLAY_COLOR } from './shaderUtil';
 import type { QualityPreset } from './quality';
+import { grassMaps, rockMaps } from './textures';
 
 const col = (hex: number) => new THREE.Color(hex);
 
@@ -101,6 +102,9 @@ export function buildSky(): THREE.Mesh {
   return m;
 }
 
+/** Metres per repeat of the grass texture. */
+const GRASS_TILE = 2.6;
+
 // --- terrain (single polar grid out to the mountains) ----------------------------------------
 export function buildTerrain(arena: Arena, q: QualityPreset): THREE.Mesh {
   const rings: number[] = [];
@@ -181,7 +185,18 @@ export function buildTerrain(arena: Arena, q: QualityPreset): THREE.Mesh {
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  let mat: THREE.Material;
+  if (q.textures) {
+    // High / Ultra: blades and relief in the grass, tiled every GRASS_TILE metres
+    const uv: number[] = [];
+    for (let i = 0; i < verts.length; i += 3) uv.push(verts[i]! / GRASS_TILE, verts[i + 2]! / GRASS_TILE);
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    const g = grassMaps();
+    const m = new THREE.MeshStandardMaterial({ vertexColors: true, map: g.map, normalMap: g.normal, normalScale: new THREE.Vector2(0.9, 0.9), roughness: 0.93, metalness: 0 });
+    // the painted map averages a little under white: keep the field as bright as the flat-coloured one
+    m.color.setScalar(1.18);
+    mat = m;
+  } else mat = new THREE.MeshLambertMaterial({ vertexColors: true });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
   mesh.name = 'terrain';
@@ -189,36 +204,48 @@ export function buildTerrain(arena: Arena, q: QualityPreset): THREE.Mesh {
 }
 
 // --- holes: wells + stacked stone rims --------------------------------------------------------
-function stoneGeometry(seed: number): THREE.BufferGeometry {
-  const g = new THREE.IcosahedronGeometry(1, 0);
+/** `detail` 0: a faceted low-poly stone; 2: a rounded, lumpy boulder (High / Ultra, with a rock texture). */
+function stoneGeometry(seed: number, detail = 0): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(1, detail);
   const pos = g.getAttribute('position') as THREE.BufferAttribute;
   const rng = new Rng(seed);
   const cache = new Map<string, [number, number, number]>();
   for (let i = 0; i < pos.count; i++) {
-    const key = `${pos.getX(i).toFixed(3)},${pos.getY(i).toFixed(3)},${pos.getZ(i).toFixed(3)}`;
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const key = `${x.toFixed(3)},${y.toFixed(3)},${z.toFixed(3)}`;
     let off = cache.get(key);
     if (!off) {
-      off = [rng.range(0.85, 1.15), rng.range(0.8, 1.1), rng.range(0.85, 1.15)];
+      if (detail) {
+        // smooth lumps (the same at every copy of a vertex, so there are no cracks), flatter underneath
+        const k = 1 + (fbm(x * 1.7 + 3, z * 1.7 + y * 1.3, 3, seed) - 0.5) * 0.45;
+        off = [k, k * (y < 0 ? 0.75 : 1), k];
+      } else off = [rng.range(0.85, 1.15), rng.range(0.8, 1.1), rng.range(0.85, 1.15)];
       cache.set(key, off);
     }
-    pos.setXYZ(i, pos.getX(i) * off[0], pos.getY(i) * off[1] * 0.42, pos.getZ(i) * off[2]);
+    pos.setXYZ(i, x * off[0], y * off[1] * 0.42, z * off[2]);
   }
   g.computeVertexNormals();
   return g;
 }
 
-export function buildHoles(arena: Arena): THREE.Group {
+export function buildHoles(arena: Arena, textured = false): THREE.Group {
   const group = new THREE.Group();
   group.name = 'holes';
   const rng = new Rng(77);
+  const rock = textured ? rockMaps() : null;
   // stones
-  const stoneGeo = stoneGeometry(3);
+  const stoneGeo = stoneGeometry(3, textured ? 2 : 0);
+  const stoneMat = rock
+    ? new THREE.MeshStandardMaterial({ map: rock.map, normalMap: rock.normal, roughness: 0.95, metalness: 0, envMapIntensity: 0.3 })
+    : new THREE.MeshLambertMaterial({ flatShading: true });
+  // (warmer and brighter: the painted map is a little dark, and the sky light tints stone blue)
+  if (rock) (stoneMat as THREE.MeshStandardMaterial).color.setRGB(1.22, 1.15, 1.04);
   const layers = [
     { r: 1.2, n: 11, sx: 0.42, sz: 0.36, sy: 0.19 },
     { r: 1.62, n: 15, sx: 0.44, sz: 0.34, sy: 0.19 },
   ];
   const perHole = layers.reduce((a, l) => a + l.n, 0) * 3;
-  const stones = new THREE.InstancedMesh(stoneGeo, new THREE.MeshLambertMaterial({ flatShading: true }), perHole * arena.holes.length);
+  const stones = new THREE.InstancedMesh(stoneGeo, stoneMat, perHole * arena.holes.length);
   const m4 = new THREE.Matrix4();
   const quat = new THREE.Quaternion();
   const e = new THREE.Euler();
@@ -259,9 +286,20 @@ export function buildHoles(arena: Arena): THREE.Group {
     wc.push(c.r, c.g, c.b);
   }
   wellGeo.setAttribute('color', new THREE.Float32BufferAttribute(wc, 3));
-  const wellMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.BackSide });
   const floorGeo = new THREE.CircleGeometry(MOUTH_R + 0.05, 18).rotateX(-Math.PI / 2);
-  const floorMat = new THREE.MeshLambertMaterial({ color: 0x3a3a30 });
+  let wellMat: THREE.Material, floorMat: THREE.Material;
+  if (rock) {
+    // stone-lined walls: the rock texture about once per metre
+    const uv = wellGeo.getAttribute('uv') as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 6, uv.getY(i) * 3);
+    const fuv = floorGeo.getAttribute('uv') as THREE.BufferAttribute;
+    for (let i = 0; i < fuv.count; i++) fuv.setXY(i, fuv.getX(i) * 2, fuv.getY(i) * 2);
+    wellMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: rock.map, normalMap: rock.normal, roughness: 0.9, side: THREE.BackSide });
+    floorMat = new THREE.MeshStandardMaterial({ color: 0x4a4a3a, map: rock.map, normalMap: rock.normal, roughness: 1 });
+  } else {
+    wellMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.BackSide });
+    floorMat = new THREE.MeshLambertMaterial({ color: 0x3a3a30 });
+  }
   const wells = new THREE.InstancedMesh(wellGeo, wellMat, arena.holes.length);
   const floors = new THREE.InstancedMesh(floorGeo, floorMat, arena.holes.length);
   arena.holes.forEach((h, i) => {

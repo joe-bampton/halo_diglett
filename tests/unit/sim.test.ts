@@ -178,3 +178,16 @@ describe('review regressions', () => {
     expect(p.hits).toBe(1);
   });
 });
+
+describe('power-up hit sphere', () => {
+  it('Pitre Mode cans are bigger targets than capture balls, and the drawn can fits inside', async () => {
+    const { ORB_R, CAN_ORB_R, orbRadius } = await import('../../src/sim/orbs');
+    const { CAN_H, CAN_R, CAN_SCALE } = await import('../../src/render/models');
+    expect(orbRadius({ pitre: false, pitreCans: true })).toBe(ORB_R);
+    expect(orbRadius({ pitre: true, pitreCans: false })).toBe(ORB_R);
+    expect(orbRadius({ pitre: true, pitreCans: true })).toBe(CAN_ORB_R);
+    expect(CAN_ORB_R).toBeGreaterThan(ORB_R);
+    expect((CAN_H / 2) * CAN_SCALE).toBeLessThanOrEqual(CAN_ORB_R);
+    expect(CAN_R * CAN_SCALE).toBeLessThan(CAN_ORB_R);
+  });
+});

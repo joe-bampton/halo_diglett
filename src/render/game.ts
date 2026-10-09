@@ -12,7 +12,7 @@ import { SPRING_TICKS, inFlight, springLift } from '../sim/spring';
 import { FIRE_EXPOSURE, HEAD_R, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
 import { raySphere } from '../sim/geom';
 import { bigHeadShift, drop, eyePos, hitboxOf, rayHitbox } from '../sim/hitbox';
-import { ORB_R, orbPos } from '../sim/orbs';
+import { orbPos, orbRadius } from '../sim/orbs';
 import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import type { Projectile, SimEvent, Vec3T } from '../sim/types';
 import { WEAPONS, hostDrawn, weaponByIndex, type WeaponId } from '../sim/weapons';
@@ -20,7 +20,7 @@ import { setHtml, setStyle } from '../ui/dom';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
 import { Decals, FlashLights, Particles, Ribbons, Shockwaves } from './fx';
 import { loadDetailedModels } from './assets';
-import { GLB, SHARED, buildCan, buildOrb, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
+import { CAN_H, CAN_SCALE, GLB, SHARED, buildCan, buildOrb, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
 import { PAL, SAUCE } from './palette';
 import type { PostFx } from './post';
 import { DynRes } from './dynres';
@@ -53,6 +53,10 @@ interface SpartanView {
   /** dollops of Gerry Sauce stuck on them */
   sauce: THREE.Mesh[];
 }
+
+/** "Auto" graphics on High / Ultra: seconds of play to average, and the frame rate it must keep. */
+const AUTO_CHECK = 12;
+const AUTO_MIN_FPS = 45;
 
 /** How long the first-person grenade throw takes (s). */
 const THROW_ANIM = 0.75;
@@ -99,7 +103,8 @@ function disposeTree(obj: THREE.Object3D) {
     const mats = m.material ? (Array.isArray(m.material) ? m.material : [m.material]) : [];
     for (const mat of mats) {
       if (SHARED.has(mat)) continue;
-      (mat as THREE.MeshBasicMaterial).map?.dispose();
+      const map = (mat as THREE.MeshBasicMaterial).map;
+      if (map && !SHARED.has(map)) map.dispose();
       mat.dispose();
     }
   });
@@ -155,6 +160,8 @@ let slowHintShown = false;
 export interface GameHooks {
   onMenu(): void;
   isMenuOpen(): boolean;
+  /** High or Ultra under "Auto" ran too slowly in the first seconds of play: the app may drop to Medium */
+  onTooSlow?(): void;
 }
 
 export class Game {
@@ -171,6 +178,10 @@ export class Game {
   /** seconds since a grenade left the hand (the throw animation) */
   private vmThrow = 9;
   private sky: THREE.Mesh;
+  private terrain: THREE.Mesh;
+  /** terrain detail it was built with (it changes only with a new match) */
+  private terrainSegs: number;
+  private holes: THREE.Group;
   private grass: Grass;
   private trees: THREE.InstancedMesh;
   private sun: THREE.DirectionalLight;
@@ -188,6 +199,8 @@ export class Game {
   private fpsEl: HTMLElement | null = null;
   /** frame-rate watch for the "running slow?" hint: 5 s windows, two slow ones in a row */
   private fpsWatch = { t: 0, n: 0, slow: 0 };
+  /** frame-rate check of High / Ultra in the first seconds of play (see GameHooks.onTooSlow) */
+  private autoWatch = { t: 0, n: 0, done: false };
   private fpsAvg = { t: 0, n: 0 };
   /** which load of the detailed models the Spartans etc. were built with */
   private glbSeen = 0;
@@ -282,8 +295,10 @@ export class Game {
     // world
     this.sky = buildSky();
     this.scene.add(this.sky);
-    this.scene.add(buildTerrain(this.arena, quality));
-    this.scene.add(buildHoles(this.arena));
+    this.terrainSegs = quality.angularSegs;
+    this.terrain = buildTerrain(this.arena, quality);
+    this.holes = buildHoles(this.arena, quality.textures);
+    this.scene.add(this.terrain, this.holes);
     this.scene.add(buildFence(this.arena));
     this.trees = buildTrees(this.arena, quality);
     this.scene.add(this.trees);
@@ -445,6 +460,17 @@ export class Game {
       this.scene.add(this.grass.mesh);
       this.grassAt.set(NaN, NaN);
     }
+    if (prev.textures !== next.textures) {
+      // textured ground and stones (or back to flat colours)
+      for (const o of [this.terrain, this.holes]) {
+        this.scene.remove(o);
+        disposeTree(o);
+      }
+      this.terrain = buildTerrain(this.arena, { ...next, angularSegs: this.terrainSegs });
+      this.holes = buildHoles(this.arena, next.textures);
+      this.scene.add(this.terrain, this.holes);
+      if (next.shadows === 'static') this.bakeStaticShadows();
+    }
     if (prev.trees !== next.trees) {
       this.scene.remove(this.trees);
       disposeTree(this.trees);
@@ -452,7 +478,7 @@ export class Game {
       this.scene.add(this.trees);
       if (next.shadows === 'static') this.bakeStaticShadows();
     }
-    if (prev.post !== next.post || prev.antialias !== next.antialias || prev.smaa !== next.smaa) this.setupPost();
+    if (prev.post !== next.post || prev.antialias !== next.antialias || prev.smaa !== next.smaa || prev.ao !== next.ao) this.setupPost();
     if (next.models === 'detailed') void loadDetailedModels();
     if (prev.pbr !== next.pbr || prev.models !== next.models) this.rebuildModels();
     this.onResize();
@@ -553,7 +579,7 @@ export class Game {
     const q = this.q;
     void import('./post').then(({ PostFx }) => {
       if (gen !== this.postGen || this.destroyed) return;
-      this.post = new PostFx(this.renderer, this.scene, this.camera, this.vmScene, this.vmCamera, { msaa: q.antialias, smaa: q.smaa });
+      this.post = new PostFx(this.renderer, this.scene, this.camera, this.vmScene, this.vmCamera, { msaa: q.antialias, smaa: q.smaa, ao: q.ao });
       this.onResize();
     });
   }
@@ -624,6 +650,7 @@ export class Game {
       a.t = 0;
       a.n = 0;
     }
+    this.watchAuto(dt);
     const w = this.fpsWatch;
     if (slowHintShown || this.session.phase !== 'live' || this.time < 8) return;
     w.t += dt;
@@ -636,6 +663,26 @@ export class Game {
     if (w.slow >= 2 && this.q.level !== 'low') {
       slowHintShown = true;
       this.hud.message('Running slow? Try Options → Graphics → Low', 6000, 'warn');
+    }
+  }
+
+  /** High / Ultra picked by "Auto": average the frame rate over AUTO_CHECK s of play, and give up on it below AUTO_MIN_FPS. */
+  private watchAuto(dt: number) {
+    const w = this.autoWatch;
+    if (w.done || !this.hooks.onTooSlow || this.session.phase !== 'live' || this.time < 4) return;
+    if (this.q.level !== 'high' && this.q.level !== 'ultra') {
+      w.done = true;
+      return;
+    }
+    // a hidden tab or a paused game isn't slow
+    if (dt > 0.25 || this.hooks.isMenuOpen()) return;
+    w.t += dt;
+    w.n++;
+    if (w.t < AUTO_CHECK) return;
+    w.done = true;
+    if (w.n / w.t < AUTO_MIN_FPS) {
+      this.hooks.onTooSlow();
+      this.hud.message('Graphics lowered to Medium to keep it smooth (Options → Graphics to change)', 6000, 'warn');
     }
   }
 
@@ -1698,7 +1745,7 @@ export class Game {
         const group = this.cans() ? buildCan(color, this.q.pbr, this.detailed) : buildOrb(color, this.q.pbr);
         const label = textSprite(`${def?.icon ?? '?'} ${def?.name ?? ''}`, '#ffffff', 36);
         group.add(label);
-        label.position.y = 1.25;
+        label.position.y = this.cans() ? (CAN_H / 2) * CAN_SCALE + 0.55 : 1.25;
         this.scene.add(group);
         v = { id, group, color, label };
         this.orbs.set(id, v);
@@ -1811,6 +1858,7 @@ export class Game {
   /** What my own predicted shots stop on: the other players as I see them, and power-up orbs. */
   private ownShotTargets: TargetTest = (o, d, L, tick, r, from) => {
     const s = this.session;
+    const orbR = s.start ? orbRadius(s.start.settings) : 0.8;
     let best = Infinity;
     for (const p of s.players) {
       if (!p || p.slot === s.slot || !p.alive) continue;
@@ -1818,7 +1866,7 @@ export class Game {
       if (h && h.t < L && h.t < best) best = h.t;
     }
     for (const orb of s.orbs.values()) {
-      const to = raySphere(o, d, orbPos(orb, tick, this.arena), ORB_R + r);
+      const to = raySphere(o, d, orbPos(orb, tick, this.arena), orbR + r);
       if (to >= 0 && to < L && to < best) best = to;
     }
     return best;

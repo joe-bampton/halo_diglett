@@ -65,6 +65,7 @@ canvas.backdrop { filter: saturate(1.05); }
 }
 .title-logo .t3 { margin-top: 10px; color: var(--muted); font-size: clamp(14px, 2.4vw, 18px); letter-spacing: 0.08em; }
 .menu { display: flex; flex-direction: column; gap: 12px; width: min(420px, 100%); margin-top: 34px; }
+.title-gfx { margin-top: 16px; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; }
 .btn {
   appearance: none; border: 1px solid var(--line); cursor: pointer;
   background: linear-gradient(180deg, rgba(40, 80, 120, 0.55), rgba(15, 35, 60, 0.75));

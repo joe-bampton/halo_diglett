@@ -195,18 +195,20 @@ All voice lines are MP3s listed in `public/audio/manifest.json`, and so are any 
 - `public/audio/pitre/pufferfish.mp3` is an original synthesized placeholder. You can drop the real pufferfish meme clip in for private games, but it's copyrighted, so don't commit it to this public repo.
 - The robot lines were generated with the open-source [Kokoro-82M](https://github.com/thewh1teagle/kokoro-onnx) voice model (Apache-2.0). See [`tools/voices/README.md`](tools/voices/README.md) to regenerate or tweak them.
 
-## Graphics (Options → Graphics)
+## Graphics (title screen, or Options → Graphics)
 
-Changes apply right away, mid-match too (Esc → Options). If the game feels laggy, pick **Low**; it also suggests that by itself after a while under 28 fps. **Show FPS** puts a frame counter in the corner.
+Pick a preset from the **Graphics** menu on the title screen, or in Options. Changes apply right away, mid-match too (Esc → Options). **Auto** picks **High** on computers and **Low** on phones. If High can't hold 45 fps in the first seconds of play, Auto drops to Medium and remembers that for this device. If the game feels laggy, pick **Medium** or **Low**; it also suggests that by itself after a while under 28 fps. **Show FPS** puts a frame counter in the corner.
 
 | Preset | What you get |
 |---|---|
 | Low | phones and old laptops: fewer grass clumps, no shadows, simpler effects |
-| Medium | the default on computers: still shadows, more grass |
-| High | moving shadows, bloom and filmic colour, shiny sky-reflecting (PBR) materials, the detailed Blender-made models, richer explosions (shockwave, sparks, scorch marks) |
-| Ultra | High plus extra anti-aliasing (SMAA), sharper shadows, almost twice the grass reaching further, more trees and particles |
+| Medium | slower computers: still shadows, more grass, flat-coloured ground and stones |
+| High | the default on computers: moving shadows, bloom and filmic colour, ambient occlusion (soft shadows in corners and under the rims), textured grass ground and rounded, weathered rim stones, shiny sky-reflecting (PBR) materials, the detailed models, richer explosions (shockwave, sparks, scorch marks) |
+| Ultra | High plus full-resolution ambient occlusion, extra anti-aliasing (SMAA), sharper shadows, almost twice the grass reaching further, more trees and particles |
 
-**Advanced graphics** lets you override single parts of the preset: render scale, dynamic resolution, shadows, effects, post-processing, anti-aliasing, grass & trees, and models & materials. Each one says what the preset would pick.
+**Advanced graphics** lets you override single parts of the preset: render scale, dynamic resolution, shadows, effects, post-processing, anti-aliasing, grass & trees, models & materials, and ambient occlusion. Each one says what the preset would pick.
+
+The ground and stone textures are painted in code when a match starts (no image files).
 
 The detailed Spartan, energy can, Super Soaker and spring are made **from code with Blender** ([`tools/models`](tools/models/README.md)): change the script, run it, and the game picks up the new `.glb` files.
 

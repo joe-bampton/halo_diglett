@@ -10,7 +10,7 @@ import type { LobbyState } from '../net/protocol';
 import { MuxHostNet, loopbackPair, type ClientNet, type HostNet, type VoiceLink } from '../net/transport';
 import { Backdrop } from '../render/backdrop';
 import { Game } from '../render/game';
-import { GFX_FIELDS, QUALITY, QUALITY_LABEL, QUALITY_LEVELS, autoQuality, detectQuality, presetChoice, resolveQuality, type GfxOverrides, type QualityLevel } from '../render/quality';
+import { GFX_FIELDS, QUALITY, QUALITY_LABEL, QUALITY_LEVELS, autoQuality, detectQuality, lowerAutoQuality, presetChoice, resolveQuality, type GfxOverrides, type QualityLevel } from '../render/quality';
 import { MAX_BOTS, MAX_HUMANS } from '../sim/constants';
 import { DEFAULT_SETTINGS, migrateSavedSettings, sanitizeSettings, settingsForStorage, type Settings } from '../sim/settings';
 import type { BotDifficulty } from '../sim/types';
@@ -208,6 +208,7 @@ export class App {
         <button class="btn" data-a="join">Join game<small>Enter your friend’s room code</small></button>
         <button class="btn" data-a="options">Options<small>Controls, sensitivity, graphics, audio</small></button>
       </div>
+      <label class="title-gfx">Graphics ${this.qualitySelect(loadOptions().quality)}</label>
       <p class="note" style="margin-top:26px;text-align:center;max-width:520px">Mouse: aim · Space (hold) stand · Click shoot · Right-click zoom · R reload · Tab scores.<br>Controller and touch screens work too.</p>`,
       'title',
     );
@@ -215,6 +216,31 @@ export class App {
     s.querySelector('[data-a=host]')!.addEventListener('click', () => void this.hostOnline());
     s.querySelector('[data-a=join]')!.addEventListener('click', () => this.showJoin());
     s.querySelector('[data-a=options]')!.addEventListener('click', () => this.showOptions(() => this.showTitle()));
+    s.querySelector<HTMLSelectElement>('.title-gfx select')!.addEventListener('change', (e) => {
+      const opts = loadOptions();
+      opts.quality = (e.target as HTMLSelectElement).value as Options['quality'];
+      saveOptions(opts);
+      this.applyQuality(opts);
+    });
+  }
+
+  /** The graphics quality picker (title screen and Options). */
+  private qualitySelect(current: Options['quality']): string {
+    return `<select data-k="quality">${(['auto', ...QUALITY_LEVELS] as const).map((q) => `<option value="${q}" ${current === q ? 'selected' : ''}>${QUALITY_LABEL[q]}${q === 'auto' ? ` (${QUALITY_LABEL[autoQuality()]})` : ''}</option>`).join('')}</select>`;
+  }
+
+  /** A new quality choice: remember it and apply it straight away (mid-match too). */
+  private applyQuality(opts: Options) {
+    try {
+      if (opts.quality === 'auto') localStorage.removeItem('hd.quality');
+      else localStorage.setItem('hd.quality', opts.quality);
+    } catch {
+      /* ignore */
+    }
+    // "Auto" goes back to what this device gets by default
+    this.quality = opts.quality === 'auto' ? detectQuality() : opts.quality;
+    audio.hrtf = this.quality !== 'low';
+    this.game?.applyGraphics(resolveQuality(this.quality, opts.gfx));
   }
 
   private showJoin() {
@@ -557,7 +583,19 @@ export class App {
     this.clearScreen();
     this.killBackdrop();
     const opts = loadOptions();
-    this.game = new Game(this.gameLayer, s, resolveQuality(this.quality, opts.gfx), { onMenu: () => this.toggleMenu(), isMenuOpen: () => !!this.menuEl });
+    this.game = new Game(this.gameLayer, s, resolveQuality(this.quality, opts.gfx), {
+      onMenu: () => this.toggleMenu(),
+      isMenuOpen: () => !!this.menuEl,
+      // "Auto" put this device on High, and it can't keep up: Medium from now on
+      onTooSlow:
+        opts.quality === 'auto' && !params.has('quality')
+          ? () => {
+              lowerAutoQuality();
+              this.quality = 'medium';
+              this.game?.applyGraphics(resolveQuality('medium', loadOptions().gfx));
+            }
+          : undefined,
+    });
     this.game.input.opts = { ...this.game.input.opts };
     this.game.setFpsCounter(opts.fpsCounter);
     audio.hrtf = this.quality !== 'low';
@@ -737,7 +775,7 @@ export class App {
         <div class="field"><label>Invert look</label><div class="val"><input type="checkbox" data-k="invertY" ${opts.invertY ? 'checked' : ''}></div></div>
         <div class="field"><label>Stand up (Space)</label><select data-k="standMode"><option value="hold" ${opts.standMode === 'hold' ? 'selected' : ''}>Hold</option><option value="toggle" ${opts.standMode === 'toggle' ? 'selected' : ''}>Toggle</option></select></div>
         <h3 style="margin-top:14px">Graphics</h3>
-        <div class="field"><label>Quality</label><select data-k="quality">${(['auto', ...QUALITY_LEVELS] as const).map((q) => `<option value="${q}" ${opts.quality === q ? 'selected' : ''}>${QUALITY_LABEL[q]}${q === 'auto' ? ` (${QUALITY_LABEL[autoQuality()]})` : ''}</option>`).join('')}</select><div class="help">Changes right away, even mid-match. Laggy? Try Low. Auto picks Low on phones.</div></div>
+        <div class="field"><label>Quality</label>${this.qualitySelect(opts.quality)}<div class="help">Changes right away, even mid-match. Laggy? Try Medium or Low. Auto picks High on computers (Medium if High turns out too slow) and Low on phones.</div></div>
         <div class="field"><label>Show FPS</label><div class="val"><input type="checkbox" data-fps ${opts.fpsCounter ? 'checked' : ''}></div></div>
         <details class="gfx-adv" ${Object.keys(opts.gfx).length ? 'open' : ''}><summary>Advanced graphics</summary>
           ${GFX_FIELDS.map((f) => `<div class="field"><label>${f.label}</label><select data-gfx="${f.key}"><option value="">Preset (${presetChoice(f.key, this.quality)})</option>${f.options.map(([v, l]) => `<option value="${v}" ${opts.gfx[f.key] === v ? 'selected' : ''}>${l}</option>`).join('')}</select>${f.help ? `<div class="help">${f.help}</div>` : ''}</div>`).join('')}
@@ -756,17 +794,7 @@ export class App {
     const save = () => {
       saveOptions(opts);
       if (this.game) this.game.input.opts = { ...opts };
-      try {
-        if (opts.quality === 'auto') localStorage.removeItem('hd.quality');
-        else localStorage.setItem('hd.quality', opts.quality);
-      } catch {
-        /* ignore */
-      }
-      // "Auto" goes back to what this device gets by default
-      this.quality = opts.quality === 'auto' ? detectQuality() : opts.quality;
-      audio.hrtf = this.quality !== 'low';
-      // applied live, mid-match too
-      this.game?.applyGraphics(resolveQuality(this.quality, opts.gfx));
+      this.applyQuality(opts);
       this.game?.setFpsCounter(opts.fpsCounter);
     };
     const redraw = () => {

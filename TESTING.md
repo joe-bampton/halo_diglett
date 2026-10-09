@@ -57,6 +57,12 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] Settings persist after a page reload
 - [ ] The lobby is readable on a phone (no sideways scrolling)
 
+**Graphics**
+- [ ] Title screen: the **Graphics** menu says *Auto (High)* on a computer; picking a preset there sticks for the next match
+- [ ] High: textured grass ground, rounded weathered stones around the holes, stone-lined hole walls, soft shadows under the rims (ambient occlusion)
+- [ ] On a slow laptop with *Auto*: after ~15 s of play it says "Graphics lowered to Medium" and starts on Medium from then on
+- [ ] Pitre Mode cans (`pitre=1&orbs=chaos`) are noticeably bigger than before and still easy to shoot
+
 **Feel & smoothness** (fixed in the review — worth a look)
 - [ ] On a 120 or 144 Hz screen (`weapon=rpg`): rockets fly at the same speed as on 60 Hz, and explode where they land
 - [ ] Grenades (`weapon=grenade`) bounce and explode in the same spot you saw them land
