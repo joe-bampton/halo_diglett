@@ -216,7 +216,7 @@ export class App {
         <button class="btn" data-a="options">Options<small>Controls, sensitivity, graphics, audio</small></button>
       </div>
       <label class="title-gfx">Graphics ${this.qualitySelect(loadOptions().quality)}</label>
-      <p class="note" style="margin-top:26px;text-align:center;max-width:520px">Mouse: aim · Space (hold) stand · Click shoot · Right-click zoom · R reload · Tab scores.<br>Controller and touch screens work too.</p>`,
+      <p class="note" style="margin-top:26px;text-align:center;max-width:520px">Mouse: aim · Space (hold) stand · Click shoot · Right-click zoom · R reload · Q use a power-up (← → pick) · Tab scores.<br>Controller and touch screens work too.</p>`,
       'title',
     );
     s.querySelector('[data-a=offline]')!.addEventListener('click', () => this.startOffline());

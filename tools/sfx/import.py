@@ -63,8 +63,9 @@ SOUNDS = {
     "shieldBreak": "action", "thud": "action", "partyHorn": "action", "orbPop": "action",
     "boing": "action", "whoosh": "action", "pump": "action", "squirt": "action", "splat": "action",
     "canOpen": "action", "fizz": "action", "clink": "action", "plasmaStick": "action",
+    "capture": "action", "release": "action", "escape": "action",
     "hitTick": "ui", "ding": "ui", "recharge": "ui", "lowShield": "ui", "powerup": "ui",
-    "medal": "ui", "beep": "ui", "spawn": "ui",
+    "medal": "ui", "beep": "ui", "spawn": "ui", "invTick": "ui",
     "reload": "foley", "rustle": "foley", "empty": "foley", "toss": "foley",
 }
 

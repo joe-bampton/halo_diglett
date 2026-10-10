@@ -30,10 +30,11 @@
 | `botdiff=jerry` / `topover` / `jerry,topover` | bot tiers (cycled through the bots) |
 | `holes=8&spacing=20` | 8 holes at least 20 m apart |
 | `respawn=auto` | respawn without pressing Jump |
+| `powerups=pokeball,spring` | only these power-ups come in bubbles (try it with `orbs=chaos`) |
 | `quality=low` / `medium` / `high` / `ultra` | graphics preset |
 | `perf` | FPS and draw-call counter in the bottom-left, plus the snapshot buffer and stalls (`st`) |
 | `fastnet=0` | online: everything over the reliable channel (the low-latency channel off, to compare) |
-| `test` | test hooks in the browser console: `__hd.grant('spring')`, `__hd.grant('sauce', 1)` (give bot 1 the Super Soaker), `__hd.kill()` |
+| `test` | test hooks in the browser console: `__hd.grant('spring')` (into your inventory), `__hd.grant('sauce', 1)` (bot 1 gets the Super Soaker, and uses it), `__hd.activate('homing')` (switched on straight away), `__hd.pokeball(1)` (bot 1's Poké Ball catches you), `__hd.kill()` |
 
 The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together with `autostart=offline`.
 
@@ -52,10 +53,15 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 
 **Menus & lobby**
 - [ ] Title screen shows the animated arena behind the menu
-- [ ] Play vs bots → lobby: add/remove bots, change bot difficulty, change name and armour colour
-- [ ] Each preset button changes the settings
+- [ ] Play vs bots → lobby: every Spartan is a card with a portrait in their armour colour, holding the gun they'll start with
+- [ ] Add a bot with the **+** card (it slides in), change a bot's difficulty on its card, remove it with ✕; change your name and armour colour
+- [ ] The Game card sums up the game (*Standard*, a preset's name, or *Custom*) and the Map card shows the field; clicking either opens the settings on that tab
+- [ ] **⚙ Settings**: five tabs (Game, Rules, Power-ups, Map, Extras); a dot marks the tabs with changes; *Reset this tab*; Esc, Done or a click outside closes it
+- [ ] Each preset (Game tab) changes the settings, and the Game card names it
+- [ ] Changing the weapon changes the guns in the portraits
+- [ ] **Options** from the lobby, then Done: back in the lobby
 - [ ] Settings persist after a page reload
-- [ ] The lobby is readable on a phone (no sideways scrolling)
+- [ ] The lobby and the settings window are readable on a phone (no sideways scrolling; the settings fill the screen)
 
 **Graphics**
 - [ ] Title screen: the **Graphics** menu says *Auto (High)* on a computer; picking a preset there sticks for the next match
@@ -99,7 +105,7 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] 1st person: you see their weapon and their scope when they zoom
 - [ ] "Respawn in N · press SPACE when ready", then "Press SPACE to respawn": you stay dead until you press it
 - [ ] Spectating never moves your own aim or fires
-- [ ] Lobby → Respawn → *Automatically* brings back the old automatic respawn
+- [ ] ⚙ Settings → Rules → Respawn → *Automatically* brings back the old automatic respawn
 - [ ] Controller: A respawns, RB/LB switch, Y toggles the view, triggers zoom. Phone: ◀ ▶ 👁 buttons, drag, pinch, RESPAWN
 
 **Bot tiers**
@@ -107,8 +113,8 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] `botdiff=topover`: Top/Over bots stay up, find you instantly and kill with any headshot; overshield or invincibility still stops the instant kill
 - [ ] In the lobby, each bot's difficulty list goes Jerry → … → Top/Over
 
-**Map** (lobby → Map)
-- [ ] Number of holes *Auto* = the usual field; 8, 16, 32 holes all work, and the minimap in the lobby shows the layout
+**Map** (⚙ Settings → Map)
+- [ ] Number of holes *Auto* = the usual field; 8, 16, 32 holes all work, and the minimaps in the settings window and the lobby show the layout
 - [ ] Distance between holes changes how spread out they are (try 6 m and 40 m); big settings make the field bigger, up to 300 m across
 - [ ] With more players than holes, extra joiners wait ("All holes are taken") and get in when one frees up
 
@@ -127,12 +133,18 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 
 **Power-up bubbles** (`orbs=chaos`)
 - [ ] Capture-ball orbs drift around with labels
-- [ ] Shooting one pops it, gives the power-up, and the announcer names it
+- [ ] Shooting one pops it and puts the power-up in your inventory at the bottom of the screen; the announcer names it
+- [ ] **← / →**, the mouse wheel or **1–9** pick one; **Q** or middle click uses it. A third of the same kind says "Already holding 2 × …"
+- [ ] Use two of the same back to back: the second makes the first last twice as long
+- [ ] Dying empties the inventory
+- [ ] Ducked with the sniper: aim steeply up at a bubble overhead and shoot: it pops (and you stay down). Aim flatter and the shot hits the side of the hole; a standing bot right in front of you isn't hit
 - [ ] Try: flamethrower, minigun, overshield (green glow), invincibility (gold), camo, damage boost, homing, X-ray, big heads, orbital strike (red laser, then boom), quick hands
-- [ ] **Spring Jump** (`?test&autostart=offline&bots=3`, then `__hd.grant('spring')` in the console): the HUD shows it held; double-tap Space → a spring pops out and you fly ~20 m up, can look and shoot down into holes, can't duck, then land back in your hole
-- [ ] **Gerry Sauce**: shoot the 💦 bubble (or `__hd.grant('sauce')`), you get the Super Soaker; one click squirts custard jets at everyone, then rain. Covered players can't duck and their camo stops working
+- [ ] **Spring Jump** (`?test&autostart=offline&bots=3`, then `__hd.grant('spring')` in the console): it waits in the inventory; **Q** (or double-tap Space) → a spring pops out and you fly ~20 m up, can look and shoot down into holes, can't duck, then land back in your hole
+- [ ] **Gerry Sauce**: shoot the 💦 bubble (or `__hd.grant('sauce')`) and use it: you get the Super Soaker; one click squirts custard jets at everyone, then rain. Covered players can't duck and their camo stops working
 - [ ] Getting sauced yourself (`__hd.grant('sauce', 1)` gives it to bot 1): your screen is covered in custard blobs that slide off over 5 s, aiming is slow at first and speeds back up
-- [ ] Lobby → Power-ups: **None** stops all bubbles, **All** brings them back; the chips show each power-up's icon and colour
+- [ ] **Poké Ball** (`?test&autostart=offline&bots=3&orbs=chaos&powerups=pokeball`, or `__hd.grant('pokeball')`): use it, throw it at a standing bot (or into a ducked bot's hole) and it catches them. The ball shakes in your hand, a ring counts down 3 s, and a marker shows the hole the throw would land in. Throw them into an empty hole, their own, or yours: in yours you stand side by side and can shoot each other, even ducked. Wait too long: "OPPONENT ESCAPED!"
+- [ ] Getting caught (`__hd.pokeball(1)` while you're standing): the inside of a red and white ball, "Caught by …", you can look around but not shoot; then thrown into a hole, or "You escaped!" back home
+- [ ] ⚙ Settings → Power-ups: **None** stops all bubbles, **All** brings them back; the chips show each power-up's icon and colour
 
 **Pitre Mode** (`pitre=1`)
 - [ ] The leader wears the Cat in the Hat costume (striped hat, bow tie, ears)
@@ -160,15 +172,18 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 **Controller** (Xbox/PlayStation, plugged in or Bluetooth)
 - [ ] Right stick aims, RT fires, LT zooms
 - [ ] A (hold) stands, LB toggles standing, X reloads, Menu pauses
-- [ ] Aim assist: the reticle gets "sticky" on enemies (lobby → Advanced)
+- [ ] RB uses the picked power-up; D-pad ← / → picks another
+- [ ] Aim assist: the reticle gets "sticky" on enemies (⚙ Settings → Extras → Advanced)
 
 **Phone / tablet** (`npm run dev:lan`)
 - [ ] Landscape prompt appears in portrait
 - [ ] Drag to aim; FIRE (you can drag it to aim too), STAND (tap = toggle), ZOOM, RELOAD
+- [ ] With a power-up: the USE button shows it and uses it; tap another inventory icon to pick it
 - [ ] Runs smoothly (Low quality is picked automatically)
 
 **Online**
-- [ ] A friend joins with the code/link and appears in the lobby; the host starts the match
+- [ ] A friend joins with the code/link and their card slides into the lobby; the host starts the match
+- [ ] The friend's **⚙ View settings** shows the same tabs, read-only ("Only the host can change these"), and follows the host's changes
 - [ ] Up to 8 players fit in one lobby (a 9th is told it's full)
 - [ ] With `?perf` on a friend's phone over Wi-Fi/4G: the stall count (`st`) stays low, other players move smoothly
 - [ ] Shots and kills show up for both players
@@ -176,10 +191,10 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] Closing the host tab shows "The host left the game" to friends
 
 **Voice chat** (real peer-to-peer only, not `?net=bc`; wear headphones or use two machines)
-- [ ] Lobby → 🎤 *Enable mic* next to your name: the browser asks for permission, then the button reads *Mic on*
-- [ ] Both players enable the mic and hear each other; the speaker's dot turns green
+- [ ] Lobby → 🎤 *Enable mic* on your card: the browser asks for permission, then the button reads *Mic on*
+- [ ] Both players enable the mic and hear each other; the speaker's dot turns green and their card glows
 - [ ] **M** (or the button) mutes you: the other player stops hearing you
-- [ ] 🔊 next to a friend's name mutes them (🔇); click again to unmute
+- [ ] 🔊 on a friend's card mutes them (🔇); click again to unmute
 - [ ] Options → Voice chat → Players: the per-player slider changes only that friend's volume
 - [ ] Mic mode *Push-to-talk*: silent until you hold **V**
 - [ ] In a match, the HUD shows your mic icon and the names of people talking; on a phone, tapping the icon mutes and holding it talks (push-to-talk)
