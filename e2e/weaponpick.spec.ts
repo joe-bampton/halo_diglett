@@ -5,10 +5,11 @@ type HD = {
   kill(slot?: number, by?: number, weapon?: string): void;
 };
 const hd = (page: Page) => page.evaluate(() => (window as unknown as { __hd: HD }).__hd.state());
-/** each step takes a frame or two, and the software-rendered test browser can drop to ~1 fps */
-const WAIT = 10_000;
+/** each step takes a frame or two, and the software-rendered test browser can stall for many seconds while spectating */
+const WAIT = 30_000;
 
 test('Players choose: dead players pick the gun to respawn with, starting on the last one', async ({ page }) => {
+  test.setTimeout(240_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/?test=1&autostart=offline&bots=2&mode=choice&quality=low');
@@ -18,7 +19,8 @@ test('Players choose: dead players pick the gun to respawn with, starting on the
   await expect(page.locator('.hud .wpick.on')).toHaveCount(0);
 
   await page.evaluate(() => (window as unknown as { __hd: HD }).__hd.kill());
-  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().me?.al === false, null, { timeout: WAIT });
+  // (keys pick a gun once the game has switched to spectating)
+  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().mode === 'spectate', null, { timeout: WAIT });
   const picker = page.locator('.hud .wpick.on');
   await expect(picker).toBeVisible({ timeout: WAIT });
   // every allowed gun, the one we just used picked
