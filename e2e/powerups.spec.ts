@@ -56,7 +56,8 @@ test('inventory: power-ups wait at the bottom of the screen; arrows pick one, Q 
 
 test('Spring Jump: double-tap Space launches you 20 m up', async ({ page }) => {
   const errors = watchErrors(page);
-  await page.goto('/?test=1&autostart=offline&bots=2&botdiff=jerry&quality=low&respawn=auto');
+  // half speed: the flight lasts ~7 s, so even a software renderer at a frame a second sees the top of it
+  await page.goto('/?test=1&autostart=offline&bots=2&botdiff=jerry&quality=low&respawn=auto&timescale=0.5');
   await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd?.state().phase === 'live', null, { timeout: 60_000 });
   await page.evaluate(() => (window as unknown as { __hd: HD }).__hd.grant('spring'));
   await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.state().me?.inv ?? []).some(([id]) => id === 'spring'), null, { timeout: 5000 });
@@ -72,15 +73,16 @@ test('Spring Jump: double-tap Space launches you 20 m up', async ({ page }) => {
     return (window as unknown as { __hd: HD }).__hd.game!.input.s.springs;
   });
   expect(springs).toBe(1);
+  // (the view only catches up as frames are drawn)
   await page.waitForFunction(() => {
     const h = (window as unknown as { __hd: HD }).__hd;
     return (h.session.players[h.session.slot]?.springAt ?? -1) >= 0;
-  }, null, { timeout: 5000 });
+  }, null, { timeout: 15_000 });
   // the camera rides the jump
-  await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.game?.camera.position.y ?? 0) > 10, null, { timeout: 5000 });
+  await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.game?.camera.position.y ?? 0) > 10, null, { timeout: 15_000 });
   await expect(page.locator('.hud .inv .it')).toHaveCount(0);
   // ...and comes back down into the hole
-  await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.game?.camera.position.y ?? 99) < 5, null, { timeout: 10_000 });
+  await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.game?.camera.position.y ?? 99) < 5, null, { timeout: 20_000 });
   expect((await W(page)).me?.al).toBe(true);
   expect(errors).toEqual([]);
 });

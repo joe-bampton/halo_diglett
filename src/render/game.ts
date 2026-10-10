@@ -667,10 +667,10 @@ export class Game {
     }
   }
 
-  /** FPS counter, and a one-time hint when the game runs slowly for a while. */
-  private watchFps(dt: number) {
+  /** FPS counter (real frame times: the game's own dt is capped), and a one-time hint when the game runs slowly for a while. */
+  private watchFps(dt: number, rawDt: number) {
     const a = this.fpsAvg;
-    a.t += dt;
+    a.t += rawDt;
     a.n++;
     if (a.t >= 0.5) {
       if (this.fpsEl) this.fpsEl.textContent = `${Math.round(a.n / a.t)} fps`;
@@ -1059,7 +1059,7 @@ export class Game {
       }
     }
     if (this.dynRes?.frame(rawDt)) this.onResize();
-    this.watchFps(dt);
+    this.watchFps(dt, rawDt);
     setStyle(this.clickToPlay, 'display', this.input.device === 'kbm' && !this.input.locked && !this.hooks.isMenuOpen() && !this.input.suspended && s.state === 'match' ? '' : 'none');
     if (this.perfEl && this.frames % 15 === 0) {
       const info = this.renderer.info.render;
