@@ -6,7 +6,7 @@ import { Rng } from '../../src/shared/rng';
 import { yawPitchOf } from '../../src/shared/vec';
 import { eyePos, hitboxOf } from '../../src/sim/hitbox';
 import { MAX_BOTS, MAX_HUMANS } from '../../src/sim/constants';
-import { damagePlayer } from '../../src/sim/match';
+import { collectPowerup, damagePlayer } from '../../src/sim/match';
 import { FakeWorld, LagHub } from './laglink';
 
 function flush() {
@@ -102,6 +102,46 @@ describe('manual respawn over the wire', () => {
     client.input.respawns++;
     step(4);
     expect(client.me?.al).toBe(true);
+  });
+});
+
+describe('power-up inventory over the wire', () => {
+  it('the inventory reaches its owner, and a Use press (with what was picked) switches it on', async () => {
+    const { host: hn, client: cn } = loopbackPair();
+    let now = 0;
+    const host = new HostSession(hn, 'LOCAL', false);
+    host.clock = () => now;
+    const client = new ClientSession(cn, { name: 'Me', color: 0x3d7bff, token: 'tok' });
+    client.clock = () => now;
+    await flush();
+    host.setSettings({ ...host.lobby.settings, orbRate: 'off', antiTurtleSec: 0 });
+    host.startMatch(5);
+    const events: string[] = [];
+    const step = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        now += 1000 / 60;
+        host.update(now);
+        client.update(now);
+        for (const e of client.drainEvents()) events.push(e.k);
+      }
+    };
+    step(host.match!.liveAt + 10);
+    host.debugApply((m, ctx) => {
+      const me = m.players[client.slot]!;
+      collectPowerup(m, ctx, me, 'overshield');
+      collectPowerup(m, ctx, me, 'xray');
+      collectPowerup(m, ctx, me, 'xray');
+    });
+    step(3);
+    expect(client.me?.inv).toEqual([['overshield', 1], ['xray', 2]]);
+    expect(events.filter((k) => k === 'got').length).toBe(3);
+    client.input.uses++;
+    client.input.useId = 'xray';
+    client.flushInput();
+    step(3);
+    expect(client.me?.inv).toEqual([['overshield', 1], ['xray', 1]]);
+    expect(client.me?.pu.map(([id]) => id)).toEqual(['xray']);
+    expect(events).toContain('pu');
   });
 });
 

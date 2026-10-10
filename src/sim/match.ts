@@ -21,9 +21,10 @@ import {
 } from './constants';
 import { pointSegmentDist, raySphere } from './geom';
 import { eyePos, hitboxOf, isExposed, rayHitbox, type Hitbox } from './hitbox';
+import { invAdd, invCount, invTake } from './inventory';
 import { ORB_RATES, orbPos, orbRadius } from './orbs';
 import { POWERUPS, type PowerUpId } from './powerups';
-import { HELD_UNTIL, SPRING_COOLDOWN, SPRING_TICKS, inFlight, springLift } from './spring';
+import { SPRING_COOLDOWN, SPRING_TICKS, inFlight, springLift } from './spring';
 import type { Settings } from './settings';
 import type {
   HitKind,
@@ -137,6 +138,8 @@ function newPlayer(m: MatchState, r: RosterEntry, hole: number): PlayerState {
     respawns: 0,
     respawnRequested: false,
     springs: 0,
+    uses: 0,
+    inv: [],
     springAt: -1,
     saucedAt: -1,
     saucedUntil: 0,
@@ -350,7 +353,7 @@ export function stepMatch(m: MatchState, cmds: (PlayerCommand | undefined)[], ar
   for (const p of m.players) {
     if (!p) continue;
     const c = cmds[p.slot];
-    if (c) applyCommand(m, p, c, events);
+    if (c) applyCommand(m, p, c, ctx);
     if (!p.alive) {
       if (!frozen && t >= p.respawnAt && p.connected && (p.kind === 'bot' || m.settings.respawnMode === 'auto' || p.respawnRequested)) {
         const hole = pickHole(m, arena, rng, m.settings.respawnHole === 'same' ? p.hole : -1);
@@ -380,7 +383,7 @@ export function stepMatch(m: MatchState, cmds: (PlayerCommand | undefined)[], ar
   return events;
 }
 
-function applyCommand(m: MatchState, p: PlayerState, c: PlayerCommand, events: SimEvent[]) {
+function applyCommand(m: MatchState, p: PlayerState, c: PlayerCommand, ctx: StepContext) {
   if (Number.isFinite(c.yaw)) p.yaw = c.yaw;
   if (Number.isFinite(c.pitch)) p.pitch = clamp(c.pitch, -1.45, 1.45);
   p.wantStand = !!c.stand;
@@ -398,19 +401,26 @@ function applyCommand(m: MatchState, p: PlayerState, c: PlayerCommand, events: S
   if (newRespawns > 0 && newRespawns < 1000 && !p.alive) p.respawnRequested = true;
   const newSprings = (c.springs | 0) - p.springs;
   p.springs = c.springs | 0;
-  if (newSprings > 0 && newSprings < 1000) launchSpring(m, p, events);
+  if (newSprings > 0 && newSprings < 1000) launchSpring(m, p, ctx.events);
+  // "use power-up": a quick double press uses two (two homing rounds back to back)
+  const newUses = (c.uses | 0) - p.uses;
+  p.uses = c.uses | 0;
+  if (newUses > 0 && newUses < 1000 && c.useId && Object.hasOwn(POWERUPS, c.useId)) {
+    for (let i = 0; i < Math.min(2, newUses); i++) usePowerup(m, ctx, p, c.useId);
+  }
   p.trigger = !!c.trigger;
 }
 
-/** Spring Jump: one launch per pickup; must have landed (plus a short pause) first. */
-function launchSpring(m: MatchState, p: PlayerState, events: SimEvent[]) {
+/** Spring Jump: one launch per Spring Jump in the inventory; must have landed (plus a short pause) first. */
+function launchSpring(m: MatchState, p: PlayerState, events: SimEvent[]): boolean {
   const t = m.tick;
-  if (!p.alive || m.phase !== 'live' || !hasPowerup(p, 'spring', t)) return;
-  if (p.springAt >= 0 && t < p.springAt + SPRING_TICKS + SPRING_COOLDOWN) return;
+  if (!p.alive || m.phase !== 'live' || invCount(p, 'spring') <= 0) return false;
+  if (p.springAt >= 0 && t < p.springAt + SPRING_TICKS + SPRING_COOLDOWN) return false;
   p.springAt = t;
   p.exposure = 1;
-  p.powerups = p.powerups.filter((x) => x.id !== 'spring');
+  invTake(p, 'spring');
   events.push({ k: 'spring', t, p: p.slot });
+  return true;
 }
 
 function updateStance(m: MatchState, p: PlayerState, events: SimEvent[], frozen: boolean) {
@@ -1221,6 +1231,8 @@ function killPlayer(m: MatchState, ctx: StepContext, attacker: number, v: Player
   v.needles = [];
   v.beamUntil = 0;
   v.chargeStart = -1;
+  // whatever was in the inventory is lost
+  v.inv = [];
   v.respawnAt = t + Math.max(secToTicks(0.4), secToTicks(s.respawnSec));
   const medals: string[] = [];
   if (a && a !== v) {
@@ -1342,25 +1354,61 @@ function claimOrb(m: MatchState, ctx: StepContext, id: number, p: PlayerState) {
   m.orbs = m.orbs.filter((o) => o.id !== id);
   ctx.events.push({ k: 'orbPop', t: m.tick, id, p: p.slot });
   bumpMedal(m, ctx, p, 'orb');
-  if (p.alive) grantPowerup(m, ctx, p, orb.type);
+  if (p.alive) collectPowerup(m, ctx, p, orb.type);
 }
 
+/** A popped bubble's power-up goes into the inventory (two of each kind at most: a third is lost). */
+export function collectPowerup(m: MatchState, ctx: StepContext, p: PlayerState, id: PowerUpId) {
+  const added = invAdd(p, id);
+  ctx.events.push(added ? { k: 'got', t: m.tick, p: p.slot, id, n: invCount(p, id) } : { k: 'got', t: m.tick, p: p.slot, id, n: invCount(p, id), full: true });
+}
+
+/**
+ * Use one of a power-up from the inventory. Returns false (and keeps it) if it can't be used right now: none left, a
+ * Spring Jump still in the air, or the same one-shot weapon still in your hands.
+ */
+export function usePowerup(m: MatchState, ctx: StepContext, p: PlayerState, id: PowerUpId): boolean {
+  const t = m.tick;
+  const def = POWERUPS[id];
+  if (!def || !p.alive || m.phase !== 'live' || invCount(p, id) <= 0) return false;
+  if (def.held) return launchSpring(m, p, ctx.events);
+  if (def.oneShot && p.weapon === def.weapon && p.weaponUntil > t) return false;
+  invTake(p, id);
+  grantPowerup(m, ctx, p, id);
+  return true;
+}
+
+/**
+ * Switch a power-up on (a used one, or the test hooks). One that's already running lasts a full duration longer
+ * (use two in a row: twice as long); a weapon one replaces any other power-up weapon. Spring Jump launches.
+ */
 export function grantPowerup(m: MatchState, ctx: StepContext, p: PlayerState, id: PowerUpId) {
   const t = m.tick;
   const def = POWERUPS[id];
-  const until = def.held ? HELD_UNTIL : t + secToTicks(def.duration * m.settings.powerupDurationMult);
+  if (def.held) {
+    if (!invCount(p, id)) invAdd(p, id);
+    launchSpring(m, p, ctx.events);
+    return;
+  }
+  const dur = secToTicks(def.duration * m.settings.powerupDurationMult);
+  const cur = p.powerups.find((x) => x.id === id && x.until > t);
+  let until = cur ? cur.until + dur : t + dur;
   if (def.weapon) {
-    if (!p.weaponUntil) p.baseClip = p.clip;
-    p.powerups = p.powerups.filter((x) => !POWERUPS[x.id].weapon);
-    p.weapon = def.weapon;
-    p.weaponUntil = until;
-    p.clip = 0;
-    p.reloadUntil = 0;
-    p.chargeStart = -1;
-    p.beamUntil = 0;
-    p.burstLeft = 0;
-    p.spin = 0;
-    p.nextFireAt = t + 6;
+    if (cur && p.weapon === def.weapon && p.weaponUntil > t) p.weaponUntil = until;
+    else {
+      until = t + dur;
+      if (!p.weaponUntil) p.baseClip = p.clip;
+      p.powerups = p.powerups.filter((x) => !POWERUPS[x.id].weapon);
+      p.weapon = def.weapon;
+      p.weaponUntil = until;
+      p.clip = 0;
+      p.reloadUntil = 0;
+      p.chargeStart = -1;
+      p.beamUntil = 0;
+      p.burstLeft = 0;
+      p.spin = 0;
+      p.nextFireAt = t + 6;
+    }
   }
   if (id === 'overshield') p.overshield = 70;
   p.powerups = p.powerups.filter((x) => x.id !== id);

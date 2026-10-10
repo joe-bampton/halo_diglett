@@ -69,6 +69,11 @@ export class Hud {
   private zoomLabel!: HTMLElement;
   private reticleSvg!: SVGElement;
   private puKey = '';
+  private invKey = '';
+  /** how many of each kind the inventory showed last time (a count that went up pops in) */
+  private invHad = new Map<string, number>();
+  /** an inventory slot was tapped or clicked */
+  onInvPick: ((i: number) => void) | null = null;
   constructor(parent: HTMLElement) {
     const r = document.createElement('div');
     r.className = 'hud';
@@ -88,12 +93,13 @@ export class Hud {
       <div class="killfeed"></div>
       <div class="medals"></div>
       <div class="powerups"></div>
+      <div class="inv"></div>
       <div class="spectate"></div>
       <div class="score"></div>
       <div class="ammo"><div class="wname"></div><div class="count"></div><div class="pips"></div></div>`;
     parent.appendChild(r);
     this.root = r;
-    for (const k of ['vignette', 'flash', 'sauce', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'spectate', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
+    for (const k of ['vignette', 'flash', 'sauce', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'inv', 'spectate', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
       this.el[k] = r.querySelector(`.${k}`) as HTMLElement;
     }
     // the bits that change every frame, looked up once
@@ -103,6 +109,14 @@ export class Hud {
     this.chargeArc = r.querySelector('.charge circle')!;
     this.zoomLabel = r.querySelector('.scope .zl')!;
     this.reticleSvg = r.querySelector('.reticle svg')!;
+    // tap (or, without the pointer locked, click) a power-up in the inventory to pick it
+    this.el.inv!.addEventListener('pointerdown', (e) => {
+      const it = (e.target as HTMLElement).closest<HTMLElement>('[data-i]');
+      if (!it) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.onInvPick?.(Number(it.dataset.i));
+    });
   }
 
   /** Voice chat widget: my mic state + who is talking right now. `mic: null` hides it (offline). */
@@ -239,7 +253,32 @@ export class Hud {
     setTimeout(() => d.remove(), 2700);
   }
 
-  /** Power-up icons with their run-down bars: rebuilt only when the set changes, the bars just move. */
+  /**
+   * The power-up inventory at the bottom of the screen: the picked one big, with its name and the key that uses it
+   * (`keys`: null on touch, which has its own USE button). Rebuilt only when what's shown changes.
+   */
+  inventory(items: { id: PowerUpId; n: number }[], sel: PowerUpId | null, keys: { use: string; prev: string; next: string } | null) {
+    const root = this.el.inv!;
+    const key = `${items.map((x) => `${x.id}${x.n}`).join(',')}|${sel}|${keys ? keys.use : ''}`;
+    if (key === this.invKey) return;
+    this.invKey = key;
+    const icons = items
+      .map((it, i) => {
+        const d = POWERUPS[it.id];
+        const on = it.id === sel;
+        const fresh = it.n > (this.invHad.get(it.id) ?? 0);
+        return `<div class="it${on ? ' sel' : ''}${fresh ? ' new' : ''}" data-i="${i}" style="--pc:${hex(d.color)}" title="${esc(d.name)}"><div class="ic">${d.icon}</div>${it.n > 1 ? `<b class="n">×${it.n}</b>` : ''}${on && keys ? `<kbd>${esc(keys.use)}</kbd>` : ''}</div>`;
+      })
+      .join('');
+    this.invHad = new Map(items.map((it) => [it.id, it.n]));
+    const picked = sel ? POWERUPS[sel] : null;
+    const arrows = keys && items.length > 1;
+    root.innerHTML = items.length
+      ? `<div class="cap">${picked ? esc(picked.name) : ''}</div><div class="row">${arrows ? `<span class="arr">${esc(keys.prev)}</span>` : ''}${icons}${arrows ? `<span class="arr">${esc(keys.next)}</span>` : ''}</div>`
+      : '';
+  }
+
+  /** Power-ups running, with their run-down bars: rebuilt only when the set changes, the bars just move. */
   powerups(list: { id: PowerUpId; frac: number }[]) {
     const root = this.el.powerups!;
     const key = list.map((p) => p.id).join(',');
@@ -248,7 +287,7 @@ export class Hud {
       root.innerHTML = list
         .map((p) => {
           const d = POWERUPS[p.id];
-          return `<div class="pu${d.held ? ' held' : ''}" style="--pc:${hex(d.color)}"><div class="ic">${d.icon}</div><div class="t"></div></div>`;
+          return `<div class="pu" style="--pc:${hex(d.color)}"><div class="ic">${d.icon}</div><div class="t"></div></div>`;
         })
         .join('');
     }

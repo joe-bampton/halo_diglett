@@ -439,6 +439,9 @@ const clink: Gen = (sr) => {
   );
 };
 
+/** Picking another power-up in the inventory: a small two-step blip. */
+const invTick: Gen = (sr) => normalize(buf(sr, 0.07, (t) => Math.sin(TAU * (t < 0.03 ? 1500 : 2100) * t) * env(t, 0.001, 0.02)), 0.35);
+
 /** A plasma grenade sticking: a wet electric thunk, then a rising fizz until it goes off. */
 const plasmaStick: Gen = (sr) => {
   const l1 = lp(500, sr), h1 = hp(1800, sr);
@@ -494,6 +497,7 @@ export const SFX = {
   toss,
   clink,
   plasmaStick,
+  invTick,
 } satisfies Record<string, Gen>;
 
 export type SfxId = keyof typeof SFX;

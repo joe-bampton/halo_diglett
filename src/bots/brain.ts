@@ -3,7 +3,9 @@ import { angleDiff, clamp, dirFromYawPitch, dist, sub, yawPitchOf, type V3 } fro
 import type { Arena } from '../sim/arena';
 import { DT, FIRE_EXPOSURE, LOWER_TIME, RISE_TIME, TICK_RATE, secToTicks } from '../sim/constants';
 import { eyePos, isExposed, rayHitbox } from '../sim/hitbox';
-import { clipSize, hasPowerup, isCamo, playerHitbox } from '../sim/match';
+import { invCount } from '../sim/inventory';
+import { clipSize, isCamo, playerHitbox } from '../sim/match';
+import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import { sauceAimScale } from '../sim/sauce';
 import { inFlight, springLift } from '../sim/spring';
 import { orbPos } from '../sim/orbs';
@@ -93,6 +95,9 @@ export class BotBrain {
   private reloadedThisDuck = false;
   private spawnTick = -1;
   private springs = 0;
+  private uses = 0;
+  /** when to use each kind of power-up in the inventory (set when it first shows up there) */
+  private useAt = new Map<PowerUpId, number>();
   private springSeen = -1;
   private springWait = 0;
   private lastTargetAt = 0;
@@ -131,14 +136,16 @@ export class BotBrain {
     const me = m.players[this.slot]!;
     const t = m.tick;
     const pr = this.profile;
-    const cmd: PlayerCommand = { yaw: this.yaw, pitch: this.pitch, stand: false, trigger: false, presses: this.presses, reloads: this.reloads, respawns: 0, springs: this.springs, zoom: 0, vt: t };
+    const cmd: PlayerCommand = { yaw: this.yaw, pitch: this.pitch, stand: false, trigger: false, presses: this.presses, reloads: this.reloads, respawns: 0, springs: this.springs, uses: this.uses, zoom: 0, vt: t };
     if (!me.alive) {
       this.up = false;
       this.target = -1;
+      this.useAt.clear();
       return cmd;
     }
     this.maybeSpring(m, arena, me);
     cmd.springs = this.springs;
+    this.maybeUsePowerup(m, me, cmd);
     if (WEAPONS[me.weapon].fireKind === 'spray') return this.useSoaker(me, cmd);
     if (me.spawnTick !== this.spawnTick) {
       // fresh life: face the middle of the field, stay down for a moment
@@ -412,10 +419,41 @@ export class BotBrain {
     return cmd;
   }
 
-  /** Use a held Spring Jump (the sim only needs the launch counter; humans double-press Jump). */
+  /**
+   * Use what's in the inventory: the Super Soaker at once, buffs after a moment, power-up weapons once there's
+   * someone to use them on (or after a while anyway). Spring Jumps are maybeSpring's. One per tick at most.
+   */
+  private maybeUsePowerup(m: MatchState, me: PlayerState, cmd: PlayerCommand) {
+    const t = m.tick;
+    const jerry = this.profile.mode === 'jerry';
+    for (const id of this.useAt.keys()) if (!invCount(me, id)) this.useAt.delete(id);
+    for (const it of me.inv) {
+      const def = POWERUPS[it.id];
+      if (def.held) continue;
+      let at = this.useAt.get(it.id);
+      if (at === undefined) {
+        at = t + (jerry || it.id === 'sauce' ? 6 : secToTicks(this.rng.range(0.5, 3)));
+        this.useAt.set(it.id, at);
+      }
+      if (t < at) continue;
+      if (def.weapon) {
+        // one power-up weapon at a time; the others wait for a target (or a few seconds)
+        if (me.weaponUntil > t) continue;
+        if (it.id !== 'sauce' && !jerry && this.target < 0 && t < at + secToTicks(8)) continue;
+      }
+      this.uses++;
+      cmd.uses = this.uses;
+      cmd.useId = it.id;
+      // the next one of this kind (if any) after another pause
+      this.useAt.set(it.id, t + secToTicks(jerry ? 0.2 : this.rng.range(1, 4)));
+      return;
+    }
+  }
+
+  /** Use a Spring Jump from the inventory (the sim only needs the launch counter; humans press Use or double-press Jump). */
   private maybeSpring(m: MatchState, arena: Arena, me: PlayerState) {
     const t = m.tick;
-    if (!hasPowerup(me, 'spring', t) || inFlight(me.springAt, t)) {
+    if (invCount(me, 'spring') <= 0 || inFlight(me.springAt, t)) {
       this.springSeen = -1;
       return;
     }

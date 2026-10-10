@@ -3,8 +3,11 @@ import type { Settings } from '../sim/settings';
 import type { BotDifficulty, MatchPhase, PlayerCommand, RosterEntry, SimEvent } from '../sim/types';
 import type { WeaponId } from '../sim/weapons';
 
-/** Bumped whenever host and clients must run the same build (v3: 8 players, fast state channel, CH_EV; v4: thrown grenades). */
-export const PROTOCOL_VERSION = 4;
+/**
+ * Bumped whenever host and clients must run the same build (v3: 8 players, fast state channel, CH_EV; v4: thrown
+ * grenades; v5: power-up inventory, Poké Ball).
+ */
+export const PROTOCOL_VERSION = 5;
 export const BUILD_ID: string = (import.meta.env?.VITE_BUILD_ID as string | undefined) ?? 'dev';
 
 export interface SlotInfo {
@@ -111,7 +114,8 @@ export interface PrivateState {
   rs: number; // reload start tick
   w: number; // weapon index
   wu: number; // weapon override until
-  pu: [string, number][]; // power-ups (id, until tick)
+  pu: [string, number][]; // power-ups running (id, until tick)
+  inv: [string, number][]; // power-ups waiting to be used (id, how many)
   fs: number; // forced stand until
   ra: number; // respawn at
   ud: number; // underdog until

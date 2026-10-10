@@ -8,8 +8,6 @@ export const SPRING_V0 = Math.sqrt(2 * SPRING_G * SPRING_H);
 export const SPRING_TICKS = Math.round(((2 * SPRING_V0) / SPRING_G) * TICK_RATE);
 /** Pause after landing before another launch — longer than the lag-compensation window, so one launch tick covers any rewind. */
 export const SPRING_COOLDOWN = 30;
-/** `until` of a held power-up: never runs out on its own (a JSON-safe stand-in for Infinity). */
-export const HELD_UNTIL = 2 ** 30;
 
 /** Height above the hole `tick` ticks into a launch that started at `at` (fractional ticks are fine; -1 = none). */
 export function springLift(at: number, tick: number): number {

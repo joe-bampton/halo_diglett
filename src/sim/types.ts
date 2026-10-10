@@ -1,3 +1,4 @@
+import type { InvItem } from './inventory';
 import type { PowerUpId } from './powerups';
 import type { Settings } from './settings';
 import type { WeaponId } from './weapons';
@@ -26,6 +27,10 @@ export interface PlayerCommand {
   respawns: number;
   /** cumulative Spring Jump launches (double-press Jump) */
   springs: number;
+  /** cumulative "use power-up" presses… */
+  uses: number;
+  /** …of this one (what was picked in the inventory at the press) */
+  useId?: PowerUpId;
   zoom: number;
   /** host tick the client was rendering when it sampled this (lag compensation) */
   vt: number;
@@ -84,6 +89,9 @@ export interface PlayerState {
   /** pressed Jump while dead (manual respawn) */
   respawnRequested: boolean;
   springs: number;
+  uses: number;
+  /** power-ups collected and not used yet (lost on death) */
+  inv: InvItem[];
   /** tick of the current / last Spring Jump launch (-1 none) */
   springAt: number;
   /** Gerry Sauce: when it hit (-1 never) and when it's gone */
@@ -200,6 +208,9 @@ export type SimEvent =
   | { k: 'reload'; t: number; p: number }
   | { k: 'orb'; t: number; id: number; type: string; seed: number; spawn: number; expire: number }
   | { k: 'orbPop'; t: number; id: number; p: number }
+  /** a power-up went into `p`'s inventory (`n` of it now), or didn't fit (`full`: two already) */
+  | { k: 'got'; t: number; p: number; id: string; n: number; full?: boolean }
+  /** `p` used a power-up: its effect (or weapon) lasts until `until` */
   | { k: 'pu'; t: number; p: number; id: string; until: number }
   | { k: 'strike'; t: number; id: number; p: number; pos: Vec3T; at: number }
   | { k: 'lead'; t: number; p: number; prev: number }

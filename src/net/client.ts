@@ -1,6 +1,7 @@
 import { angleDiff, clamp } from '../shared/vec';
 import { LOWER_TIME, MAX_HUMANS, RISE_TIME, TICK_RATE } from '../sim/constants';
 import { inFlight } from '../sim/spring';
+import type { PowerUpId } from '../sim/powerups';
 import type { MatchPhase, PlayerCommand, RosterEntry, SimEvent } from '../sim/types';
 import { weaponByIndex, type WeaponId } from '../sim/weapons';
 import {
@@ -63,6 +64,9 @@ export interface LocalInput {
   reloads: number;
   respawns: number;
   springs: number;
+  /** cumulative "use power-up" presses, and what was picked in the inventory at the last one */
+  uses: number;
+  useId?: PowerUpId;
   zoom: number;
   pick?: WeaponId;
 }
@@ -99,7 +103,7 @@ export class ClientSession {
   events: SimEvent[] = [];
   latestTick = 0;
 
-  input: LocalInput = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, respawns: 0, springs: 0, zoom: 0 };
+  input: LocalInput = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, respawns: 0, springs: 0, uses: 0, zoom: 0 };
   myExposure = 0;
   /** host tick currently displayed for remote players */
   renderTick = 0;
@@ -410,7 +414,7 @@ export class ClientSession {
   private maybeSendInput(now: number) {
     if (this.state !== 'match') return;
     const i = this.input;
-    const key = `${i.stand}|${i.trigger}|${i.presses}|${i.reloads}|${i.respawns}|${i.springs}|${i.zoom}|${i.pick ?? ''}`;
+    const key = `${i.stand}|${i.trigger}|${i.presses}|${i.reloads}|${i.respawns}|${i.springs}|${i.uses}|${i.useId ?? ''}|${i.zoom}|${i.pick ?? ''}`;
     const edge = key !== this.lastKey;
     const interval = this.local ? 0 : 1000 / 30;
     if (!edge && now - this.lastSend < interval) return;
@@ -425,6 +429,8 @@ export class ClientSession {
       reloads: i.reloads,
       respawns: i.respawns,
       springs: i.springs,
+      uses: i.uses,
+      useId: i.useId,
       zoom: i.zoom,
       vt: Math.round(this.renderTick * 100) / 100,
       pick: i.pick,

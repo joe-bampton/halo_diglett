@@ -12,11 +12,12 @@ import { SPRING_TICKS, inFlight, springLift } from '../sim/spring';
 import { FIRE_EXPOSURE, HEAD_R, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
 import { raySphere } from '../sim/geom';
 import { bigHeadShift, drop, eyePos, hitboxOf, rayHitbox } from '../sim/hitbox';
+import { INV_MAX } from '../sim/inventory';
 import { orbPos, orbRadius } from '../sim/orbs';
 import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import type { Projectile, SimEvent, Vec3T } from '../sim/types';
 import { WEAPONS, hostDrawn, weaponByIndex, type WeaponId } from '../sim/weapons';
-import { setHtml, setStyle } from '../ui/dom';
+import { hex, setHtml, setStyle } from '../ui/dom';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
 import { Decals, FlashLights, Particles, Ribbons, Shockwaves } from './fx';
 import { loadDetailedModels } from './assets';
@@ -237,6 +238,11 @@ export class Game {
   private diedAt = 0;
   private diedAtMs = 0;
   private pred = { lastShot: -1e9, pending: false, pendingAt: -1e9, fresh: false, burst: 0, nextBurst: 0, localId: 0 };
+  /** the power-up picked in the inventory (Use fires it), and where it sits in the list */
+  private invSel: PowerUpId | null = null;
+  private invSelIdx = 0;
+  /** pickups this match (the first ones say how to use them) */
+  private pickups = 0;
   private chargeSound: SoundHandle | null = null;
   private lowShieldAt = 0;
   private prevShield = 70;
@@ -359,6 +365,7 @@ export class Game {
       fovScale: () => zoomSensitivity(this.camera.fov, this.input.opts.fov),
     });
     this.input.mountTouch(this.touchEl);
+    this.hud.onInvPick = (i) => this.input.invPick(i);
     this.applyDevice();
     if (new URLSearchParams(location.search).has('perf')) {
       this.perfEl = document.createElement('div');
@@ -721,7 +728,51 @@ export class Game {
 
   private canSpring(): boolean {
     const me = this.me;
-    return !!this.session.me?.al && this.hasPu('spring') && !!me && !inFlight(me.springAt, this.session.hostTick);
+    return !!this.session.me?.al && this.inventory().some(([id]) => id === 'spring') && !!me && !inFlight(me.springAt, this.session.hostTick);
+  }
+
+  /** Power-ups waiting to be used, in the order they were picked up (nothing while dead). */
+  private inventory(): [PowerUpId, number][] {
+    const me = this.session.me;
+    if (!me?.al || !Array.isArray(me.inv)) return [];
+    return me.inv.filter(([id]) => Object.hasOwn(POWERUPS, id)) as [PowerUpId, number][];
+  }
+
+  /**
+   * Inventory presses since the last frame, in order: switch the pick, or use it. A use goes out at once with what was
+   * picked at that moment (switching right after can't change which one it was).
+   */
+  private applyInventoryInput() {
+    const inv = this.inventory();
+    // keep the pick on something that's there: the next one along when the picked kind runs out
+    const at = this.invSel ? inv.findIndex(([id]) => id === this.invSel) : -1;
+    if (at >= 0) this.invSelIdx = at;
+    else {
+      this.invSelIdx = Math.max(0, Math.min(this.invSelIdx, inv.length - 1));
+      this.invSel = inv[this.invSelIdx]?.[0] ?? null;
+    }
+    for (const op of this.input.takeInvOps()) {
+      if (!inv.length) continue;
+      if (op.k === 'cycle' || op.k === 'pick') {
+        const i = op.k === 'cycle' ? (this.invSelIdx + op.d + inv.length) % inv.length : op.i;
+        if (i < 0 || i >= inv.length || inv[i]![0] === this.invSel) continue;
+        this.invSelIdx = i;
+        this.invSel = inv[i]![0];
+        audio.play('invTick', { gain: 0.5 });
+      } else if (this.invSel) {
+        const si = this.session.input;
+        si.uses = ++this.input.s.uses;
+        si.useId = this.invSel;
+        this.session.flushInput();
+      }
+    }
+  }
+
+  /** The keys that use / switch power-ups, for the HUD (none on touch: it has its own USE button). */
+  private invKeys(): { use: string; prev: string; next: string } | null {
+    const d = this.input.device;
+    if (d === 'touch') return null;
+    return d === 'pad' ? { use: 'RB', prev: '◀ D-pad', next: 'D-pad ▶' } : { use: 'Q', prev: '◀', next: '▶' };
   }
 
   private headPos(p: ViewPlayer, out = new THREE.Vector3()): THREE.Vector3 {
@@ -872,6 +923,7 @@ export class Game {
       inp.stand = false;
       inp.trigger = false;
     }
+    this.applyInventoryInput();
     if (inp.stand !== this.lastStand) {
       this.lastStand = inp.stand;
       if (s.me?.al) audio.play('rustle', { gain: 0.35, rate: inp.stand ? 1.2 : 0.9 });
@@ -1180,14 +1232,16 @@ export class Game {
           }
           break;
         }
+        case 'got':
+          if (e.p === mySlot) this.onPickup(e.id as PowerUpId, !!e.full);
+          break;
         case 'pu':
+          // used one: it's on now
           if (e.p === mySlot) {
             const def = POWERUPS[e.id as PowerUpId];
             if (def) {
-              audio.announce(def.announce);
               audio.play('powerup');
-              const key = this.input.device === 'pad' ? 'Ⓐ' : this.input.device === 'touch' ? 'STAND' : 'SPACE';
-              this.hud.message(def.id === 'spring' ? `${def.name} — double-tap ${key} to launch` : def.name, def.id === 'spring' ? 3500 : 2000);
+              this.hud.message(def.name, 1500);
             }
           }
           break;
@@ -1276,6 +1330,27 @@ export class Game {
         const fw = events.find((x) => x.k === 'fire' && x.p === cue.speaker);
         this.pitreLocalCue(cue, fw && fw.k === 'fire' ? fw.w : undefined);
       }
+    }
+  }
+
+  /** A popped bubble's power-up went into my inventory (or didn't: two of it already). */
+  private onPickup(id: PowerUpId, full: boolean) {
+    const def = POWERUPS[id];
+    if (!def) return;
+    if (full) {
+      audio.play('empty', { gain: 0.6 });
+      this.hud.message(`Already holding ${INV_MAX} × ${def.name}`, 1600);
+      return;
+    }
+    audio.announce(def.announce);
+    audio.play('powerup', { rate: 1.2 });
+    // the first pickups of a match say how it works
+    if (++this.pickups <= 2) {
+      const d = this.input.device;
+      const use = d === 'pad' ? 'RB' : d === 'touch' ? 'the USE button' : 'Q';
+      const sw = d === 'pad' ? 'D-pad' : d === 'touch' ? 'tap one' : '◀ ▶ / wheel';
+      const jump = d === 'pad' ? 'Ⓐ' : d === 'touch' ? 'STAND' : 'SPACE';
+      this.hud.message(id === 'spring' ? `${def.name} — ${use} to launch (or double-tap ${jump})` : `${def.name} — ${use} to use it · ${sw} to switch`, 3200);
     }
   }
 
@@ -2262,6 +2337,15 @@ export class Game {
         });
       if (me.ud > s.hostTick) pus.push({ id: 'camo', frac: (me.ud - s.hostTick) / (20 * TICK_RATE) });
       hud.powerups(pus);
+      // the inventory (and the touch USE button showing the picked one)
+      const inv = this.inventory();
+      hud.inventory(
+        inv.map(([id, n]) => ({ id, n })),
+        this.invSel,
+        this.invKeys(),
+      );
+      const sel = inv.find(([id]) => id === this.invSel);
+      this.input.setUseButton(sel ? { icon: POWERUPS[sel[0]].icon, color: hex(POWERUPS[sel[0]].color), n: sel[1] } : null);
       // respawn / warnings
       if (!me.al && s.phase !== 'ended') {
         const left = me.ra > 0 ? Math.max(0, Math.ceil((me.ra - s.hostTick) / TICK_RATE)) : 0;

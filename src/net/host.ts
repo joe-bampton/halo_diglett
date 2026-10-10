@@ -3,6 +3,7 @@ import { Rng } from '../shared/rng';
 import { Arena, HOLE_SPACING, layoutForSettings } from '../sim/arena';
 import { MAX_BOTS, MAX_HUMANS, MAX_SLOTS, TICK_RATE, secToTicks } from '../sim/constants';
 import { addPlayer, clipSize, createMatch, hasPowerup, isCamo, removePlayer, score, stepMatch, type StepContext } from '../sim/match';
+import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import { sanitizeSettings, DEFAULT_SETTINGS, type Settings } from '../sim/settings';
 import type { BotDifficulty, MatchState, PlayerCommand, PlayerState, RosterEntry, SimEvent } from '../sim/types';
 import { WEAPONS, weaponIndex } from '../sim/weapons';
@@ -326,9 +327,12 @@ export class HostSession {
       reloads: num(k.reloads) | 0,
       respawns: num(k.respawns) | 0,
       springs: num(k.springs) | 0,
+      uses: num(k.uses) | 0,
+      // (hasOwn: an inherited name like "constructor" is no power-up)
+      useId: typeof k.useId === 'string' && Object.hasOwn(POWERUPS, k.useId) ? (k.useId as PowerUpId) : undefined,
       zoom: num(k.zoom) | 0,
       vt: num(k.vt),
-      pick: typeof k.pick === 'string' && k.pick in WEAPONS ? k.pick : undefined,
+      pick: typeof k.pick === 'string' && Object.hasOwn(WEAPONS, k.pick) ? k.pick : undefined,
     };
   }
 
@@ -441,7 +445,7 @@ export class HostSession {
     }
     for (const s of this.lobby.slots) {
       const p = m.players[s.slot];
-      if (s.kind === 'human' && !s.connected && p) cmds[s.slot] = { yaw: p.yaw, pitch: p.pitch, stand: false, trigger: false, presses: p.presses, reloads: p.reloads, respawns: p.respawns, springs: p.springs, zoom: 0, vt: m.tick };
+      if (s.kind === 'human' && !s.connected && p) cmds[s.slot] = { yaw: p.yaw, pitch: p.pitch, stand: false, trigger: false, presses: p.presses, reloads: p.reloads, respawns: p.respawns, springs: p.springs, uses: p.uses, zoom: 0, vt: m.tick };
     }
     for (const [slot, b] of this.bots) if (m.players[slot]) cmds[slot] = b.think(m, this.arena);
     const events = stepMatch(m, cmds, this.arena);
@@ -632,6 +636,7 @@ export function privateState(m: MatchState, me: PlayerState): PrivateState {
     w: weaponIndex(me.weapon),
     wu: me.weaponUntil,
     pu: me.powerups.map((x) => [x.id, x.until]),
+    inv: me.inv.map((x) => [x.id, x.n]),
     fs: me.forcedStandUntil,
     ra: me.alive ? 0 : me.respawnAt,
     ud: me.underdogUntil,

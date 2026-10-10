@@ -1,6 +1,10 @@
 import { expect, test } from '@playwright/test';
 
-type HD = { state(): { phase: string; frames: number; me: { al: boolean } | null }; game: { input: { s: { yaw: number; stand: boolean }; device: string } } | null };
+type HD = {
+  state(): { phase: string; frames: number; me: { al: boolean; pu: [string, number][]; inv: [string, number][] } | null };
+  game: { input: { s: { yaw: number; stand: boolean }; device: string } } | null;
+  grant(id: string): void;
+};
 
 test('touch controls: stand toggle and drag-to-aim', async ({ page }) => {
   await page.goto('/?test=1&autostart=offline&bots=2&quality=low&respawn=auto&botdiff=jerry');
@@ -20,4 +24,12 @@ test('touch controls: stand toggle and drag-to-aim', async ({ page }) => {
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   const yaw1 = await page.evaluate(() => (window as unknown as { __hd: HD }).__hd.game!.input.s.yaw);
   expect(Math.abs(yaw1 - yaw0)).toBeGreaterThan(0.1);
+  // the USE button appears with something in the inventory, shows it, and uses it
+  await expect(page.locator('.tuse')).toBeHidden();
+  await page.evaluate(() => (window as unknown as { __hd: HD }).__hd.grant('camo'));
+  await expect(page.locator('.tuse')).toBeVisible();
+  await expect(page.locator('.tuse .ic')).toHaveText('◌');
+  await page.locator('.tuse').tap();
+  await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.state().me?.pu ?? []).some(([id]) => id === 'camo'), null, { timeout: 5000 });
+  await expect(page.locator('.tuse')).toBeHidden();
 });
