@@ -81,12 +81,12 @@ if (!webglOk()) {
       aimAt(slot: number) {
         return app.game?.aimAtSlot(slot) ?? false;
       },
-      /** kill a player (default: me) on the host — offline / host only */
-      kill(slot?: number) {
+      /** kill a player (default: me), by player `by` (default: nobody) with `weapon`, on the host — offline / host only */
+      kill(slot?: number, by = -1, weapon: WeaponId = 'sniper') {
         const target = slot ?? app.session?.slot ?? -1;
         app.host?.debugApply((m, ctx) => {
           const p = m.players[target];
-          if (p?.alive) damagePlayer(m, ctx, -1, p, 9999, { head: false, weapon: 'sniper', kind: 'direct' });
+          if (p?.alive) damagePlayer(m, ctx, by, p, 9999, { head: false, weapon, kind: 'direct' });
         });
       },
       /** put a power-up in someone's inventory (default: mine), as if they popped its bubble — offline / host only */

@@ -293,8 +293,10 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 .hud .ammo .pips i { width: 4px; height: 12px; background: var(--hud); box-shadow: 0 0 4px var(--hud); }
 .hud .ammo .pips i.off { background: rgba(159,231,255,0.18); box-shadow: none; }
 .hud .killfeed { position: absolute; left: max(16px, env(safe-area-inset-left)); bottom: calc(max(16px, env(safe-area-inset-bottom)) + 150px); display: flex; flex-direction: column-reverse; gap: 4px; font-size: 16px; font-weight: 600; text-shadow: 0 0 3px #000, 0 0 6px #000; color: #fff; max-width: 45vw; }
-.hud .killfeed div { animation: kfin 0.2s ease-out; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hud .killfeed div { animation: kfin 0.2s ease-out; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; align-self: flex-start; max-width: 100%; padding: 2px 10px; border-radius: 3px; background: rgba(6, 20, 34, 0.55); }
 .hud .killfeed .w { color: var(--muted); font-size: 13px; margin: 0 6px; }
+/* the weapon that did it: its white silhouette */
+.hud .killfeed .wi { height: 20px; width: auto; vertical-align: middle; filter: drop-shadow(0 0 2px #000); }
 @keyframes kfin { from { transform: translateX(-20px); opacity: 0; } }
 .hud .medals { position: absolute; left: max(16px, env(safe-area-inset-left)); bottom: calc(max(16px, env(safe-area-inset-bottom)) + 40px); display: flex; gap: 8px; align-items: flex-end; }
 .hud .medal { width: 58px; text-align: center; animation: medal 2.6s ease-out forwards; }
@@ -386,6 +388,20 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
 .tprev { right: calc(max(16px, env(safe-area-inset-right)) + 170px); bottom: calc(max(16px, env(safe-area-inset-bottom)) + 120px); }
 .tnext { right: calc(max(16px, env(safe-area-inset-right)) + 20px); bottom: calc(max(16px, env(safe-area-inset-bottom)) + 120px); }
 .tview { right: calc(max(16px, env(safe-area-inset-right)) + 95px); bottom: calc(max(16px, env(safe-area-inset-bottom)) + 200px); }
+/* dead in a Players-choose match: the gun to respawn with (between the respawn line and the spectator panel) */
+.hud .wpick { position: absolute; left: 50%; top: calc(30% + 92px); transform: translateX(-50%); display: none; flex-direction: column; align-items: center; gap: 6px; max-width: min(520px, 92vw); text-shadow: 0 0 3px #000, 0 0 6px #000; }
+.hud .wpick.on { display: flex; }
+.hud .wpick .lbl { font-size: 12px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--hud-dim); }
+.hud .wpick .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.hud .wpick .wc { position: relative; pointer-events: auto; touch-action: none; cursor: pointer; width: 92px; padding: 6px 4px 4px; display: flex; flex-direction: column; align-items: center; gap: 3px; font: inherit; color: #fff; background: rgba(6, 20, 34, 0.6); border: 1px solid var(--hud-dim); border-radius: 4px; opacity: 0.72; }
+.hud .wpick .wc img { width: 80px; height: 32px; object-fit: contain; filter: drop-shadow(0 0 2px #000); }
+.hud .wpick .wc .sh { height: 32px; line-height: 32px; font-size: 15px; font-weight: 700; letter-spacing: 0.1em; color: var(--hud); }
+.hud .wpick .wc .nm { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.hud .wpick .wc.sel { opacity: 1; border-color: var(--hud); background: rgba(30, 90, 140, 0.6); box-shadow: 0 0 12px rgba(80, 200, 255, 0.7), inset 0 0 10px rgba(80, 200, 255, 0.35); }
+.hud .wpick .wc kbd { position: absolute; left: -6px; top: -6px; font: 700 11px/15px var(--font); padding: 0 4px; border-radius: 3px; background: rgba(8, 24, 40, 0.9); border: 1px solid var(--hud); color: var(--hud); text-shadow: none; }
+.hud .wpick .hint { font-size: 12px; color: var(--hud-dim); }
+@media (max-height: 560px) { .hud .wpick { top: calc(30% + 70px); } .hud .wpick .wc { width: 74px; } .hud .wpick .wc img { width: 64px; height: 24px; } .hud .wpick .wc .sh { height: 24px; line-height: 24px; } }
+@media (pointer: coarse) { .hud .wpick { top: auto; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 6px); max-width: min(440px, calc(100vw - 320px)); } .hud .wpick .wc { width: 66px; } .hud .wpick .wc img { width: 56px; height: 22px; } .hud .wpick .wc .sh { height: 22px; line-height: 22px; font-size: 13px; } .hud .wpick .wc .nm { font-size: 10px; } }
 @media (pointer: coarse) { .hud .spectate { bottom: auto; top: calc(max(14px, env(safe-area-inset-top)) + 64px); } }
 
 /* pause menu */
@@ -420,6 +436,7 @@ input[type='checkbox'] { width: 20px; height: 20px; accent-color: var(--accent);
   .hud .ammo .count { font-size: 34px; }
   .hud .score { width: 170px; bottom: calc(max(16px, env(safe-area-inset-bottom)) + 70px); }
   .hud .killfeed { font-size: 13px; bottom: calc(max(16px, env(safe-area-inset-bottom)) + 130px); }
+  .hud .killfeed .wi { height: 15px; }
   .hud .medal { width: 46px; } .hud .medal .ico { width: 36px; height: 36px; font-size: 17px; }
 }
 @media (pointer: coarse) {

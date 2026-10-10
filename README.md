@@ -119,6 +119,7 @@ In the lobby, **⚙ Settings** opens the match settings. They're on five tabs:
 
 **Weapons**
 - Weapon mode: everyone gets the same weapon, players choose, random every life, or **Gun Game** (each kill upgrades your weapon)
+- Allowed weapons (Players choose / Random every life): tap each weapon to allow or ban it, or use *All* / *None*. With **Players choose**, dead players pick the weapon they'll respawn with from a row of weapon cards. It starts on the weapon they used last. Use the number keys or ↑ ↓, the D-pad, or tap a card.
 - Available weapons:
 
 | Weapon | What it does |

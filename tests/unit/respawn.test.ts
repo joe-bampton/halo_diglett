@@ -81,3 +81,45 @@ describe('manual respawn (press Jump)', () => {
     expect(sanitizeSettings({ respawnMode: 'bogus' }).respawnMode).toBe('manual');
   });
 });
+
+describe('Players choose: picking the gun to respawn with', () => {
+  const choice = { weaponMode: 'choice' as const, respawnMode: 'manual' as const, respawnSec: 1, allowedWeapons: ['sniper' as const, 'br' as const, 'rpg' as const] };
+
+  it('a pick made while dead is the gun you respawn with', () => {
+    const m = makeMatch(2, choice);
+    const cmds = [cmd(), cmd()];
+    run(m, m.liveAt + 5, cmds);
+    const p = m.players[1]!;
+    expect(p.weapon).toBe('sniper');
+    kill(m, 0, 1);
+    cmds[1] = cmd({ pick: 'rpg' });
+    run(m, 5, cmds);
+    expect(p.alive).toBe(false);
+    cmds[1] = cmd({ pick: 'rpg', respawns: 1 });
+    run(m, secToTicks(1.1), cmds);
+    expect(p.alive).toBe(true);
+    expect(p.weapon).toBe('rpg');
+  });
+
+  it('keeps the last pick for the next life without asking again', () => {
+    const m = makeMatch(2, choice);
+    const cmds = [cmd(), cmd({ pick: 'br' })];
+    run(m, m.liveAt + 5, cmds);
+    kill(m, 0, 1);
+    cmds[1] = cmd({ respawns: 1 });
+    run(m, secToTicks(1.1), cmds);
+    expect(m.players[1]!.alive).toBe(true);
+    expect(m.players[1]!.weapon).toBe('br');
+  });
+
+  it('a gun that is not allowed falls back to the first allowed one', () => {
+    const m = makeMatch(2, choice);
+    const cmds = [cmd(), cmd()];
+    run(m, m.liveAt + 5, cmds);
+    kill(m, 0, 1);
+    cmds[1] = cmd({ pick: 'needler', respawns: 1 });
+    run(m, secToTicks(1.1), cmds);
+    expect(m.players[1]!.alive).toBe(true);
+    expect(m.players[1]!.weapon).toBe('sniper');
+  });
+});

@@ -147,3 +147,32 @@ test('lobby and settings window fit a phone screen', async ({ page }) => {
   expect(m!.width).toBeGreaterThan(385);
   expect(errors).toEqual([]);
 });
+
+test('Players choose: the host allows or bans each weapon (All / None, never fewer than one)', async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto('/?test=1');
+  await page.getByRole('button', { name: /Play vs bots/ }).click();
+  await page.locator('.open-settings').click();
+  const modal = page.locator('.settings-modal');
+  await modal.locator('select[data-key=weaponMode]').selectOption('choice');
+  const chips = modal.locator('.chip[data-key=allowedWeapons]');
+  await expect(chips).toHaveCount(10);
+  await expect(modal.locator('.chip[data-key=allowedWeapons].on')).toHaveCount(10);
+  // None keeps just the first one; it can't be switched off
+  await modal.locator('[data-bulk=allowedWeapons][data-all="0"]').click();
+  await expect(modal.locator('.chip[data-key=allowedWeapons].on')).toHaveCount(1);
+  await modal.locator('.chip[data-key=allowedWeapons][data-v=sniper]').click();
+  await expect(modal.locator('.chip[data-key=allowedWeapons].on')).toHaveCount(1);
+  // tap to add some back
+  await modal.locator('.chip[data-key=allowedWeapons][data-v=rpg]').click();
+  await modal.locator('.chip[data-key=allowedWeapons][data-v=needler]').click();
+  await expect(modal.locator('.chip[data-key=allowedWeapons].on')).toHaveCount(3);
+  expect(await page.evaluate(() => (window as unknown as { __hd: HD }).__hd.host!.lobby.settings.allowedWeapons)).toEqual(['sniper', 'rpg', 'needler']);
+  // the lobby's weapon list follows
+  await modal.locator('.done').click();
+  await expect(page.locator('.mecard select.pick option')).toHaveCount(3);
+  await page.locator('.open-settings').click();
+  await modal.locator('[data-bulk=allowedWeapons][data-all="1"]').click();
+  await expect(modal.locator('.chip[data-key=allowedWeapons].on')).toHaveCount(10);
+  expect(errors).toEqual([]);
+});

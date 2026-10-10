@@ -64,7 +64,13 @@ export function renderSettings(root: HTMLElement, settings: Settings, editable: 
     root.querySelectorAll<HTMLButtonElement>('[data-bulk]').forEach((b) =>
       b.addEventListener('click', () => {
         const f = SETTINGS_SCHEMA.find((x) => x.key === b.dataset.bulk)!;
-        if (f.kind === 'multi') set(f.key, b.dataset.all === '1' ? f.options.map((o) => o.value) : []);
+        if (f.kind !== 'multi') return;
+        if (b.dataset.all === '1') return set(f.key, f.options.map((o) => o.value));
+        // None, down to the fewest allowed: keep the first ones that are on (or the first ones there are)
+        const min = f.minCount ?? 0;
+        const cur = s[f.key] as string[];
+        const keep = f.options.map((o) => o.value).filter((v) => cur.includes(v));
+        set(f.key, (keep.length >= min ? keep : f.options.map((o) => o.value)).slice(0, min));
       }),
     );
     root.querySelectorAll<HTMLButtonElement>('.chip[data-key]').forEach((chip) =>
@@ -73,6 +79,9 @@ export function renderSettings(root: HTMLElement, settings: Settings, editable: 
         const v = chip.dataset.v!;
         const cur = [...(s[key] as string[])];
         const i = cur.indexOf(v);
+        const f = SETTINGS_SCHEMA.find((x) => x.key === key)!;
+        // the last one(s) can't be switched off (the list would snap back to everything)
+        if (i >= 0 && f.kind === 'multi' && cur.length <= (f.minCount ?? 0)) return;
         if (i >= 0) cur.splice(i, 1);
         else cur.push(v);
         set(key, cur);

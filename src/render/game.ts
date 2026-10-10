@@ -21,6 +21,7 @@ import type { Projectile, SimEvent, Vec3T } from '../sim/types';
 import { WEAPONS, firesFromDuck, hostDrawn, weaponByIndex, type WeaponId } from '../sim/weapons';
 import { hex, setHtml, setStyle } from '../ui/dom';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
+import { lobbyWeapon } from '../ui/settingsSummary';
 import { Decals, FlashLights, Particles, Ribbons, Shockwaves } from './fx';
 import { loadDetailedModels } from './assets';
 import { CAN_H, CAN_SCALE, GLB, SHARED, buildBallInterior, buildCan, buildOrb, disposeTree, setCatCostume, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
@@ -29,6 +30,7 @@ import type { PostFx } from './post';
 import { DynRes } from './dynres';
 import { MAX_CATCHUP, newTrack, stepTrack, trackPos, type ProjTrack, type TargetTest } from './projtrack';
 import { QUALITY, type QualityPreset } from './quality';
+import { prepareWeaponIcons } from './weaponIcons';
 import { Grass, buildFence, buildFlowers, buildHoles, buildSky, buildTerrain, buildTrees } from './world';
 
 interface SpartanView {
@@ -384,6 +386,9 @@ export class Game {
     });
     this.input.mountTouch(this.touchEl);
     this.hud.onInvPick = (i) => this.input.invPick(i);
+    this.hud.onWeaponPick = (w) => this.pickWeapon(w);
+    // the kill feed's and the weapon picker's gun silhouettes
+    prepareWeaponIcons();
     this.applyDevice();
     if (new URLSearchParams(location.search).has('perf')) {
       this.perfEl = document.createElement('div');
@@ -819,6 +824,50 @@ export class Game {
     }
   }
 
+  /** Dead in a Players-choose match (with more than one gun allowed): the guns to respawn with. Else none. */
+  private respawnChoices(): readonly WeaponId[] {
+    const s = this.session;
+    const settings = s.start?.settings;
+    if (!settings || settings.weaponMode !== 'choice' || settings.allowedWeapons.length < 2) return [];
+    if (s.state !== 'match' || s.phase === 'ended' || !s.me || s.me.al) return [];
+    return settings.allowedWeapons;
+  }
+
+  /** The gun we'll respawn with: our pick while it's allowed, else the first allowed one (as the host decides). */
+  private respawnWeapon(): WeaponId {
+    const s = this.session;
+    return lobbyWeapon(s.start!.settings, s.slot, s.input.pick);
+  }
+
+  /** Weapon picker presses since the last frame (number keys, ↑ ↓, the D-pad), in order. */
+  private applyWeaponPickInput() {
+    const ops = this.input.takeWeaponOps();
+    const list = this.respawnChoices();
+    if (!list.length) return;
+    for (const op of ops) {
+      const i = op.k === 'cycle' ? (list.indexOf(this.respawnWeapon()) + op.d + list.length) % list.length : op.i;
+      if (i >= 0 && i < list.length) this.pickWeapon(list[i]!);
+    }
+  }
+
+  /** Respawn with this gun (and the next match starts with it too, like a pick in the lobby). */
+  private pickWeapon(w: WeaponId) {
+    const s = this.session;
+    if (!this.respawnChoices().includes(w) || w === this.respawnWeapon()) return;
+    s.input.pick = w;
+    s.flushInput();
+    s.sendMe({ pick: w });
+    audio.play('invTick', { gain: 0.5 });
+  }
+
+  private updateWeaponPicker() {
+    const list = this.respawnChoices();
+    if (!list.length) return this.hud.weaponPicker(null);
+    const dev = this.input.device;
+    const hint = dev === 'pad' ? '◀ D-pad ▶ to choose' : dev === 'touch' ? 'Tap a weapon' : `${list.length > 9 ? '1–0' : `1–${list.length}`} or ↑ ↓ to choose`;
+    this.hud.weaponPicker({ items: list.map((id, i) => ({ id, key: dev === 'kbm' && i < 10 ? String((i + 1) % 10) : '' })), sel: this.respawnWeapon(), hint });
+  }
+
   /** The keys that use / switch power-ups, for the HUD (none on touch: it has its own USE button). */
   private invKeys(): { use: string; prev: string; next: string } | null {
     const d = this.input.device;
@@ -990,6 +1039,7 @@ export class Game {
       inp.trigger = false;
     }
     this.applyInventoryInput();
+    this.applyWeaponPickInput();
     if (inp.stand !== this.lastStand) {
       this.lastStand = inp.stand;
       if (s.me?.al) audio.play('rustle', { gain: 0.35, rate: inp.stand ? 1.2 : 0.9 });
@@ -1395,6 +1445,7 @@ export class Game {
           audio.announce(POWERUPS.sauce.announce);
           if (e.p === mySlot) this.hud.message('Everyone gets sauced!', 2200);
           else this.hud.message('Gerry Sauce incoming!', 1600, 'warn');
+          this.hud.feedLine(s.players[e.p] ?? null, 'sprayed the map with Gerry Sauce', null, '', 'soaker');
           break;
         }
         case 'near':
@@ -1468,7 +1519,7 @@ export class Game {
       this.pred.pendingAt = -1e9;
     }
     if (v === s.slot) this.input.s.zoom = 0;
-    this.hud.feedLine(a, '◓ caught', b);
+    this.hud.feedLine(a, 'caught', b, '', 'pokeball');
   }
 
   /** …threw them on, into `hole`. */
@@ -1489,7 +1540,7 @@ export class Game {
       this.hud.message(there.length ? `Thrown in with ${there.map((q) => q.name).join(' & ')}!` : 'Thrown into a hole!', 2000, 'warn');
       this.input.s.pitch = 0;
     } else if (by === s.slot) this.hud.message(`Into ${desc}!`, 1600);
-    this.hud.feedLine(a, '◓ threw', b, `into ${desc === 'your hole' ? `${a?.name ?? 'their'}’s hole` : desc}`);
+    this.hud.feedLine(a, 'threw', b, `into ${desc === 'your hole' ? `${a?.name ?? 'their'}’s hole` : desc}`, 'pokeball');
   }
 
   /** …or didn't in time (or was killed): `v` broke free, back in their own hole. */
@@ -2677,6 +2728,7 @@ export class Game {
       hud.sub('All holes are taken — you’ll join when one frees up');
     }
     this.updateSpectateHud();
+    this.updateWeaponPicker();
     // timer
     let timer = '';
     if (settings.timeLimitMin > 0 && s.start) {

@@ -117,7 +117,7 @@ export const SETTINGS_SCHEMA: Field[] = [
     ],
   },
   { key: 'weapon', label: 'Weapon', group: 'Weapons', kind: 'enum', options: weaponOpts, visibleIf: (s) => s.weaponMode === 'fixed' },
-  { key: 'allowedWeapons', label: 'Allowed weapons', group: 'Weapons', kind: 'multi', options: weaponOpts, minCount: 1, visibleIf: (s) => s.weaponMode === 'choice' || s.weaponMode === 'randomLife' },
+  { key: 'allowedWeapons', label: 'Allowed weapons', group: 'Weapons', kind: 'multi', options: weaponOpts, minCount: 1, bulk: true, help: 'Tap to allow or ban each weapon. Players choose: everyone picks from these each time they respawn.', visibleIf: (s) => s.weaponMode === 'choice' || s.weaponMode === 'randomLife' },
   { key: 'gunGameOrder', label: 'Gun Game order (1 kill per level)', group: 'Weapons', kind: 'multi', options: weaponOpts, minCount: 2, ordered: true, visibleIf: (s) => s.weaponMode === 'gunGame' },
   { key: 'damageMult', label: 'Damage', group: 'Damage', kind: 'number', min: 0.25, max: 4, step: 0.25, unit: '×' },
   { key: 'headshotsOnly', label: 'Headshots only', group: 'Damage', kind: 'bool', help: 'Body shots do nothing.' },

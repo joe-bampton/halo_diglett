@@ -1,6 +1,7 @@
 import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import { WEAPONS, type WeaponId } from '../sim/weapons';
 import { SAUCE } from '../render/palette';
+import { weaponIcon } from '../render/weaponIcons';
 import { esc, hex, setHtml, setStyle, setText } from './dom';
 
 /** 3 decimals: enough for a bar on screen, and the same value isn't rewritten every frame */
@@ -75,6 +76,8 @@ export class Hud {
   private invHad = new Map<string, number>();
   /** an inventory slot was tapped or clicked */
   onInvPick: ((i: number) => void) | null = null;
+  /** a gun in the respawn weapon picker was tapped or clicked */
+  onWeaponPick: ((w: WeaponId) => void) | null = null;
   constructor(parent: HTMLElement) {
     const r = document.createElement('div');
     r.className = 'hud';
@@ -97,11 +100,12 @@ export class Hud {
       <div class="powerups"></div>
       <div class="inv"></div>
       <div class="spectate"></div>
+      <div class="wpick"></div>
       <div class="score"></div>
       <div class="ammo"><div class="wname"></div><div class="count"></div><div class="pips"></div></div>`;
     parent.appendChild(r);
     this.root = r;
-    for (const k of ['vignette', 'flash', 'sauce', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'caught', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'inv', 'spectate', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
+    for (const k of ['vignette', 'flash', 'sauce', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'caught', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'inv', 'spectate', 'wpick', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
       this.el[k] = r.querySelector(`.${k}`) as HTMLElement;
     }
     // the bits that change every frame, looked up once
@@ -118,6 +122,13 @@ export class Hud {
       e.preventDefault();
       e.stopPropagation();
       this.onInvPick?.(Number(it.dataset.i));
+    });
+    this.el.wpick!.addEventListener('pointerdown', (e) => {
+      const c = (e.target as HTMLElement).closest<HTMLElement>('[data-w]');
+      if (!c) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.onWeaponPick?.(c.dataset.w as WeaponId);
     });
   }
 
@@ -238,16 +249,42 @@ export class Hud {
   }
 
   killLine(killer: { name: string; color: number } | null, victim: { name: string; color: number }, weapon: WeaponId, head: boolean) {
-    const w = `<span class="w">[${esc(WEAPONS[weapon].short)}${head ? ' ⊕' : ''}]</span>`;
-    if (!killer || killer.name === victim.name) this.killfeed(`<span style="color:${hex(victim.color)}">${esc(victim.name)}</span> <span class="w">committed suicide</span>`);
-    else this.killfeed(`<span style="color:${hex(killer.color)}">${esc(killer.name)}</span>${w}<span style="color:${hex(victim.color)}">${esc(victim.name)}</span>`);
+    const w = weaponTag(weapon, head);
+    if (!killer || killer.name === victim.name) this.killfeed(`${w}${who(victim)} <span class="w">committed suicide</span>`);
+    else this.killfeed(`${who(killer)}${w}${who(victim)}`);
   }
 
-  /** A kill-feed line that isn't a kill (Poké Ball catches, throws, escapes): who, what, whom, and where. */
-  feedLine(a: { name: string; color: number } | null, what: string, b: { name: string; color: number } | null, tail = '') {
-    const who = (p: { name: string; color: number } | null) => (p ? `<span style="color:${hex(p.color)}">${esc(p.name)}</span>` : '');
-    this.killfeed(`${who(a)} <span class="w">${esc(what)}</span> ${who(b)}${tail ? ` <span class="w">${esc(tail)}</span>` : ''}`);
+  /**
+   * A kill-feed line that isn't a kill (Poké Ball catches, throws, escapes, a Gerry Sauce spray): who, what, whom,
+   * and where, with the icon of the weapon that did it after who.
+   */
+  feedLine(a: { name: string; color: number } | null, what: string, b: { name: string; color: number } | null, tail = '', weapon?: WeaponId) {
+    this.killfeed(`${who(a)}${weapon ? weaponTag(weapon, false) : ' '}<span class="w">${esc(what)}</span> ${who(b)}${tail ? ` <span class="w">${esc(tail)}</span>` : ''}`);
   }
+
+  /**
+   * Dead in a Players-choose match: the guns to respawn with, the picked one lit up (null hides it). Rebuilt only
+   * when what's shown changes.
+   */
+  weaponPicker(info: { items: { id: WeaponId; key: string }[]; sel: WeaponId; hint: string } | null) {
+    const root = this.el.wpick!;
+    // (the icons arrive a moment after the match starts: redraw once they do)
+    const key = info ? `${info.items.map((it) => `${it.id}${it.key}${weaponIcon(it.id) ? 1 : 0}`).join(',')}|${info.sel}|${info.hint}` : '';
+    if (key === this.pickKey) return;
+    this.pickKey = key;
+    root.classList.toggle('on', !!info);
+    if (!info) return void (root.innerHTML = '');
+    const cards = info.items
+      .map((it) => {
+        const def = WEAPONS[it.id];
+        const icon = weaponIcon(it.id);
+        const pic = icon ? `<img alt="" src="${icon}">` : `<span class="sh">${esc(def.short)}</span>`;
+        return `<button type="button" class="wc${it.id === info.sel ? ' sel' : ''}" data-w="${it.id}" aria-pressed="${it.id === info.sel}" title="${esc(def.name)}">${it.key ? `<kbd>${esc(it.key)}</kbd>` : ''}${pic}<span class="nm">${esc(def.name)}</span></button>`;
+      })
+      .join('');
+    root.innerHTML = `<div class="lbl">Respawn with</div><div class="row">${cards}</div>${info.hint ? `<div class="hint">${esc(info.hint)}</div>` : ''}`;
+  }
+  private pickKey = '';
 
   /**
    * Shut inside a Poké Ball: who caught you, and how long until you break free (`left` < 0: thrown on, flying).
@@ -397,6 +434,16 @@ export class Hud {
       .join('');
     setHtml(this.el.score!, html);
   }
+}
+
+const who = (p: { name: string; color: number } | null) => (p ? `<span style="color:${hex(p.color)}">${esc(p.name)}</span>` : '');
+
+/** The weapon in a kill-feed line: its silhouette (its short name until that's drawn, or without WebGL), ⊕ for a headshot. */
+function weaponTag(weapon: WeaponId, head: boolean): string {
+  const def = WEAPONS[weapon];
+  const icon = weaponIcon(weapon);
+  const pic = icon ? `<img class="wi" src="${icon}" alt="${esc(def.short)}" title="${esc(def.name)}">` : `[${esc(def.short)}]`;
+  return `<span class="w">${pic}${head ? ' ⊕' : ''}</span>`;
 }
 
 /** A fresh, random set of custard blobs (with drips) covering the screen. */

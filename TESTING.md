@@ -34,7 +34,7 @@
 | `quality=low` / `medium` / `high` / `ultra` | graphics preset |
 | `perf` | FPS and draw-call counter in the bottom-left, plus the snapshot buffer and stalls (`st`) |
 | `fastnet=0` | online: everything over the reliable channel (the low-latency channel off, to compare) |
-| `test` | test hooks in the browser console: `__hd.grant('spring')` (into your inventory), `__hd.grant('sauce', 1)` (bot 1 gets the Super Soaker, and uses it), `__hd.activate('homing')` (switched on straight away), `__hd.pokeball(1)` (bot 1's Poké Ball catches you), `__hd.kill()` |
+| `test` | test hooks in the browser console: `__hd.grant('spring')` (into your inventory), `__hd.grant('sauce', 1)` (bot 1 gets the Super Soaker, and uses it), `__hd.activate('homing')` (switched on straight away), `__hd.pokeball(1)` (bot 1's Poké Ball catches you), `__hd.kill()` (you; `__hd.kill(2, 0, 'rpg')`: you kill bot 2 with a rocket) |
 
 The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together with `autostart=offline`.
 
@@ -94,7 +94,7 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] Shield bar drains, then recharges after about 4 s; low-shield beeps
 - [ ] Staying ducked about 8 s forces you up ("Pop up in…" warning)
 - [ ] Dying shows the death cam, then you spectate (see below); you respawn in a hole when you press Space
-- [ ] Kill feed, medals (Headshot, Double Kill…) and announcer voice work
+- [ ] Kill feed (bottom left): *Killer [weapon silhouette] Victim*, ⊕ for headshots, plus *X [soaker] sprayed the map with Gerry Sauce* and the Poké Ball lines; medals (Headshot, Double Kill…) and announcer voice work
 - [ ] **Tab** shows the scoreboard; **Esc** pauses (offline really pauses)
 - [ ] Match ends at the score limit → results screen → Play again / Back to lobby
 
@@ -107,6 +107,7 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] Spectating never moves your own aim or fires
 - [ ] ⚙ Settings → Rules → Respawn → *Automatically* brings back the old automatic respawn
 - [ ] Controller: A respawns, RB/LB switch, Y toggles the view, triggers zoom. Phone: ◀ ▶ 👁 buttons, drag, pinch, RESPAWN
+- [ ] Players choose (`mode=choice`): while dead, a "Respawn with" row of weapon cards. It starts on the weapon you last used. **1–0** / **↑ ↓** (D-pad on a controller, tap on a phone) picks one, and you respawn with it
 
 **Bot tiers**
 - [ ] `botdiff=jerry`: Jerry bots pop up, spray the sky yelling "Suppressing fire!" (speech bubble too), and never hurt you

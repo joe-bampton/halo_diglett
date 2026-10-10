@@ -19,6 +19,8 @@ export interface InputState {
 
 /** Inventory actions, in the order they were pressed: pick the next/previous power-up, pick slot `i`, use the picked one. */
 export type InvOp = { k: 'cycle'; d: 1 | -1 } | { k: 'pick'; i: number } | { k: 'use' };
+/** Respawn weapon picker actions (while dead, Players choose): the next/previous gun, or gun `i`. */
+export type WeaponOp = { k: 'cycle'; d: 1 | -1 } | { k: 'pick'; i: number };
 
 /** Two presses within `windowMs` make a double-press (the next press starts over). */
 export class DoubleTap {
@@ -131,6 +133,7 @@ export class InputManager {
   private specCycle = 0;
   private specToggles = 0;
   private invOps: InvOp[] = [];
+  private weaponOps: WeaponOp[] = [];
   /** mouse wheel: scrolled distance not yet turned into a step, and when the last step was */
   private wheelAcc = 0;
   private wheelAt = 0;
@@ -226,6 +229,17 @@ export class InputManager {
     return r;
   }
 
+  /** Weapon picker actions since the last call, in order. */
+  takeWeaponOps(): WeaponOp[] {
+    const r = this.weaponOps;
+    this.weaponOps = [];
+    return r;
+  }
+
+  private weaponOp(op: WeaponOp) {
+    if (this._mode === 'spectate' && !this._suspended) this.weaponOps.push(op);
+  }
+
   invCycle(d: 1 | -1) {
     if (this._mode === 'play') this.invOps.push({ k: 'cycle', d });
   }
@@ -312,8 +326,12 @@ export class InputManager {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       this.setDevice('kbm');
-      if (/^Digit[1-9]$/.test(e.code)) {
-        if (!e.repeat) this.invPick(Number(e.code.slice(5)) - 1);
+      if (/^Digit[0-9]$/.test(e.code)) {
+        if (e.repeat) return;
+        // (0 is the 10th weapon in the respawn picker)
+        const n = Number(e.code.slice(5));
+        if (this._mode === 'spectate') this.weaponOp({ k: 'pick', i: n === 0 ? 9 : n - 1 });
+        else if (n > 0) this.invPick(n - 1);
         return;
       }
       switch (e.code) {
@@ -344,6 +362,12 @@ export class InputManager {
           if (e.repeat) break;
           if (this._mode === 'spectate') this.specCycle++;
           else this.cycleZoom();
+          break;
+        case 'ArrowUp':
+        case 'ArrowDown':
+          if (this._mode !== 'spectate') break;
+          e.preventDefault();
+          if (!e.repeat) this.weaponOp({ k: 'cycle', d: e.code === 'ArrowDown' ? 1 : -1 });
           break;
         case 'ArrowRight':
         case 'ArrowLeft':
@@ -581,6 +605,9 @@ export class InputManager {
       if (edge(5)) this.specCycle++;
       if (edge(4)) this.specCycle--;
       if (edge(3)) this.specToggles++;
+      // the D-pad picks the gun to respawn with
+      if (edge(14)) this.weaponOp({ k: 'cycle', d: -1 });
+      if (edge(15)) this.weaponOp({ k: 'cycle', d: 1 });
       const zoom = (gp.buttons[6]?.value ?? 0) - (gp.buttons[7]?.value ?? 0);
       if (Math.abs(zoom) > 0.1) this.specZoom(Math.exp(zoom * dt * 1.6));
       this.padFire = false;
