@@ -6,7 +6,7 @@ import { InputManager, zoomSensitivity, type AssistInfo } from '../input/input';
 import type { ClientSession, ViewPlayer } from '../net/client';
 import { COSMETIC_EVENTS, F_BEAM, F_BURNING, F_CAMO, F_CHARGING, F_DAMAGE, F_INVINCIBLE, F_OVERSHIELD, F_RELOAD, F_SAUCED } from '../net/protocol';
 import { angleDiff, dirFromYawPitch, yawPitchOf } from '../shared/vec';
-import { Arena, MOUTH_R, RIM_OUT, WELL_DEPTH } from '../sim/arena';
+import { Arena, MOUTH_R, RIM_OUT, WELL_DEPTH, wellWall } from '../sim/arena';
 import { sauceAimScale, sauceLeft } from '../sim/sauce';
 import { SPRING_TICKS, inFlight, springLift } from '../sim/spring';
 import { FIRE_EXPOSURE, HEAD_R, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
@@ -16,7 +16,7 @@ import { INV_MAX } from '../sim/inventory';
 import { orbPos, orbRadius } from '../sim/orbs';
 import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import type { Projectile, SimEvent, Vec3T } from '../sim/types';
-import { WEAPONS, hostDrawn, weaponByIndex, type WeaponId } from '../sim/weapons';
+import { WEAPONS, firesFromDuck, hostDrawn, weaponByIndex, type WeaponId } from '../sim/weapons';
 import { hex, setHtml, setStyle } from '../ui/dom';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
 import { Decals, FlashLights, Particles, Ribbons, Shockwaves } from './fx';
@@ -77,6 +77,8 @@ interface ProjView {
   trailAcc: number;
   /** a plasma grenade stuck to this player: drawn on them as they move */
   attach?: { slot: number; off: { x: number; y: number; z: number } } | null;
+  /** my shot up out of my hole from a duck: it only stops on a bubble */
+  orbOnly?: boolean;
 }
 
 interface OrbView {
@@ -237,7 +239,7 @@ export class Game {
   private killer = -1;
   private diedAt = 0;
   private diedAtMs = 0;
-  private pred = { lastShot: -1e9, pending: false, pendingAt: -1e9, fresh: false, burst: 0, nextBurst: 0, localId: 0 };
+  private pred = { lastShot: -1e9, pending: false, pendingAt: -1e9, fresh: false, burst: 0, nextBurst: 0, localId: 0, ducked: false };
   /** the power-up picked in the inventory (Use fires it), and where it sits in the list */
   private invSel: PowerUpId | null = null;
   private invSelIdx = 0;
@@ -349,6 +351,7 @@ export class Game {
         this.pred.pending = true;
         this.pred.fresh = true;
         this.pred.pendingAt = performance.now();
+        this.pred.ducked = !this.input.s.stand && this.session.myExposure < FIRE_EXPOSURE;
       },
       onMenu: () => this.hooks.onMenu(),
       onScoreboard: (show) => (this.showScores = show),
@@ -1029,7 +1032,10 @@ export class Game {
     this.pred.fresh = false;
     if (!me || !me.al) return;
     const infinite = s.start?.settings.ammoMode === 'noReload' || w.clip <= 0;
-    const ready = s.phase === 'live' && s.myExposure >= FIRE_EXPOSURE && me.rl === 0 && (infinite || me.clip > 0);
+    // (as on the host: staying down, single shots and bursts go up out of the hole at bubbles)
+    const up = s.myExposure >= FIRE_EXPOSURE;
+    const fromDuck = !up && this.pred.ducked && !this.input.s.stand && me.fs <= s.hostTick && firesFromDuck(w);
+    const ready = s.phase === 'live' && (up || fromDuck) && me.rl === 0 && (infinite || me.clip > 0);
     if (fresh && !infinite && me.clip === 0 && me.rl === 0) audio.play('empty');
     // charge ring & sound (railgun/hyperbeam)
     if ((w.trigger === 'charge' || w.trigger === 'beam') && this.input.s.trigger && ready && me.bu <= s.hostTick) {
@@ -1072,12 +1078,15 @@ export class Game {
     this.muzzleFlash(this.muzzleOf(s.slot), dir, w.id, true);
     this.playFireSound(s.slot, w.id, null);
     this.pitreLocalCue({ speaker: s.slot, line: 'brap', delayMs: 0, priority: 1 }, w.id);
+    // from a duck it goes up out of the hole (or into its wall), past everyone: only bubbles stop it
+    const orbOnly = s.myExposure < FIRE_EXPOSURE;
+    const wall = wellWall(eye, d, this.myHole());
     if (w.fireKind === 'hitscan') {
       // homing rounds bend the shot on the host: its own tracer is drawn instead (see 'fire')
-      if (this.hasPu('homing')) return;
+      if (this.hasPu('homing') && !orbOnly) return;
       // cosmetic trace: terrain + interpolated players
-      let end = Math.min(w.range, this.arena.raycast(eye, d, w.range));
-      for (const p of s.players) {
+      let end = Math.min(w.range, this.arena.raycast(eye, d, w.range), wall);
+      for (const p of orbOnly ? [] : s.players) {
         if (!p || p.slot === s.slot || !p.alive) continue;
         const h = rayHitbox(eye, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p)));
         if (h && h.t < end) end = h.t;
@@ -1088,12 +1097,17 @@ export class Game {
     } else if (w.projectile && !hostDrawn(w.projectile)) {
       // (homing needles pick their target on the host, and grenades bounce off or stick to players there: those are
       // drawn from the host's copy)
+      if (orbOnly && wall < Infinity) {
+        this.impact(eye.clone().addScaledVector(dir, wall), w.id);
+        return;
+      }
       const def = w.projectile;
       const id = `L${++this.pred.localId}`;
       const start = eye.clone().addScaledVector(dir, 0.6);
       const born = Math.floor(s.hostTick);
       const pr: Projectile = { id: -1, owner: s.slot, weapon: w.id, x: start.x, y: start.y - 0.1, z: start.z, vx: dir.x * def.speed, vy: dir.y * def.speed, vz: dir.z * def.speed, born, bounces: 0, target: -1, fuseAt: def.fuse ? born + Math.round(def.fuse * TICK_RATE) : 0, y0: start.y };
       this.addProjectile(id, pr, true);
+      if (orbOnly) this.projs.get(id)!.orbOnly = true;
     }
   }
 
@@ -1875,7 +1889,7 @@ export class Game {
       const hom = pv.local ? null : (s.homing.get(tr.pr.id) ?? null);
       let ended: 'hit' | 'end' | 'expire' | null = null;
       for (let n = 0; tr.tick + 1 <= now && n < MAX_CATCHUP; n++) {
-        const r = stepTrack(tr, def, this.arena, hom, pv.local ? this.ownShotTargets : null);
+        const r = stepTrack(tr, def, this.arena, hom, pv.local ? (pv.orbOnly ? this.ownOrbTargets : this.ownShotTargets) : null);
         if (r !== 'fly' && pv.local) {
           ended = r;
           break;
@@ -1931,6 +1945,18 @@ export class Game {
   }
 
   /** What my own predicted shots stop on: the other players as I see them, and power-up orbs. */
+  /** My shot from a duck: only the bubbles. */
+  private ownOrbTargets: TargetTest = (o, d, L, tick, r) => {
+    const s = this.session;
+    const orbR = s.start ? orbRadius(s.start.settings) : 0.8;
+    let best = Infinity;
+    for (const orb of s.orbs.values()) {
+      const to = raySphere(o, d, orbPos(orb, tick, this.arena), orbR + r);
+      if (to >= 0 && to < L && to < best) best = to;
+    }
+    return best;
+  };
+
   private ownShotTargets: TargetTest = (o, d, L, tick, r, from) => {
     const s = this.session;
     const orbR = s.start ? orbRadius(s.start.settings) : 0.8;

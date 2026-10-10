@@ -198,6 +198,17 @@ export function hostDrawn(def: ProjectileDef): boolean {
   return !!(def.homing || def.sticky || def.contact);
 }
 
+/**
+ * Staying ducked, a single shot or burst from one of these goes up out of the hole: it only pops power-up bubbles.
+ * (Not grenades — they'd drop straight back into your hole — nor charge, beam or automatic weapons, nor the one-use
+ * power-up weapons.)
+ */
+export function firesFromDuck(w: WeaponDef): boolean {
+  if ((w.trigger !== 'semi' && w.trigger !== 'burst') || w.strike || (w.fireKind !== 'hitscan' && w.fireKind !== 'projectile')) return false;
+  const p = w.projectile;
+  return !p || !(p.bounce || p.sticky || p.contact || p.loftDeg);
+}
+
 export const WEAPON_IDS = Object.keys(WEAPONS) as WeaponId[];
 export const LOADOUT_WEAPONS = WEAPON_IDS.filter((w) => !WEAPONS[w].powerupOnly);
 export const DEFAULT_GUNGAME: WeaponId[] = ['railgun', 'sniper', 'crossbow', 'br', 'needler', 'hyperbeam', 'rpg', 'plasma', 'frag', 'grenade'];

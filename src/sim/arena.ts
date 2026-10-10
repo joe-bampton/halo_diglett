@@ -159,6 +159,23 @@ export function layoutForSettings(s: { holeCount: number; holeSpacing: number },
   return layout;
 }
 
+/**
+ * A ray that starts inside a hole's well (under the rim, within the mouth): how far it goes before the stone wall stops
+ * it, or Infinity when it gets out through the mouth (or doesn't start in there). Arena.raycast can't be trusted with
+ * this: from down in a well its first step is long enough to jump the wall.
+ */
+export function wellWall(o: V3, d: V3, hole: Hole): number {
+  const rx = o.x - hole.x, rz = o.z - hole.z;
+  const c = rx * rx + rz * rz - MOUTH_R * MOUTH_R;
+  if (o.y >= hole.rim || c >= 0) return Infinity;
+  const a = d.x * d.x + d.z * d.z;
+  if (a < 1e-9) return Infinity; // straight up and out (straight down: the floor, which raycast finds)
+  const b = 2 * (rx * d.x + rz * d.z);
+  // where the ray's footprint leaves the mouth (c < 0: one root ahead, one behind)
+  const t = (-b + Math.sqrt(b * b - 4 * a * c)) / (2 * a);
+  return o.y + d.y * t < hole.rim ? t : Infinity;
+}
+
 export class Arena {
   readonly seed: number;
   readonly layout: ArenaLayout;

@@ -100,6 +100,8 @@ export interface PlayerState {
   /** last time a shot whizzed past them (Pitre "Bitch please"; host only) */
   nearAt: number;
   pressAt: number;
+  /** that press was made staying down in the hole (only such a press fires from a duck) */
+  pressDucked: boolean;
   powerups: ActivePowerup[];
   underdogUntil: number;
   revealUntil: number;
@@ -145,6 +147,8 @@ export interface Projectile {
   off?: { x: number; y: number; z: number };
   /** players it has already whizzed past (bitmask by slot; Pitre near misses) */
   near?: number;
+  /** shot up out of a hole from a duck: it only pops power-up bubbles, and fizzles out on anything else */
+  orbOnly?: boolean;
 }
 
 export interface Orb {

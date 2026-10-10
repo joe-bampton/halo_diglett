@@ -1,7 +1,7 @@
 import { Rng } from '../shared/rng';
 import { angleBetween, clamp, dirFromYawPitch, dist, norm, spreadDir, sub, yawPitchOf, type V3 } from '../shared/vec';
 import type { Arena } from './arena';
-import { MOUTH_R } from './arena';
+import { MOUTH_R, wellWall } from './arena';
 import {
   DT,
   FIRE_EXPOSURE,
@@ -36,7 +36,7 @@ import type {
   SimEvent,
   Vec3T,
 } from './types';
-import { WEAPONS, type WeaponDef, type WeaponId } from './weapons';
+import { WEAPONS, firesFromDuck, type WeaponDef, type WeaponId } from './weapons';
 
 const INTRO_SEC = 3;
 const V = (v: V3): Vec3T => [round2(v.x), round2(v.y), round2(v.z)];
@@ -145,6 +145,7 @@ function newPlayer(m: MatchState, r: RosterEntry, hole: number): PlayerState {
     saucedUntil: 0,
     nearAt: -999,
     pressAt: -1,
+    pressDucked: false,
     powerups: [],
     underdogUntil: 0,
     revealUntil: 0,
@@ -391,7 +392,10 @@ function applyCommand(m: MatchState, p: PlayerState, c: PlayerCommand, ctx: Step
   p.vt = Number.isFinite(c.vt) ? c.vt : m.tick;
   if (c.pick && WEAPONS[c.pick] && !WEAPONS[c.pick].powerupOnly) p.pick = c.pick;
   const newPresses = (c.presses | 0) - p.presses;
-  if (newPresses > 0 && newPresses < 1000) p.pressAt = m.tick;
+  if (newPresses > 0 && newPresses < 1000) {
+    p.pressAt = m.tick;
+    p.pressDucked = !p.wantStand && p.exposure < FIRE_EXPOSURE;
+  }
   p.presses = c.presses | 0;
   const newReloads = (c.reloads | 0) - p.reloads;
   p.reloads = c.reloads | 0;
@@ -522,7 +526,10 @@ function updateWeapon(m: MatchState, p: PlayerState, c: PlayerCommand | undefine
   const hasAmmo = infinite || p.clip > 0;
   if (!hasAmmo && !reloading && p.beamUntil <= t) requestReload(m, p);
   const up = p.exposure >= FIRE_EXPOSURE;
-  const canShoot = live && up && !reloading && hasAmmo;
+  // staying down (not on the way up: that press waits for you to be up), a single shot or burst goes up out of the
+  // hole and can only pop bubbles (see fire)
+  const fromDuck = !up && p.pressDucked && !p.wantStand && p.forcedStandUntil <= t && firesFromDuck(w);
+  const canShoot = live && (up || fromDuck) && !reloading && hasAmmo;
   const trigger = !!c?.trigger || p.trigger;
   const pressed = p.pressAt >= 0 && t - p.pressAt <= 12;
 
@@ -680,11 +687,13 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
     return;
   }
   let dir = aimDir(p);
+  // from a duck: straight up out of the hole, and it only pops bubbles (not counted as a shot at anyone)
+  const orbOnly = p.exposure < FIRE_EXPOSURE;
   consumeAmmo(m, p, w);
-  p.shots++;
+  if (!orbOnly) p.shots++;
   p.revealUntil = t + TICK_RATE;
   if (w.fireKind === 'hitscan') {
-    if (hasPowerup(p, 'homing', t)) {
+    if (hasPowerup(p, 'homing', t) && !orbOnly) {
       const q = findHomingTarget(m, arena, p, origin, dir, HOMING_CONE, w.range);
       if (q) dir = norm(sub(playerHitbox(m, arena, q, q.exposure, p).head, origin));
       else if (!w.strike) {
@@ -696,11 +705,19 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
     const pellets = w.pellets ?? 1;
     for (let i = 0; i < pellets; i++) {
       const d = spreadDir(dir, (w.spreadDeg * Math.PI) / 180, rng.next(), rng.next());
-      hitscan(m, p, w, origin, d, ctx);
+      hitscan(m, p, w, origin, d, ctx, orbOnly);
     }
   } else {
     const def = w.projectile!;
     const d = launchDir(spreadDir(dir, (w.spreadDeg * Math.PI) / 180, rng.next(), rng.next()), def);
+    if (orbOnly) {
+      // too shallow to get out of the hole: straight into its wall
+      const wall = wellWall(origin, d, arena.holes[p.hole]!);
+      if (wall < Infinity) {
+        ctx.events.push({ k: 'fire', t, p: p.slot, w: w.id, o: V(origin), e: V({ x: origin.x + d.x * wall, y: origin.y + d.y * wall, z: origin.z + d.z * wall }), hit: 'world' });
+        return;
+      }
+    }
     let target = -1;
     if (def.homing) {
       const q = findHomingTarget(m, arena, p, origin, d, (def.homing.coneDeg * Math.PI) / 180, def.homing.range);
@@ -722,6 +739,7 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
       fuseAt: def.fuse ? t + secToTicks(def.fuse) : 0,
       y0: origin.y,
     };
+    if (orbOnly) pr.orbOnly = true;
     m.projectiles.push(pr);
     ctx.events.push({ k: 'proj', t, id: pr.id, p: p.slot, w: w.id, pos: [pr.x, pr.y, pr.z].map(round2) as Vec3T, vel: [pr.vx, pr.vy, pr.vz].map(round2) as Vec3T, tgt: target });
   }
@@ -735,12 +753,16 @@ interface TraceHit {
   orb?: number;
 }
 
-/** Trace a ray against players (rewound to the shooter's view tick), orbs and terrain. */
-export function traceRay(m: MatchState, arena: Arena, shooter: PlayerState | null, o: V3, d: V3, range: number, rewindTick: number): { hits: TraceHit[]; world: number } {
-  const world = Math.min(range, arena.raycast(o, d, range));
+/**
+ * Trace a ray against players (rewound to the shooter's view tick), orbs and terrain (the wall of the shooter's own
+ * hole too, for a shot from down in it). `orbsOnly`: a shot from a duck, which can only pop bubbles.
+ */
+export function traceRay(m: MatchState, arena: Arena, shooter: PlayerState | null, o: V3, d: V3, range: number, rewindTick: number, orbsOnly = false): { hits: TraceHit[]; world: number } {
+  const own = shooter ? arena.holes[shooter.hole] : undefined;
+  const world = Math.min(range, arena.raycast(o, d, range), own ? wellWall(o, d, own) : Infinity);
   const hits: TraceHit[] = [];
   for (const q of m.players) {
-    if (!q || q === shooter || !q.alive) continue;
+    if (!q || q === shooter || !q.alive || orbsOnly) continue;
     // ducked players are only reachable from high above, through the mouth (rayHitbox). Lag compensation favours the
     // ducker: someone who has ducked since the shooter's view can't be hit where they were.
     const e = Math.min(exposureAt(m, q.slot, rewindTick), q.exposure);
@@ -763,10 +785,10 @@ function rewindTickFor(m: MatchState, p: PlayerState): number {
   return clamp(p.vt, m.tick - Math.min(maxBack, HISTORY - 2), m.tick);
 }
 
-function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx: StepContext) {
+function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx: StepContext, orbOnly = false) {
   const t = m.tick;
   const rewind = rewindTickFor(m, p);
-  const { hits, world } = traceRay(m, ctx.arena, p, o, d, w.range, rewind);
+  const { hits, world } = traceRay(m, ctx.arena, p, o, d, w.range, rewind, orbOnly);
   let pierceLeft = w.pierce ?? 1;
   let end = world;
   let hitKind: HitKind = world < w.range ? 'world' : 'none';
@@ -792,7 +814,7 @@ function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx:
     if (--pierceLeft <= 0) break;
   }
   if (w.pierce && pierceLeft > 0) end = world;
-  if (wantNearMisses(m, w)) nearMisses(m, ctx, p, w, o, d, end, struck, rewind);
+  if (wantNearMisses(m, w) && !orbOnly) nearMisses(m, ctx, p, w, o, d, end, struck, rewind);
   const endPt = { x: o.x + d.x * end, y: o.y + d.y * end, z: o.z + d.z * end };
   if (w.strike) {
     // orbital designator: strike the aimed point
@@ -966,6 +988,10 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
       else keep.push(pr);
       continue;
     }
+    if (pr.orbOnly) {
+      if (stepOrbOnly(m, ctx, pr, def, owner)) keep.push(pr);
+      continue;
+    }
     const prev = { x: pr.x, y: pr.y, z: pr.z };
     let targetPos: V3 | null = null;
     if (pr.target >= 0) {
@@ -1116,6 +1142,41 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     keep.push(pr);
   }
   m.projectiles = keep;
+}
+
+/**
+ * A shot fired up out of a hole from a duck: it can only pop a power-up bubble, and fizzles out (no blast) on anything
+ * else. Returns whether it's still flying.
+ */
+function stepOrbOnly(m: MatchState, ctx: StepContext, pr: Projectile, def: NonNullable<WeaponDef['projectile']>, owner: PlayerState | null): boolean {
+  const { arena } = ctx;
+  const t = m.tick;
+  const prev = { x: pr.x, y: pr.y, z: pr.z };
+  integrateProjectile(pr, def, null);
+  const seg = { x: pr.x - prev.x, y: pr.y - prev.y, z: pr.z - prev.z };
+  const L = Math.hypot(seg.x, seg.y, seg.z) || 1e-9;
+  const d = { x: seg.x / L, y: seg.y / L, z: seg.z / L };
+  let bestT = L;
+  let hitOrb = -1;
+  for (const orb of m.orbs) {
+    const to = raySphere(prev, d, orbPos(orb, t, arena), orbRadius(m.settings) + def.radius);
+    if (to >= 0 && to < bestT) {
+      bestT = to;
+      hitOrb = orb.id;
+    }
+  }
+  const tw = arena.raycast(prev, d, bestT);
+  if (tw < bestT) {
+    bestT = tw;
+    hitOrb = -1;
+  }
+  const at = { x: prev.x + d.x * bestT, y: prev.y + d.y * bestT, z: prev.z + d.z * bestT };
+  if (hitOrb >= 0 && owner) claimOrb(m, ctx, hitOrb, owner);
+  if (hitOrb >= 0 || tw < L || t - pr.born >= secToTicks(def.life) || pr.y < -20) {
+    ctx.events.push({ k: 'pend', t, id: pr.id, pos: V(at), gone: true });
+    return false;
+  }
+  return true;
 }
 
 function endProjectile(m: MatchState, ctx: StepContext, pr: Projectile, at: V3, w: WeaponDef, inHole: number, counted = false, gone = false) {
