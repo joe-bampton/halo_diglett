@@ -29,16 +29,20 @@ export interface QualityPreset {
   pbr: boolean;
   /** detailed (Blender-made) models where they exist */
   models: 'simple' | 'detailed';
+  /** ground, stone and well textures with surface relief (instead of flat colours) */
+  textures: boolean;
+  /** ambient occlusion (soft contact shadows; post-processing only): 0 off, else its resolution scale */
+  ao: number;
   far: number;
   fogNear: number;
   fogFar: number;
 }
 
 export const QUALITY: Record<QualityLevel, QualityPreset> = {
-  low: { level: 'low', dprCap: 1, renderScale: 1, dynamicRes: [0.6, 1], antialias: false, smaa: false, shadows: 'none', shadowSize: 0, grassClumps: 3500, grassRadius: 28, trees: 60, angularSegs: 180, particles: 180, fxScale: 0.6, flashLights: 0, post: false, pbr: false, models: 'simple', far: 1400, fogNear: 120, fogFar: 1100 },
-  medium: { level: 'medium', dprCap: 1.5, renderScale: 1, dynamicRes: [0.75, 1.5], antialias: true, smaa: false, shadows: 'static', shadowSize: 1024, grassClumps: 11000, grassRadius: 45, trees: 130, angularSegs: 300, particles: 420, fxScale: 1, flashLights: 2, post: false, pbr: false, models: 'simple', far: 1600, fogNear: 180, fogFar: 1300 },
-  high: { level: 'high', dprCap: 2, renderScale: 1, dynamicRes: null, antialias: true, smaa: false, shadows: 'dynamic', shadowSize: 2048, grassClumps: 22000, grassRadius: 60, trees: 200, angularSegs: 400, particles: 800, fxScale: 1.3, flashLights: 4, post: true, pbr: true, models: 'detailed', far: 1600, fogNear: 200, fogFar: 1400 },
-  ultra: { level: 'ultra', dprCap: 2.5, renderScale: 1, dynamicRes: null, antialias: true, smaa: true, shadows: 'dynamic', shadowSize: 4096, grassClumps: 40000, grassRadius: 75, trees: 300, angularSegs: 520, particles: 1600, fxScale: 1.6, flashLights: 6, post: true, pbr: true, models: 'detailed', far: 1800, fogNear: 220, fogFar: 1600 },
+  low: { level: 'low', dprCap: 1, renderScale: 1, dynamicRes: [0.6, 1], antialias: false, smaa: false, shadows: 'none', shadowSize: 0, grassClumps: 3500, grassRadius: 28, trees: 60, angularSegs: 180, particles: 180, fxScale: 0.6, flashLights: 0, post: false, pbr: false, models: 'simple', textures: false, ao: 0, far: 1400, fogNear: 120, fogFar: 1100 },
+  medium: { level: 'medium', dprCap: 1.5, renderScale: 1, dynamicRes: [0.75, 1.5], antialias: true, smaa: false, shadows: 'static', shadowSize: 1024, grassClumps: 11000, grassRadius: 45, trees: 130, angularSegs: 300, particles: 420, fxScale: 1, flashLights: 2, post: false, pbr: false, models: 'simple', textures: false, ao: 0, far: 1600, fogNear: 180, fogFar: 1300 },
+  high: { level: 'high', dprCap: 2, renderScale: 1, dynamicRes: null, antialias: true, smaa: false, shadows: 'dynamic', shadowSize: 2048, grassClumps: 22000, grassRadius: 60, trees: 200, angularSegs: 400, particles: 800, fxScale: 1.3, flashLights: 4, post: true, pbr: true, models: 'detailed', textures: true, ao: 0.5, far: 1600, fogNear: 200, fogFar: 1400 },
+  ultra: { level: 'ultra', dprCap: 2.5, renderScale: 1, dynamicRes: null, antialias: true, smaa: true, shadows: 'dynamic', shadowSize: 4096, grassClumps: 40000, grassRadius: 75, trees: 300, angularSegs: 520, particles: 1600, fxScale: 1.6, flashLights: 6, post: true, pbr: true, models: 'detailed', textures: true, ao: 1, far: 1800, fogNear: 220, fogFar: 1600 },
 };
 
 /** Advanced graphics settings: anything left out follows the preset. */
@@ -51,6 +55,7 @@ export interface GfxOverrides {
   aa?: 'off' | 'msaa' | 'smaa';
   foliage?: 'low' | 'medium' | 'high' | 'ultra';
   models?: 'simple' | 'detailed';
+  ao?: 'off' | 'on';
 }
 
 export interface GfxField {
@@ -70,7 +75,8 @@ export const GFX_FIELDS: GfxField[] = [
   { key: 'post', label: 'Post-processing', options: [['on', 'On'], ['off', 'Off']], live: true, help: 'Bloom and filmic colour.' },
   { key: 'aa', label: 'Anti-aliasing', options: [['off', 'Off'], ['msaa', 'MSAA'], ['smaa', 'MSAA + SMAA']], live: false, help: 'Changes now with post-processing on, otherwise next match. SMAA needs post-processing.' },
   { key: 'foliage', label: 'Grass & trees', options: [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra']], live: true },
-  { key: 'models', label: 'Models & materials', options: [['simple', 'Simple'], ['detailed', 'Detailed']], live: true, help: 'Detailed: shiny, sky-reflecting materials and Blender-made models.' },
+  { key: 'models', label: 'Models & materials', options: [['simple', 'Simple'], ['detailed', 'Detailed']], live: true, help: 'Detailed: shiny, sky-reflecting materials, textured ground and stones, and the detailed models.' },
+  { key: 'ao', label: 'Ambient occlusion', options: [['off', 'Off'], ['on', 'On']], live: true, help: 'Soft shadows in corners, under the rims and between stones. Needs post-processing.' },
 ];
 
 const EFFECTS: Record<NonNullable<GfxOverrides['effects']>, Pick<QualityPreset, 'particles' | 'fxScale' | 'flashLights'>> = {
@@ -106,7 +112,9 @@ export function resolveQuality(level: QualityLevel, o: GfxOverrides = {}): Quali
   if (o.models) {
     q.models = o.models;
     q.pbr = o.models === 'detailed';
+    q.textures = o.models === 'detailed';
   }
+  if (o.ao) q.ao = o.ao === 'off' ? 0 : q.ao || 0.5;
   return q;
 }
 
@@ -123,6 +131,7 @@ export function presetChoice(key: keyof GfxOverrides, level: QualityLevel): stri
     : key === 'post' ? (q.post ? 'on' : 'off')
     : key === 'aa' ? (q.smaa ? 'smaa' : q.antialias ? 'msaa' : 'off')
     : key === 'models' ? q.models
+    : key === 'ao' ? (q.ao ? 'on' : 'off')
     : level; // effects / foliage follow the preset's own level
   return f.options.find(([v]) => v === value)?.[1] ?? String(value);
 }
@@ -155,14 +164,27 @@ export function detectQuality(): QualityLevel {
   return autoQuality();
 }
 
-/** What "Auto" picks: Low on phones and small-memory devices, Medium elsewhere. */
+/** Set when High ran too slowly on this device under "Auto": Auto picks Medium from then on. */
+const AUTO_LOWERED = 'hd.autoLowered';
+
+/** What "Auto" picks: Low on phones and small-memory devices, High on computers (Medium if High was too slow here). */
 export function autoQuality(): QualityLevel {
   try {
     const coarse = matchMedia('(pointer: coarse)').matches;
     const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 8;
     if (coarse || mem <= 4) return 'low';
+    if (mem < 8 || localStorage.getItem(AUTO_LOWERED)) return 'medium';
   } catch {
     /* ignore */
   }
-  return 'medium';
+  return 'high';
+}
+
+/** High was too slow under "Auto": remember to start on Medium here. */
+export function lowerAutoQuality() {
+  try {
+    localStorage.setItem(AUTO_LOWERED, '1');
+  } catch {
+    /* ignore */
+  }
 }

@@ -129,6 +129,12 @@ export interface Projectile {
   bounces: number;
   target: number;
   fuseAt: number;
+  /** height it was fired from (only shots from high above can come down into a hole) */
+  y0?: number;
+  /** stopped: stuck to this player's slot (plasma), or -1 on the ground (stuck plasma, a frag at rest) */
+  stuck?: number;
+  /** stuck to a player: offset from their upper torso */
+  off?: { x: number; y: number; z: number };
   /** players it has already whizzed past (bitmask by slot; Pitre near misses) */
   near?: number;
 }
@@ -179,8 +185,12 @@ export type Vec3T = [number, number, number];
 export type HitKind = 'head' | 'body' | 'orb' | 'world' | 'none';
 
 export type SimEvent =
-  | { k: 'fire'; t: number; p: number; w: WeaponId; o: Vec3T; e: Vec3T; hit: HitKind }
+  /** `v`: homing rounds that curved down into a hole went over this point */
+  | { k: 'fire'; t: number; p: number; w: WeaponId; o: Vec3T; e: Vec3T; hit: HitKind; v?: Vec3T }
   | { k: 'proj'; t: number; id: number; p: number; w: WeaponId; pos: Vec3T; vel: Vec3T; tgt: number }
+  /** a grenade changed course: glanced off a player (new `vel`), or stopped (`on`: stuck to that player's slot with
+   * offset `off` from their upper torso, or -1 on the ground) */
+  | { k: 'pmove'; t: number; id: number; pos: Vec3T; vel: Vec3T; on?: number; off?: Vec3T }
   /** a projectile ended; `gone`: it just ran out (life or fuse) without hitting anything */
   | { k: 'pend'; t: number; id: number; pos: Vec3T; gone?: boolean }
   | { k: 'boom'; t: number; p: number; w: WeaponId; pos: Vec3T; r: number }

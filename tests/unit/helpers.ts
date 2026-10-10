@@ -4,6 +4,7 @@ import { sanitizeSettings, type Settings } from '../../src/sim/settings';
 import type { MatchState, PlayerCommand, RosterEntry, SimEvent } from '../../src/sim/types';
 import { yawPitchOf } from '../../src/shared/vec';
 import { eyePos } from '../../src/sim/hitbox';
+import { DUCK_DROP } from '../../src/sim/constants';
 
 export const arena = new Arena();
 
@@ -39,7 +40,7 @@ export function aimAt(m: MatchState, a: number, b: number, part: 'head' | 'body'
   const pa = m.players[a]!, pb = m.players[b]!;
   const ha = arena.holes[pa.hole]!, hb = arena.holes[pb.hole]!;
   const eye = eyePos(ha, pa.exposure);
-  const ty = part === 'head' ? hb.rim + 0.95 - 1.35 * (1 - pb.exposure) : hb.rim + 0.35 - 1.35 * (1 - pb.exposure);
+  const ty = (part === 'head' ? hb.rim + 0.95 : hb.rim + 0.35) - DUCK_DROP * (1 - pb.exposure);
   return yawPitchOf({ x: hb.x - eye.x, y: ty - eye.y, z: hb.z - eye.z });
 }
 

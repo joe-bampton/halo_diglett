@@ -1,5 +1,5 @@
 import { Rng } from '../shared/rng';
-import { angleBetween, clamp, dirFromYawPitch, dist, norm, spreadDir, sub, type V3 } from '../shared/vec';
+import { angleBetween, clamp, dirFromYawPitch, dist, norm, spreadDir, sub, yawPitchOf, type V3 } from '../shared/vec';
 import type { Arena } from './arena';
 import { MOUTH_R } from './arena';
 import {
@@ -21,7 +21,7 @@ import {
 } from './constants';
 import { pointSegmentDist, raySphere } from './geom';
 import { eyePos, hitboxOf, isExposed, rayHitbox, type Hitbox } from './hitbox';
-import { ORB_R, ORB_RATES, orbPos } from './orbs';
+import { ORB_RATES, orbPos, orbRadius } from './orbs';
 import { POWERUPS, type PowerUpId } from './powerups';
 import { HELD_UNTIL, SPRING_COOLDOWN, SPRING_TICKS, inFlight, springLift } from './spring';
 import type { Settings } from './settings';
@@ -211,9 +211,13 @@ function intervalTicks(m: MatchState, p: PlayerState, sec: number): number {
   return Math.max(1, Math.round(sec * TICK_RATE * quick));
 }
 
+/** A player's exposure at a past tick (a fractional view tick blends the two ticks around it). */
 export function exposureAt(m: MatchState, slot: number, tick: number): number {
   if (tick >= m.tick) return m.players[slot]?.exposure ?? 0;
-  return m.history[slot * HISTORY + (((tick % HISTORY) + HISTORY) % HISTORY)]! / 255;
+  const at = (k: number) => (k >= m.tick ? (m.players[slot]?.exposure ?? 0) : m.history[slot * HISTORY + (((k % HISTORY) + HISTORY) % HISTORY)]! / 255);
+  const k0 = Math.floor(tick);
+  const f = tick - k0;
+  return f > 0 ? at(k0) + (at(k0 + 1) - at(k0)) * f : at(k0);
 }
 
 function headScaleFor(m: MatchState, shooter: PlayerState | null): number {
@@ -618,6 +622,38 @@ function findHomingTarget(m: MatchState, arena: Arena, p: PlayerState, origin: V
   return best;
 }
 
+/** Homing rounds: how far off the aim a target may be (radians). */
+const HOMING_CONE = (5 * Math.PI) / 180;
+
+/** Homing rounds and nobody exposed in the cone: a ducked enemy whose hole mouth is in the cone and in sight. */
+function findHomingDive(m: MatchState, arena: Arena, p: PlayerState, origin: V3, dir: V3, range: number): { q: PlayerState; via: V3 } | null {
+  let best: { q: PlayerState; via: V3 } | null = null;
+  let bestAng = HOMING_CONE;
+  for (const q of m.players) {
+    if (!q || q === p || !q.alive || isExposed(q.exposure)) continue;
+    const hole = arena.holes[q.hole]!;
+    const via = { x: hole.x, y: hole.rim + 0.4, z: hole.z };
+    const to = sub(via, origin);
+    if (Math.hypot(to.x, to.y, to.z) > range) continue;
+    const ang = angleBetween(dir, norm(to));
+    if (ang < bestAng && arena.lineClear(origin, via, 0.4)) {
+      bestAng = ang;
+      best = { q, via };
+    }
+  }
+  return best;
+}
+
+/** The round curves over the rim and down into the hole: a body hit, ducked or not. */
+function homingDive(m: MatchState, ctx: StepContext, p: PlayerState, w: WeaponDef, o: V3, dive: { q: PlayerState; via: V3 }) {
+  const { q, via } = dive;
+  const hb = playerHitbox(m, ctx.arena, q, q.exposure, p);
+  const at = { x: (hb.torsoA.x + hb.torsoB.x) / 2, y: (hb.torsoA.y + hb.torsoB.y) / 2, z: (hb.torsoA.z + hb.torsoB.z) / 2 };
+  p.hits++;
+  damagePlayer(m, ctx, p.slot, q, w.damage, { head: false, weapon: w.id, kind: 'direct', headMult: w.headMult });
+  ctx.events.push({ k: 'fire', t: m.tick, p: p.slot, w: w.id, o: V(o), e: V(at), hit: 'body', v: V(via) });
+}
+
 function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
   const t = m.tick;
   const { arena, rng } = ctx;
@@ -639,8 +675,13 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
   p.revealUntil = t + TICK_RATE;
   if (w.fireKind === 'hitscan') {
     if (hasPowerup(p, 'homing', t)) {
-      const q = findHomingTarget(m, arena, p, origin, dir, (5 * Math.PI) / 180, w.range);
+      const q = findHomingTarget(m, arena, p, origin, dir, HOMING_CONE, w.range);
       if (q) dir = norm(sub(playerHitbox(m, arena, q, q.exposure, p).head, origin));
+      else if (!w.strike) {
+        // nobody up in the cone: homing rounds can still curve down into a ducked player's hole
+        const dive = findHomingDive(m, arena, p, origin, dir, w.range);
+        if (dive) return homingDive(m, ctx, p, w, origin, dive);
+      }
     }
     const pellets = w.pellets ?? 1;
     for (let i = 0; i < pellets; i++) {
@@ -649,7 +690,7 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
     }
   } else {
     const def = w.projectile!;
-    const d = spreadDir(dir, (w.spreadDeg * Math.PI) / 180, rng.next(), rng.next());
+    const d = launchDir(spreadDir(dir, (w.spreadDeg * Math.PI) / 180, rng.next(), rng.next()), def);
     let target = -1;
     if (def.homing) {
       const q = findHomingTarget(m, arena, p, origin, d, (def.homing.coneDeg * Math.PI) / 180, def.homing.range);
@@ -669,6 +710,7 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
       bounces: 0,
       target,
       fuseAt: def.fuse ? t + secToTicks(def.fuse) : 0,
+      y0: origin.y,
     };
     m.projectiles.push(pr);
     ctx.events.push({ k: 'proj', t, id: pr.id, p: p.slot, w: w.id, pos: [pr.x, pr.y, pr.z].map(round2) as Vec3T, vel: [pr.vx, pr.vy, pr.vz].map(round2) as Vec3T, tgt: target });
@@ -689,15 +731,16 @@ export function traceRay(m: MatchState, arena: Arena, shooter: PlayerState | nul
   const hits: TraceHit[] = [];
   for (const q of m.players) {
     if (!q || q === shooter || !q.alive) continue;
-    // ducked players are only reachable from above, through the mouth (rayHitbox)
-    const e = exposureAt(m, q.slot, rewindTick);
+    // ducked players are only reachable from high above, through the mouth (rayHitbox). Lag compensation favours the
+    // ducker: someone who has ducked since the shooter's view can't be hit where they were.
+    const e = Math.min(exposureAt(m, q.slot, rewindTick), q.exposure);
     const hb = playerHitbox(m, arena, q, e, shooter, rewindTick);
     const h = rayHitbox(o, d, hb);
     if (h && h.t < world) hits.push({ t: h.t, kind: 'player', slot: q.slot, head: h.head });
   }
   for (const orb of m.orbs) {
     const c = orbPos(orb, m.tick, arena);
-    const to = raySphere(o, d, c, ORB_R);
+    const to = raySphere(o, d, c, orbRadius(m.settings));
     if (to >= 0 && to < world) hits.push({ t: to, kind: 'orb', orb: orb.id });
   }
   hits.sort((a, b) => a.t - b.t);
@@ -707,7 +750,7 @@ export function traceRay(m: MatchState, arena: Arena, shooter: PlayerState | nul
 function rewindTickFor(m: MatchState, p: PlayerState): number {
   if (p.kind === 'bot') return m.tick;
   const maxBack = Math.round((m.settings.maxRewindMs / 1000) * TICK_RATE);
-  return clamp(Math.round(p.vt), m.tick - Math.min(maxBack, HISTORY - 2), m.tick);
+  return clamp(p.vt, m.tick - Math.min(maxBack, HISTORY - 2), m.tick);
 }
 
 function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx: StepContext) {
@@ -811,6 +854,29 @@ function beamTick(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext,
 // Projectiles
 // ---------------------------------------------------------------------------------------------
 
+/** Thrown grenades leave the hand a little above the aim. */
+export function launchDir(d: V3, def: NonNullable<WeaponDef['projectile']>): V3 {
+  if (!def.loftDeg) return d;
+  const a = yawPitchOf(d);
+  return dirFromYawPitch(a.yaw, Math.min(Math.PI / 2 - 0.01, a.pitch + (def.loftDeg * Math.PI) / 180));
+}
+
+/** Where a grenade stuck to a player is anchored: their upper torso. */
+function stickAnchor(hb: Hitbox): V3 {
+  return hb.torsoB;
+}
+
+/** Grenades that stop on a player or the ground: tell clients where it is now. */
+function stopProjectile(m: MatchState, ctx: StepContext, pr: Projectile, at: V3, on: number, off?: V3) {
+  pr.x = at.x;
+  pr.y = at.y;
+  pr.z = at.z;
+  pr.vx = pr.vy = pr.vz = 0;
+  pr.stuck = on;
+  pr.off = off;
+  ctx.events.push(off ? { k: 'pmove', t: m.tick, id: pr.id, pos: V(at), vel: [0, 0, 0], on, off: V(off) } : { k: 'pmove', t: m.tick, id: pr.id, pos: V(at), vel: [0, 0, 0], on });
+}
+
 /** Pure ballistic/homing integration shared by host & client visuals. */
 export function integrateProjectile(pr: Projectile, def: NonNullable<WeaponDef['projectile']>, targetPos: V3 | null) {
   if (def.homing && targetPos) {
@@ -852,6 +918,16 @@ function terrainNormal(arena: Arena, x: number, z: number): V3 {
   return norm({ x: -hx / (2 * e), y: 1, z: -hz / (2 * e) });
 }
 
+/** A bouncing frag slower than this (m/s) after a bounce comes to rest. */
+const REST_SPEED = 2;
+
+function closestOnSegment(p: V3, a: V3, b: V3): V3 {
+  const ab = sub(b, a);
+  const L2 = ab.x * ab.x + ab.y * ab.y + ab.z * ab.z;
+  const k = L2 > 0 ? clamp(((p.x - a.x) * ab.x + (p.y - a.y) * ab.y + (p.z - a.z) * ab.z) / L2, 0, 1) : 0;
+  return { x: a.x + ab.x * k, y: a.y + ab.y * k, z: a.z + ab.z * k };
+}
+
 function stepProjectiles(m: MatchState, ctx: StepContext) {
   const { arena } = ctx;
   const t = m.tick;
@@ -860,6 +936,26 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     const w = WEAPONS[pr.weapon];
     const def = w.projectile!;
     const owner = m.players[pr.owner];
+    if (pr.stuck !== undefined) {
+      // stuck to a player (it rides along, Spring Jump and all) or lying on the ground, until its fuse runs out
+      let inHole = -1;
+      if (pr.stuck >= 0) {
+        const q = m.players[pr.stuck];
+        if (q?.alive) {
+          const a = stickAnchor(playerHitbox(m, arena, q));
+          pr.x = a.x + pr.off!.x;
+          pr.y = a.y + pr.off!.y;
+          pr.z = a.z + pr.off!.z;
+          inHole = q.hole;
+        } else pr.stuck = -1;
+      } else {
+        const hole = arena.nearestHole(pr.x, pr.z);
+        if (hole && Math.hypot(hole.x - pr.x, hole.z - pr.z) < MOUTH_R && pr.y < hole.rim) inHole = hole.id;
+      }
+      if (pr.fuseAt && t >= pr.fuseAt) endProjectile(m, ctx, pr, { x: pr.x, y: pr.y, z: pr.z }, w, inHole);
+      else keep.push(pr);
+      continue;
+    }
     const prev = { x: pr.x, y: pr.y, z: pr.z };
     let targetPos: V3 | null = null;
     if (pr.target >= 0) {
@@ -879,7 +975,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
       if (!q || !q.alive) continue;
       if (q.slot === pr.owner && t - pr.born < 20) continue;
       const hb = playerHitbox(m, arena, q, q.exposure, owner ?? null);
-      const h = rayHitbox(prev, d, hb, def.radius);
+      const h = rayHitbox(prev, d, hb, def.radius, pr.y0);
       if (h && h.t < bestT) {
         bestT = h.t;
         // came down through the mouth: it's in their hole (grenades must still kill ducked players)
@@ -887,7 +983,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
       }
     }
     for (const orb of m.orbs) {
-      const to = raySphere(prev, d, orbPos(orb, t, arena), ORB_R + def.radius);
+      const to = raySphere(prev, d, orbPos(orb, t, arena), orbRadius(m.settings) + def.radius);
       if (to >= 0 && to < bestT) {
         bestT = to;
         hitPlayer = null;
@@ -905,7 +1001,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     if (owner && wantNearMisses(m, w)) {
       for (const q of m.players) {
         if (!q || q === owner || !q.alive || q.slot === hitPlayer?.slot || ((pr.near ?? 0) & (1 << q.slot)) !== 0 || t - q.nearAt < NEAR_GAP) continue;
-        const h = rayHitbox(prev, d, playerHitbox(m, arena, q, q.exposure, owner), def.radius + NEAR_R);
+        const h = rayHitbox(prev, d, playerHitbox(m, arena, q, q.exposure, owner), def.radius + NEAR_R, pr.y0);
         if (h && h.t <= bestT) {
           pr.near = (pr.near ?? 0) | (1 << q.slot);
           q.nearAt = t;
@@ -919,6 +1015,37 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     if (hitOrb >= 0) {
       if (owner) claimOrb(m, ctx, hitOrb, owner);
       endProjectile(m, ctx, pr, at, w, -1);
+      continue;
+    }
+    if (hitPlayer && def.sticky) {
+      // plasma: it sticks, and goes off a moment later wherever they go
+      const q = m.players[hitPlayer.slot]!;
+      const a = stickAnchor(playerHitbox(m, arena, q, q.exposure, owner ?? null));
+      pr.fuseAt = t + secToTicks(def.sticky.fuse);
+      stopProjectile(m, ctx, pr, at, q.slot, sub(at, a));
+      if (owner && owner !== q) bumpMedal(m, ctx, owner, 'stuck');
+      keep.push(pr);
+      continue;
+    }
+    if (hitPlayer && def.contact === 'bounce') {
+      // a frag glances off whoever it hits
+      const q = m.players[hitPlayer.slot]!;
+      const hb = playerHitbox(m, arena, q, q.exposure, owner ?? null);
+      const c = hitPlayer.head ? hb.head : closestOnSegment(at, hb.torsoA, hb.torsoB);
+      const n = norm(sub(at, c));
+      const r = def.bounce?.restitution ?? 0.4;
+      const vdn = pr.vx * n.x + pr.vy * n.y + pr.vz * n.z;
+      if (vdn < 0) {
+        pr.vx = (pr.vx - 2 * vdn * n.x) * r;
+        pr.vy = (pr.vy - 2 * vdn * n.y) * r;
+        pr.vz = (pr.vz - 2 * vdn * n.z) * r;
+      }
+      pr.x = at.x + n.x * 0.05;
+      pr.y = at.y + n.y * 0.05;
+      pr.z = at.z + n.z * 0.05;
+      pr.bounces++;
+      ctx.events.push({ k: 'pmove', t, id: pr.id, pos: V(pr), vel: V({ x: pr.vx, y: pr.vy, z: pr.vz }) });
+      keep.push(pr);
       continue;
     }
     if (hitPlayer) {
@@ -942,15 +1069,29 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
       endProjectile(m, ctx, pr, at, w, hitPlayer.inHole ? q.hole : -1, w.damage > 0);
       continue;
     }
-    if (inMouth && def.bounce) {
+    if (inMouth && (def.bounce || def.sticky)) {
       // it fell into someone's hole — detonate at the bottom
       const bottom = { x: hole!.x, y: hole!.ground - 1.2, z: hole!.z };
       endProjectile(m, ctx, pr, bottom, w, hole!.id);
       continue;
     }
     if (hitWorld) {
-      if (def.bounce && pr.bounces < def.bounce.max && !(pr.fuseAt && t >= pr.fuseAt)) {
+      const fused = pr.fuseAt && t >= pr.fuseAt;
+      if (def.sticky && !fused) {
+        pr.fuseAt = Math.min(pr.fuseAt || Infinity, t + secToTicks(def.sticky.fuse));
+        stopProjectile(m, ctx, pr, at, -1);
+        keep.push(pr);
+        continue;
+      }
+      if (def.bounce && pr.bounces < def.bounce.max && !fused) {
         bounceOffTerrain(pr, arena, at, def.bounce.restitution);
+        // a frag that has nearly stopped rolls to a halt and waits for its fuse
+        if (def.rest && Math.hypot(pr.vx, pr.vy, pr.vz) < REST_SPEED) stopProjectile(m, ctx, pr, at, -1);
+        keep.push(pr);
+        continue;
+      }
+      if (def.rest && !fused) {
+        stopProjectile(m, ctx, pr, at, -1);
         keep.push(pr);
         continue;
       }
@@ -1015,7 +1156,7 @@ function explode(m: MatchState, ctx: StepContext, owner: number, weapon: WeaponI
   }
   const shooter = m.players[owner];
   for (const orb of [...m.orbs]) {
-    if (shooter && dist(orbPos(orb, m.tick, arena), pos) < sp.radius + ORB_R) claimOrb(m, ctx, orb.id, shooter);
+    if (shooter && dist(orbPos(orb, m.tick, arena), pos) < sp.radius + orbRadius(m.settings)) claimOrb(m, ctx, orb.id, shooter);
   }
   return hitEnemy;
 }

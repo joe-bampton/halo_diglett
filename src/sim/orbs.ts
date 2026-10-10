@@ -5,6 +5,13 @@ import { TICK_RATE } from './constants';
 import type { Orb } from './types';
 
 export const ORB_R = 0.8;
+/** Pitre Mode's energy drink cans are bigger than the capture balls, and so is their hit sphere. */
+export const CAN_ORB_R = 1.05;
+
+/** Hit radius of a power-up for these settings. */
+export function orbRadius(s: { pitre: boolean; pitreCans: boolean }): number {
+  return s.pitre && s.pitreCans ? CAN_ORB_R : ORB_R;
+}
 
 export const ORB_RATES = {
   off: { interval: 0, max: 0, first: 0 },

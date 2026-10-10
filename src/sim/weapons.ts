@@ -10,7 +10,9 @@ export type WeaponId =
   | 'flamethrower'
   | 'minigun'
   | 'orbital'
-  | 'soaker';
+  | 'soaker'
+  | 'frag'
+  | 'plasma';
 
 export type Trigger = 'semi' | 'auto' | 'burst' | 'charge' | 'beam';
 export type FireKind = 'hitscan' | 'projectile' | 'beam' | 'spray';
@@ -21,6 +23,14 @@ export interface ProjectileDef {
   radius: number;
   life: number;
   bounce?: { restitution: number; max: number };
+  /** thrown: launched this many degrees above the aim */
+  loftDeg?: number;
+  /** 'bounce': glances off players instead of stopping on them (frag grenades) */
+  contact?: 'bounce';
+  /** once it stops bouncing it sits where it is until its fuse runs out */
+  rest?: boolean;
+  /** sticks to the first player (or ground) it touches and goes off `fuse` s later; a stuck player can't duck out of it */
+  sticky?: { fuse: number };
   fuse?: number;
   homing?: { turnRate: number; coneDeg: number; range: number };
   stick?: { count: number; window: number; damage: number; radius: number };
@@ -59,7 +69,7 @@ export interface WeaponDef {
   sauce?: { delay: number; duration: number };
   bot: { preferHead: number; skill: number };
   fx: {
-    tracer: 'bullet' | 'bolt' | 'rocket' | 'plasma' | 'rail' | 'flame' | 'grenade' | 'needle' | 'laser' | 'none';
+    tracer: 'bullet' | 'bolt' | 'rocket' | 'plasma' | 'rail' | 'flame' | 'grenade' | 'frag' | 'needle' | 'laser' | 'none';
     color: number;
     recoil: number;
   };
@@ -163,10 +173,33 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     bot: { preferHead: 0, skill: 1 },
     fx: { tracer: 'none', color: 0xfff4d6, recoil: 0.7 },
   },
+  frag: {
+    id: 'frag', name: 'Frag Grenade', short: 'FRAG', trigger: 'semi', fireKind: 'projectile',
+    interval: 0.9, spreadDeg: 0, range: 120, damage: 0, headMult: 1,
+    splash: { radius: 4, inner: 1, damage: 150, selfMult: 0.5 },
+    projectile: { speed: 26, gravity: 14, radius: 0.08, life: 6, loftDeg: 8, contact: 'bounce', rest: true, bounce: { restitution: 0.4, max: 6 }, fuse: 2 },
+    clip: 2, reload: 1.6, zoom: [],
+    bot: { preferHead: 0, skill: 1.2 },
+    fx: { tracer: 'frag', color: 0xffb347, recoil: 0.6 },
+  },
+  plasma: {
+    id: 'plasma', name: 'Plasma Grenade', short: 'PLASMA', trigger: 'semi', fireKind: 'projectile',
+    interval: 0.9, spreadDeg: 0, range: 120, damage: 0, headMult: 1,
+    splash: { radius: 3.5, inner: 1, damage: 150, selfMult: 0.5 },
+    projectile: { speed: 26, gravity: 14, radius: 0.1, life: 6, loftDeg: 8, sticky: { fuse: 1.2 }, fuse: 3 },
+    clip: 2, reload: 1.6, zoom: [],
+    bot: { preferHead: 0, skill: 1.2 },
+    fx: { tracer: 'plasma', color: 0x5ab8ff, recoil: 0.6 },
+  },
 };
+
+/** Thrown grenades are drawn from the host's copy, even for the thrower: they bounce off and stick to players. */
+export function hostDrawn(def: ProjectileDef): boolean {
+  return !!(def.homing || def.sticky || def.contact);
+}
 
 export const WEAPON_IDS = Object.keys(WEAPONS) as WeaponId[];
 export const LOADOUT_WEAPONS = WEAPON_IDS.filter((w) => !WEAPONS[w].powerupOnly);
-export const DEFAULT_GUNGAME: WeaponId[] = ['railgun', 'sniper', 'crossbow', 'br', 'needler', 'hyperbeam', 'rpg', 'grenade'];
+export const DEFAULT_GUNGAME: WeaponId[] = ['railgun', 'sniper', 'crossbow', 'br', 'needler', 'hyperbeam', 'rpg', 'plasma', 'frag', 'grenade'];
 export const weaponIndex = (id: WeaponId) => WEAPON_IDS.indexOf(id);
 export const weaponByIndex = (i: number): WeaponId => WEAPON_IDS[i] ?? 'sniper';

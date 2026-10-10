@@ -6,7 +6,6 @@
    ```bash
    git clone https://github.com/joe-bampton/halo_diglett.git
    cd halo_diglett
-   git checkout ccr-acb8c0e5-bod47d   # the review fixes (or main, once they're merged)
    npm install
    ```
 
@@ -24,7 +23,7 @@
 | Flag | Effect |
 |---|---|
 | `autostart=offline&bots=N` | skip the menus |
-| `weapon=rpg` / `sniper` / `br` / `crossbow` / `grenade` / `railgun` / `hyperbeam` / `needler` | starting weapon |
+| `weapon=rpg` / `sniper` / `br` / `crossbow` / `grenade` / `railgun` / `hyperbeam` / `needler` / `frag` / `plasma` | starting weapon |
 | `mode=gunGame` / `randomLife` / `choice` | weapon mode |
 | `orbs=chaos` | lots of power-up bubbles |
 | `pitre=1` | Pitre Mode on |
@@ -58,6 +57,13 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] Settings persist after a page reload
 - [ ] The lobby is readable on a phone (no sideways scrolling)
 
+**Graphics**
+- [ ] Title screen: the **Graphics** menu says *Auto (High)* on a computer; picking a preset there sticks for the next match
+- [ ] High: textured grass ground, rounded weathered stones around the holes, stone-lined hole walls, soft shadows under the rims (ambient occlusion)
+- [ ] On a slow laptop with *Auto*: after ~15 s of play it says "Graphics lowered to Medium" and starts on Medium from then on
+- [ ] Pitre Mode cans (`pitre=1&orbs=chaos`) are noticeably bigger than before and still easy to shoot
+- [ ] AI models (once some are imported, see `tools/models/AI_MODELS.md`): `?modelview=all` shows them; `?modelview=spartan` stands it on the rim inside its hitboxes, aiming and ducking without gaps at the waist or neck; in a match on High every player's Spartan is in their own colour and the guns sit in their hands and fire from the muzzle
+
 **Feel & smoothness** (fixed in the review — worth a look)
 - [ ] On a 120 or 144 Hz screen (`weapon=rpg`): rockets fly at the same speed as on 60 Hz, and explode where they land
 - [ ] Grenades (`weapon=grenade`) bounce and explode in the same spot you saw them land
@@ -66,6 +72,13 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] Phone: switch to another app and back mid-match — sound still plays, the screen doesn't go to sleep
 - [ ] A long match on Medium after a stutter: the picture doesn't stay blurry (`perf` shows the scale `x1.00` again)
 - [ ] The first explosion of a match doesn't hitch
+
+**Ducking is safe** (`?autostart=offline&bots=3&holes=8&spacing=6`)
+- [ ] With a bot ducked in the next hole, aim at its hole and shoot: no hit, not even a headshot
+- [ ] Duck just as someone fires at you: you're safe once your head is under the rim
+- [ ] Big Heads skull or power-up: ducked heads still disappear under the rim
+- [ ] Homing rounds (`__hd.grant('homing')` with `?test`): aim at a ducked bot's hole, and the shot curves over the rim and hits
+- [ ] Spring Jump: from the top you can still shoot down into a ducked player's hole
 
 **Core gameplay (mouse + keyboard)**
 - [ ] Click the game to capture the mouse; the "Click to play" hint disappears
@@ -104,6 +117,9 @@ The match flags (`weapon`, `orbs`, `pitre`, `botdiff`, `holes`…) work together
 - [ ] Crossbow bolts drop over distance
 - [ ] RPG explodes
 - [ ] A grenade dropped into a hole kills the ducked player
+- [ ] Frag Grenade (`weapon=frag`): the grenade swings out of your hand in an arc, bounces off the ground and off players with a clink, and goes off after 2 s; one that rolls into a hole gets the player in it
+- [ ] Plasma Grenade (`weapon=plasma`): glowing blue; sticks to a player ("Stuck" medal) and stays on them as they duck, then kills them; one that lands on the grass sticks there and goes off a second later
+- [ ] Online (`?net=bc`, two tabs): the other tab sees the same bounces and the grenade stuck to the same player
 - [ ] Railgun charges, then pierces
 - [ ] Hyperbeam charges into a 1.8 s beam
 - [ ] Needler homes; 7 needles make a supercombine

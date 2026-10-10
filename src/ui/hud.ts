@@ -24,6 +24,7 @@ export const MEDALS: Record<string, { name: string; icon: string; color: string;
   longshot: { name: 'Longshot', icon: '⌖', color: '#38a8a8' },
   first: { name: 'First Strike', icon: '1', color: '#d8b82a' },
   supercombine: { name: 'Supercombine', icon: '✸', color: '#ff5fd2' },
+  stuck: { name: 'Stuck', icon: '✦', color: '#5ab8ff' },
   orb: { name: 'Orb Popper', icon: '◓', color: '#e0282e' },
   perfection: { name: 'Perfection', icon: '★', color: '#ffd35a', ann: 'ann.perfection' },
 };
@@ -37,7 +38,7 @@ const RETICLES: Record<string, string> = {
   ring: `<circle cx="40" cy="40" r="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 4"/><circle cx="40" cy="40" r="2" fill="currentColor"/>`,
 };
 const WEAPON_RETICLE: Record<WeaponId, string> = {
-  sniper: 'dot', br: 'br', crossbow: 'dot', rpg: 'bracket', grenade: 'arc', railgun: 'bracket', hyperbeam: 'ring', needler: 'needle', flamethrower: 'ring', minigun: 'br', orbital: 'bracket', soaker: 'ring',
+  sniper: 'dot', br: 'br', crossbow: 'dot', rpg: 'bracket', grenade: 'arc', railgun: 'bracket', hyperbeam: 'ring', needler: 'needle', flamethrower: 'ring', minigun: 'br', orbital: 'bracket', soaker: 'ring', frag: 'arc', plasma: 'arc',
 };
 
 export interface ScoreRow {

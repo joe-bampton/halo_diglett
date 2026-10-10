@@ -47,6 +47,33 @@ describe('loopback session', () => {
   });
 });
 
+describe('thrown grenades over the wire', () => {
+  it('clients hear about plasma grenades sticking (pmove) and going off', async () => {
+    const { host: hn, client: cn } = loopbackPair();
+    let now = 0;
+    const host = new HostSession(hn, 'LOCAL', false);
+    host.clock = () => now;
+    const client = new ClientSession(cn, { name: 'Me', color: 0x3d7bff, token: 'tok' });
+    client.clock = () => now;
+    await flush();
+    host.addBot('legendary');
+    host.addBot('legendary');
+    host.addBot('legendary');
+    host.setSettings({ ...host.lobby.settings, orbRate: 'off', weapon: 'plasma' });
+    host.startMatch(5);
+    const seen = { proj: 0, pmove: 0, boom: 0 };
+    for (let i = 0; i < 60 * 60; i++) {
+      now += 1000 / 60;
+      host.update(now);
+      client.update(now);
+      for (const e of client.drainEvents()) if (e.k === 'proj' || e.k === 'pmove' || e.k === 'boom') seen[e.k]++;
+    }
+    expect(seen.proj).toBeGreaterThan(3);
+    expect(seen.pmove).toBeGreaterThan(0);
+    expect(seen.boom).toBeGreaterThan(0);
+  });
+});
+
 describe('manual respawn over the wire', () => {
   it('a dead player stays down until they press Jump', async () => {
     const { host: hn, client: cn } = loopbackPair();
@@ -152,6 +179,7 @@ function lagMatch(oneWay: number, jitter: number, maxRewindMs: number) {
   let shots = 0;
   let hits = 0;
   let lastPress = 0;
+  let prevB = 0;
   for (let i = 0; i < 60 * 40; i++) {
     w.advance(1000 / 60);
     host.update(w.now);
@@ -161,7 +189,8 @@ function lagMatch(oneWay: number, jitter: number, maxRewindMs: number) {
     A.input.stand = true;
     B.update(w.now);
     A.update(w.now);
-    // A aims at B's head as A sees it and fires the moment B looks fully up
+    // A aims at B's head as A sees it and fires while B is still rising: only rewinding to A's view puts the head
+    // where A aimed (ducking players aren't rewound: lag compensation favours the ducker)
     const vb = A.players[B.slot];
     const va = A.players[A.slot];
     if (vb && va && A.me?.al && vb.alive) {
@@ -170,20 +199,24 @@ function lagMatch(oneWay: number, jitter: number, maxRewindMs: number) {
       const a = yawPitchOf({ x: hb.head.x - eye.x, y: hb.head.y - eye.y, z: hb.head.z - eye.z });
       A.input.yaw = a.yaw;
       A.input.pitch = a.pitch;
-      if (vb.exposure > 0.95 && A.myExposure >= 1 && (A.me.clip ?? 0) > 0 && A.renderTick > A.me.nf + 2 && w.now - lastPress > 700) {
+      // (B itself still wants to be up: not the forced pop-up of a respawn it is ducking out of)
+      const rising = B.input.stand && vb.exposure > prevB && vb.exposure > 0.75 && vb.exposure < 0.95;
+      if (rising && A.myExposure >= 1 && (A.me.clip ?? 0) > 0 && A.renderTick > A.me.nf + 2 && w.now - lastPress > 700) {
         A.input.presses++;
+        A.flushInput(); // as the game does: the shot goes out with the view it was aimed in
         lastPress = w.now;
         shots++;
       }
+      prevB = vb.exposure;
     }
-    for (const e of A.drainEvents()) if (e.k === 'dmg' && e.a === A.slot && e.v === B.slot) hits++;
+    for (const e of A.drainEvents()) if (e.k === 'dmg' && e.a === A.slot && e.v === B.slot && e.head) hits++;
     B.drainEvents();
   }
   return { shots, hits, kills: m.players[A.slot]!.kills };
 }
 
 describe('lag compensation', () => {
-  it('lands shots at 60ms one-way with rewind, fewer without', () => {
+  it('lands headshots on a rising player at 60ms one-way with rewind, fewer without', () => {
     const withR = lagMatch(60, 20, 250);
     const without = lagMatch(60, 20, 0);
     console.log('with rewind', withR, 'without', without);

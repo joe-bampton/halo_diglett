@@ -1,5 +1,7 @@
 # Detailed 3D models (Blender, from code)
 
+> **Want better-looking models?** You can replace any of these, and every weapon, with a model made by an AI 3D tool: see **[AI_MODELS.md](AI_MODELS.md)**. AI-made models win over these where both exist.
+
 On **High** and **Ultra** graphics (or Options → Graphics → Advanced → Models & materials: Detailed) the
 game swaps its built-in, procedural models for these:
 

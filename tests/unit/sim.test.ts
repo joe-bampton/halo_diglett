@@ -74,20 +74,37 @@ describe('sniper', () => {
     const ev = shoot(m, cmds, 'head');
     expect(ev.some((e) => e.k === 'dmg')).toBe(false);
   });
-  it('honours lag compensation within the rewind window', () => {
+  it('honours lag compensation for a player popping up', () => {
     const m = makeMatch(2, { maxRewindMs: 150 });
+    faceOff(m);
+    const cmds = liveAndStanding(m);
+    cmds[1] = cmd({ stand: false });
+    run(m, 30, cmds);
+    cmds[1] = cmd({ stand: true });
+    run(m, 9, cmds); // target is most of the way up (~150ms)
+    expect(m.players[1]!.exposure).toBeGreaterThan(0.6);
+    expect(m.players[1]!.exposure).toBeLessThan(0.8);
+    const a = aimAt(m, 0, 1, 'head');
+    const viewTick = m.tick;
+    run(m, 5, cmds); // fully up by the time the shot reaches the host
+    expect(m.players[1]!.exposure).toBe(1);
+    const c0 = { ...cmds[0]!, yaw: a.yaw, pitch: a.pitch, presses: 1 };
+    // fire with the old view tick: the head is rewound to where the shooter saw it
+    const ev = stepMatch(m, [{ ...c0, vt: viewTick }, cmds[1]], arena);
+    expect(ev.some((e) => e.k === 'kill')).toBe(true);
+  });
+  it('favours the ducker: a shot from an older view misses someone who has ducked since', () => {
+    const m = makeMatch(2, { maxRewindMs: 250 });
     faceOff(m);
     const cmds = liveAndStanding(m);
     const a = aimAt(m, 0, 1, 'head');
     const viewTick = m.tick;
     cmds[1] = cmd({ stand: false });
-    run(m, 5, cmds); // target ducks (~83ms)
-    expect(m.players[1]!.exposure).toBeLessThan(0.5);
-    const ev = [] as ReturnType<typeof run>;
+    run(m, 10, cmds); // ducked (~170ms), well inside the rewind window
+    expect(m.players[1]!.exposure).toBe(0);
     const c0 = { ...cmds[0]!, yaw: a.yaw, pitch: a.pitch, presses: 1 };
-    // fire with an old view tick
-    ev.push(...stepMatch(m, [{ ...c0, vt: viewTick }, cmds[1]], arena));
-    expect(ev.some((e) => e.k === 'kill')).toBe(true);
+    const ev = stepMatch(m, [{ ...c0, vt: viewTick }, cmds[1]], arena);
+    expect(ev.some((e) => e.k === 'dmg')).toBe(false);
   });
   it('shields recharge after the delay', () => {
     const m = makeMatch(2);
@@ -159,5 +176,18 @@ describe('review regressions', () => {
     const p = m.players[0]!;
     expect(p.shots).toBe(1);
     expect(p.hits).toBe(1);
+  });
+});
+
+describe('power-up hit sphere', () => {
+  it('Pitre Mode cans are bigger targets than capture balls, and the drawn can fits inside', async () => {
+    const { ORB_R, CAN_ORB_R, orbRadius } = await import('../../src/sim/orbs');
+    const { CAN_H, CAN_R, CAN_SCALE } = await import('../../src/render/models');
+    expect(orbRadius({ pitre: false, pitreCans: true })).toBe(ORB_R);
+    expect(orbRadius({ pitre: true, pitreCans: false })).toBe(ORB_R);
+    expect(orbRadius({ pitre: true, pitreCans: true })).toBe(CAN_ORB_R);
+    expect(CAN_ORB_R).toBeGreaterThan(ORB_R);
+    expect((CAN_H / 2) * CAN_SCALE).toBeLessThanOrEqual(CAN_ORB_R);
+    expect(CAN_R * CAN_SCALE).toBeLessThan(CAN_ORB_R);
   });
 });

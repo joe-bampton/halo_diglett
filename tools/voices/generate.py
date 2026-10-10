@@ -6,12 +6,14 @@ Each take is then shaped with WORLD (pyworld: pitch, formants, timing), EQ,
 compression and, for the announcer, a short stadium reverb. Finally every file
 is trimmed, loudness-matched to -16 LUFS with peaks limited to -1 dBFS, and
 encoded as a small mono MP3 in public/audio/. public/audio/manifest.json is
-rewritten from the table below.
+rewritten from the table below, plus friends' recordings (recordings.json, from
+import.py) and the sound-effect slots (from tools/sfx/import.py).
 
     tools/voices/.venv/bin/python tools/voices/generate.py            # everything
     tools/voices/.venv/bin/python tools/voices/generate.py --only pitre.mama ann.double
     tools/voices/.venv/bin/python tools/voices/generate.py --list     # show the table
     tools/voices/.venv/bin/python tools/voices/generate.py --wav      # also keep WAVs in out/
+    tools/voices/.venv/bin/python tools/voices/generate.py --manifest-only
 
 See README.md next to this file.
 """
@@ -252,6 +254,8 @@ from scipy.signal import lfilter, resample_poly, fftconvolve
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 AUDIO_DIR = ROOT / "public" / "audio"
+MANIFEST = AUDIO_DIR / "manifest.json"
+RECORDINGS = HERE / "recordings.json"     # friends' takes, written by import.py
 MODEL_DIR = HERE / "models"
 OUT_DIR = HERE / "out"
 
@@ -934,6 +938,19 @@ def decode_mp3(data: bytes) -> np.ndarray:
     return y
 
 
+def encode_matched(y: np.ndarray, gr: float = 0.0, target: float = TARGET_LUFS, kbps: int = MP3_KBPS):
+    """Encode, then re-check the loudness after decoding: the codec shifts it a
+    little. Returns (MP3 bytes, the samples encoded, limiter gain reduction)."""
+    data = encode_mp3(y, SR_OUT, kbps)
+    for _ in range(3):
+        err = target - lufs(decode_mp3(data), SR_OUT)
+        if abs(err) <= 0.1:
+            break
+        y, gr = limit(y * undb(err), SR_OUT)
+        data = encode_mp3(y, SR_OUT, kbps)
+    return data, y, gr
+
+
 # ----------------------------------------------------------------- driver
 def render(take: Take) -> tuple[np.ndarray, dict]:
     o = {**FX_DEFAULTS[take.fx], **take.opts}
@@ -953,15 +970,55 @@ def render(take: Take) -> tuple[np.ndarray, dict]:
     return y, dict(dur=len(y) / sr, gr=gr)
 
 
-def write_manifest() -> None:
+# ----------------------------------------------------------------- manifest
+SFX_PREFIX = "sfx."      # sound-effect slots, owned by tools/sfx/import.py
+
+
+def read_json(path: Path, default):
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
+
+
+def save_manifest(path: Path, manifest: dict) -> None:
+    path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def build_manifest(recordings: list[dict], old: dict | None) -> dict:
+    """The manifest for the table, with friends' recordings and the sound effects merged in.
+
+    A slot with at least one recording plays only those: its files become
+    {"file": ..., "by": friend} entries and its TTS takes are left out (they stay
+    on disk). Every `sfx.*` slot is carried over from `old` unchanged."""
+    recorded: dict[str, list[dict]] = {}
+    for r in recordings:
+        recorded.setdefault(r["slot"], []).append({"file": r["file"], "by": r["by"]})
     slots: dict[str, dict] = {}
     for t in TAKES:
         s = slots.setdefault(t.slot, {"files": [], "gain": SLOT_GAIN.get(t.slot, 1.0)})
-        s["files"].append(f"audio/{t.file}")
-        if not (AUDIO_DIR / t.file).exists():
-            print(f"  warning: {t.file} is in the table but missing on disk")
-    manifest = {"version": 1, "slots": slots}
-    (AUDIO_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+        if t.slot not in recorded:
+            s["files"].append(f"audio/{t.file}")
+    for slot, files in recorded.items():
+        if slot in slots:
+            slots[slot]["files"] = files
+        else:
+            print(f"  warning: there are recordings of {slot!r}, which is not in the table")
+    for k, v in (old or {}).get("slots", {}).items():
+        if k.startswith(SFX_PREFIX):
+            slots[k] = v
+    return {"version": 1, "slots": slots}
+
+
+def write_manifest(path: Path = MANIFEST, recordings: Path = RECORDINGS) -> None:
+    manifest = build_manifest(read_json(recordings, []), read_json(path, None))
+    public = path.parent.parent                 # file paths are relative to the site root
+    for slot, s in manifest["slots"].items():
+        for f in s["files"]:
+            f = f if isinstance(f, str) else f["file"]
+            if not (public / f).exists():
+                print(f"  warning: {f} is in the manifest but missing on disk")
+        bys = sorted({f["by"] for f in s["files"] if isinstance(f, dict)})
+        if bys:
+            print(f"  {slot}: {len(s['files'])} recorded take(s) by {', '.join(bys)}")
+    save_manifest(path, manifest)
 
 
 def report() -> None:
@@ -988,6 +1045,8 @@ def main() -> None:
     ap.add_argument("--list", action="store_true", help="print the line table and exit")
     ap.add_argument("--phonemes", action="store_true", help="print Kokoro phonemes for each line and exit")
     ap.add_argument("--report", action="store_true", help="measure the MP3s on disk and exit")
+    ap.add_argument("--manifest-only", action="store_true",
+                    help="only rebuild manifest.json (table + recordings + sound effects), render nothing")
     args = ap.parse_args()
 
     if args.list:
@@ -996,6 +1055,9 @@ def main() -> None:
         return
     if args.report:
         report()
+        return
+    if args.manifest_only:
+        write_manifest()
         return
 
     todo = [t for t in TAKES if t.fx != "file"]
@@ -1017,13 +1079,7 @@ def main() -> None:
     t0 = time.time()
     for i, t in enumerate(todo, 1):
         y, info = render(t)
-        data = encode_mp3(y, SR_OUT)
-        for _ in range(3):                  # the codec shifts loudness a little: re-check
-            err = TARGET_LUFS - lufs(decode_mp3(data), SR_OUT)
-            if abs(err) <= 0.1:
-                break
-            y, info["gr"] = limit(y * undb(err), SR_OUT)
-            data = encode_mp3(y, SR_OUT)
+        data, y, info["gr"] = encode_matched(y, info["gr"])
         (AUDIO_DIR / t.file).write_bytes(data)
         if args.wav:
             import soundfile as sf

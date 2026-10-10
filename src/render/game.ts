@@ -9,18 +9,18 @@ import { angleDiff, dirFromYawPitch, yawPitchOf } from '../shared/vec';
 import { Arena, MOUTH_R, RIM_OUT, WELL_DEPTH } from '../sim/arena';
 import { sauceAimScale, sauceLeft } from '../sim/sauce';
 import { SPRING_TICKS, inFlight, springLift } from '../sim/spring';
-import { FIRE_EXPOSURE, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
+import { FIRE_EXPOSURE, HEAD_R, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RATE } from '../sim/constants';
 import { raySphere } from '../sim/geom';
-import { drop, eyePos, hitboxOf, rayHitbox } from '../sim/hitbox';
-import { ORB_R, orbPos } from '../sim/orbs';
+import { bigHeadShift, drop, eyePos, hitboxOf, rayHitbox } from '../sim/hitbox';
+import { orbPos, orbRadius } from '../sim/orbs';
 import { POWERUPS, type PowerUpId } from '../sim/powerups';
-import type { Projectile, SimEvent } from '../sim/types';
-import { WEAPONS, weaponByIndex, type WeaponId } from '../sim/weapons';
+import type { Projectile, SimEvent, Vec3T } from '../sim/types';
+import { WEAPONS, hostDrawn, weaponByIndex, type WeaponId } from '../sim/weapons';
 import { setHtml, setStyle } from '../ui/dom';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
 import { Decals, FlashLights, Particles, Ribbons, Shockwaves } from './fx';
 import { loadDetailedModels } from './assets';
-import { GLB, SHARED, buildCan, buildOrb, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
+import { CAN_H, CAN_SCALE, GLB, SHARED, buildCan, buildOrb, setCatCostume, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
 import { PAL, SAUCE } from './palette';
 import type { PostFx } from './post';
 import { DynRes } from './dynres';
@@ -54,6 +54,13 @@ interface SpartanView {
   sauce: THREE.Mesh[];
 }
 
+/** "Auto" graphics on High / Ultra: seconds of play to average, and the frame rate it must keep. */
+const AUTO_CHECK = 12;
+const AUTO_MIN_FPS = 45;
+
+/** How long the first-person grenade throw takes (s). */
+const THROW_ANIM = 0.75;
+
 /** Sound-and-light events this late (a connection that stalled, then caught up) are skipped. */
 const STALE_FX_TICKS = Math.round(0.5 * TICK_RATE);
 
@@ -67,6 +74,8 @@ interface ProjView {
   /** my own shot, predicted here (the host's copy of it is never drawn) */
   local: boolean;
   trailAcc: number;
+  /** a plasma grenade stuck to this player: drawn on them as they move */
+  attach?: { slot: number; off: { x: number; y: number; z: number } } | null;
 }
 
 interface OrbView {
@@ -83,7 +92,7 @@ interface StrikeView {
 }
 
 const WEAPON_SFX: Record<WeaponId, SfxId> = {
-  sniper: 'sniper', br: 'rifle', crossbow: 'crossbow', rpg: 'rocket', grenade: 'bloop', railgun: 'rail', hyperbeam: 'charge', needler: 'needle', flamethrower: 'flameLoop', minigun: 'minigun', orbital: 'beep', soaker: 'squirt',
+  sniper: 'sniper', br: 'rifle', crossbow: 'crossbow', rpg: 'rocket', grenade: 'bloop', railgun: 'rail', hyperbeam: 'charge', needler: 'needle', flamethrower: 'flameLoop', minigun: 'minigun', orbital: 'beep', soaker: 'squirt', frag: 'toss', plasma: 'toss',
 };
 
 /** Dispose geometries, materials and textures of a detached subtree. */
@@ -94,7 +103,8 @@ function disposeTree(obj: THREE.Object3D) {
     const mats = m.material ? (Array.isArray(m.material) ? m.material : [m.material]) : [];
     for (const mat of mats) {
       if (SHARED.has(mat)) continue;
-      (mat as THREE.MeshBasicMaterial).map?.dispose();
+      const map = (mat as THREE.MeshBasicMaterial).map;
+      if (map && !SHARED.has(map)) map.dispose();
       mat.dispose();
     }
   });
@@ -124,6 +134,19 @@ function projMesh(kind: string): THREE.Object3D | null {
     simple('bolt', new THREE.CylinderGeometry(0.02, 0.02, 0.8, 5).rotateX(Math.PI / 2), 0x9fe8ff);
     simple('grenade', new THREE.SphereGeometry(0.1, 8, 6), 0x7cff6b);
     simple('needle', new THREE.ConeGeometry(0.03, 0.3, 4).rotateX(-Math.PI / 2), 0xff5fd2);
+    const fragGeo = keep(new THREE.SphereGeometry(0.08, 10, 8).scale(1, 1.25, 1));
+    const fragMat = keep(new THREE.MeshLambertMaterial({ color: 0x4a5a32 }));
+    projCache.set('frag', () => new THREE.Mesh(fragGeo, fragMat));
+    const plasmaCore = keep(new THREE.SphereGeometry(0.09, 12, 8));
+    const plasmaMat = keep(new THREE.MeshBasicMaterial({ color: 0xbfe6ff }));
+    const plasmaGlow = keep(new THREE.SphereGeometry(0.2, 12, 8));
+    const plasmaGlowMat = keep(new THREE.MeshBasicMaterial({ color: 0x3a9cff, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
+    projCache.set('plasma', () => {
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(plasmaCore, plasmaMat));
+      g.add(new THREE.Mesh(plasmaGlow, plasmaGlowMat));
+      return g;
+    });
   }
   return projCache.get(kind)?.() ?? null;
 }
@@ -137,6 +160,8 @@ let slowHintShown = false;
 export interface GameHooks {
   onMenu(): void;
   isMenuOpen(): boolean;
+  /** High or Ultra under "Auto" ran too slowly in the first seconds of play: the app may drop to Medium */
+  onTooSlow?(): void;
 }
 
 export class Game {
@@ -150,7 +175,13 @@ export class Game {
   private vmModel: THREE.Group | null = null;
   private vmWeapon: WeaponId | '' = '';
   private vmKick = 0;
+  /** seconds since a grenade left the hand (the throw animation) */
+  private vmThrow = 9;
   private sky: THREE.Mesh;
+  private terrain: THREE.Mesh;
+  /** terrain detail it was built with (it changes only with a new match) */
+  private terrainSegs: number;
+  private holes: THREE.Group;
   private grass: Grass;
   private trees: THREE.InstancedMesh;
   private sun: THREE.DirectionalLight;
@@ -168,6 +199,8 @@ export class Game {
   private fpsEl: HTMLElement | null = null;
   /** frame-rate watch for the "running slow?" hint: 5 s windows, two slow ones in a row */
   private fpsWatch = { t: 0, n: 0, slow: 0 };
+  /** frame-rate check of High / Ultra in the first seconds of play (see GameHooks.onTooSlow) */
+  private autoWatch = { t: 0, n: 0, done: false };
   private fpsAvg = { t: 0, n: 0 };
   /** which load of the detailed models the Spartans etc. were built with */
   private glbSeen = 0;
@@ -262,8 +295,10 @@ export class Game {
     // world
     this.sky = buildSky();
     this.scene.add(this.sky);
-    this.scene.add(buildTerrain(this.arena, quality));
-    this.scene.add(buildHoles(this.arena));
+    this.terrainSegs = quality.angularSegs;
+    this.terrain = buildTerrain(this.arena, quality);
+    this.holes = buildHoles(this.arena, quality.textures);
+    this.scene.add(this.terrain, this.holes);
     this.scene.add(buildFence(this.arena));
     this.trees = buildTrees(this.arena, quality);
     this.scene.add(this.trees);
@@ -425,6 +460,17 @@ export class Game {
       this.scene.add(this.grass.mesh);
       this.grassAt.set(NaN, NaN);
     }
+    if (prev.textures !== next.textures) {
+      // textured ground and stones (or back to flat colours)
+      for (const o of [this.terrain, this.holes]) {
+        this.scene.remove(o);
+        disposeTree(o);
+      }
+      this.terrain = buildTerrain(this.arena, { ...next, angularSegs: this.terrainSegs });
+      this.holes = buildHoles(this.arena, next.textures);
+      this.scene.add(this.terrain, this.holes);
+      if (next.shadows === 'static') this.bakeStaticShadows();
+    }
     if (prev.trees !== next.trees) {
       this.scene.remove(this.trees);
       disposeTree(this.trees);
@@ -432,7 +478,7 @@ export class Game {
       this.scene.add(this.trees);
       if (next.shadows === 'static') this.bakeStaticShadows();
     }
-    if (prev.post !== next.post || prev.antialias !== next.antialias || prev.smaa !== next.smaa) this.setupPost();
+    if (prev.post !== next.post || prev.antialias !== next.antialias || prev.smaa !== next.smaa || prev.ao !== next.ao) this.setupPost();
     if (next.models === 'detailed') void loadDetailedModels();
     if (prev.pbr !== next.pbr || prev.models !== next.models) this.rebuildModels();
     this.onResize();
@@ -501,7 +547,7 @@ export class Game {
     const world = new THREE.Group();
     const vm = new THREE.Group();
     world.visible = vm.visible = false;
-    for (const k of ['rocket', 'bolt', 'grenade', 'needle']) {
+    for (const k of ['rocket', 'bolt', 'grenade', 'frag', 'plasma', 'needle']) {
       const o = projMesh(k);
       if (o) world.add(o);
     }
@@ -533,7 +579,7 @@ export class Game {
     const q = this.q;
     void import('./post').then(({ PostFx }) => {
       if (gen !== this.postGen || this.destroyed) return;
-      this.post = new PostFx(this.renderer, this.scene, this.camera, this.vmScene, this.vmCamera, { msaa: q.antialias, smaa: q.smaa });
+      this.post = new PostFx(this.renderer, this.scene, this.camera, this.vmScene, this.vmCamera, { msaa: q.antialias, smaa: q.smaa, ao: q.ao });
       this.onResize();
     });
   }
@@ -604,6 +650,7 @@ export class Game {
       a.t = 0;
       a.n = 0;
     }
+    this.watchAuto(dt);
     const w = this.fpsWatch;
     if (slowHintShown || this.session.phase !== 'live' || this.time < 8) return;
     w.t += dt;
@@ -616,6 +663,26 @@ export class Game {
     if (w.slow >= 2 && this.q.level !== 'low') {
       slowHintShown = true;
       this.hud.message('Running slow? Try Options → Graphics → Low', 6000, 'warn');
+    }
+  }
+
+  /** High / Ultra picked by "Auto": average the frame rate over AUTO_CHECK s of play, and give up on it below AUTO_MIN_FPS. */
+  private watchAuto(dt: number) {
+    const w = this.autoWatch;
+    if (w.done || !this.hooks.onTooSlow || this.session.phase !== 'live' || this.time < 4) return;
+    if (this.q.level !== 'high' && this.q.level !== 'ultra') {
+      w.done = true;
+      return;
+    }
+    // a hidden tab or a paused game isn't slow
+    if (dt > 0.25 || this.hooks.isMenuOpen()) return;
+    w.t += dt;
+    w.n++;
+    if (w.t < AUTO_CHECK) return;
+    w.done = true;
+    if (w.n / w.t < AUTO_MIN_FPS) {
+      this.hooks.onTooSlow();
+      this.hud.message('Graphics lowered to Medium to keep it smooth (Options → Graphics to change)', 6000, 'warn');
     }
   }
 
@@ -949,6 +1016,7 @@ export class Game {
     const dir = new THREE.Vector3(d.x, d.y, d.z);
     this.vmKick = Math.min(1, this.vmKick + w.fx.recoil * 0.6);
     this.camKick += w.fx.recoil * 0.004;
+    if (w.projectile?.loftDeg) this.vmThrow = 0;
     this.muzzleFlash(this.muzzleOf(s.slot), dir, w.id, true);
     this.playFireSound(s.slot, w.id, null);
     this.pitreLocalCue({ speaker: s.slot, line: 'brap', delayMs: 0, priority: 1 }, w.id);
@@ -965,13 +1033,14 @@ export class Game {
       const endP = eye.clone().addScaledVector(dir, end);
       this.tracer(this.muzzleOf(s.slot), endP, w.id);
       if (end < w.range) this.impact(endP, w.id);
-    } else if (w.projectile && !w.projectile.homing) {
-      // (homing needles pick their target on the host: those are drawn from the host's copy)
+    } else if (w.projectile && !hostDrawn(w.projectile)) {
+      // (homing needles pick their target on the host, and grenades bounce off or stick to players there: those are
+      // drawn from the host's copy)
       const def = w.projectile;
       const id = `L${++this.pred.localId}`;
       const start = eye.clone().addScaledVector(dir, 0.6);
       const born = Math.floor(s.hostTick);
-      const pr: Projectile = { id: -1, owner: s.slot, weapon: w.id, x: start.x, y: start.y - 0.1, z: start.z, vx: dir.x * def.speed, vy: dir.y * def.speed, vz: dir.z * def.speed, born, bounces: 0, target: -1, fuseAt: def.fuse ? born + Math.round(def.fuse * TICK_RATE) : 0 };
+      const pr: Projectile = { id: -1, owner: s.slot, weapon: w.id, x: start.x, y: start.y - 0.1, z: start.z, vx: dir.x * def.speed, vy: dir.y * def.speed, vz: dir.z * def.speed, born, bounces: 0, target: -1, fuseAt: def.fuse ? born + Math.round(def.fuse * TICK_RATE) : 0, y0: start.y };
       this.addProjectile(id, pr, true);
     }
   }
@@ -1002,7 +1071,7 @@ export class Game {
             // already flashed, kicked and sounded here; with homing rounds only the host knows where it went
             if (w.fireKind === 'hitscan' && this.hasPu('homing')) {
               const to = new THREE.Vector3(...e.e);
-              this.tracer(this.muzzleOf(e.p), to, e.w);
+              this.tracer(this.muzzleOf(e.p), to, e.w, e.v);
               if (e.hit === 'world') this.impact(to, e.w);
             }
             break;
@@ -1013,11 +1082,12 @@ export class Game {
           if (w.trigger !== 'beam') {
             this.muzzleFlash(from, to.clone().sub(from).normalize(), e.w, fp);
             if (w.fireKind === 'hitscan') {
-              this.tracer(from, to, e.w);
+              this.tracer(from, to, e.w, e.v);
               if (e.hit === 'world') this.impact(to, e.w);
             }
           }
           if (fp) {
+            if (w.projectile?.loftDeg) this.vmThrow = 0;
             this.vmKick = Math.min(1, this.vmKick + w.fx.recoil * 0.6);
             this.camKick += w.fx.recoil * 0.004;
           }
@@ -1025,9 +1095,26 @@ export class Game {
           break;
         }
         case 'proj': {
-          if (e.p === mySlot && this.ownShotPredicted(e.w) && !WEAPONS[e.w].projectile?.homing) break;
-          const pr: Projectile = { id: e.id, owner: e.p, weapon: e.w, x: e.pos[0], y: e.pos[1], z: e.pos[2], vx: e.vel[0], vy: e.vel[1], vz: e.vel[2], born: e.t, bounces: 0, target: e.tgt, fuseAt: 0 };
+          if (e.p === mySlot && this.ownShotPredicted(e.w) && !hostDrawn(WEAPONS[e.w].projectile!)) break;
+          const pr: Projectile = { id: e.id, owner: e.p, weapon: e.w, x: e.pos[0], y: e.pos[1], z: e.pos[2], vx: e.vel[0], vy: e.vel[1], vz: e.vel[2], born: e.t, bounces: 0, target: e.tgt, fuseAt: 0, y0: e.pos[1] };
           this.addProjectile(String(e.id), pr, false);
+          break;
+        }
+        case 'pmove': {
+          // a grenade glanced off someone, or stuck: pick its flight up from the host's copy
+          const pv = this.projs.get(String(e.id));
+          if (!pv) break;
+          const tr = pv.track;
+          Object.assign(tr.pr, { x: e.pos[0], y: e.pos[1], z: e.pos[2], vx: e.vel[0], vy: e.vel[1], vz: e.vel[2] });
+          tr.tick = e.t;
+          tr.px = e.pos[0];
+          tr.py = e.pos[1];
+          tr.pz = e.pos[2];
+          tr.stopped = e.on !== undefined;
+          pv.attach = e.on !== undefined && e.on >= 0 && e.off ? { slot: e.on, off: { x: e.off[0], y: e.off[1], z: e.off[2] } } : null;
+          const pos = { x: e.pos[0], y: e.pos[1], z: e.pos[2] };
+          if (pv.weapon === 'plasma' && e.on !== undefined) audio.play('plasmaStick', { pos, gain: 0.8, bus: 'guns' });
+          else if (e.on === undefined) audio.play('clink', { pos, gain: 0.7, bus: 'guns' });
           break;
         }
         case 'pend': {
@@ -1205,7 +1292,8 @@ export class Game {
     // stop whatever this speaker was saying (channel interrupt)
     const sv = this.spartans.get(cue.speaker);
     const prevVoice = mine ? this.myVoice : sv?.voice;
-    const h = audio.playVoice(slot, { pos, delay: cue.delayMs / 1000, gain: mine ? 0.8 : 1.3 });
+    const speaker = this.session.players[cue.speaker]?.name; // friends' own recordings, if any
+    const h = audio.playVoice(slot, { pos, delay: cue.delayMs / 1000, gain: mine ? 0.8 : 1.3, speaker });
     if (!h) return;
     prevVoice?.stop(0.03);
     if (mine) this.myVoice = h;
@@ -1218,7 +1306,7 @@ export class Game {
     this.calloutAt.set(slot, now);
     const mine = slot === this.session.slot;
     const sv = this.spartans.get(slot);
-    const h = audio.playVoice(key, { pos: mine ? null : this.posOf(slot), gain: mine ? 0.9 : 1.3 });
+    const h = audio.playVoice(key, { pos: mine ? null : this.posOf(slot), gain: mine ? 0.9 : 1.3, speaker: this.session.players[slot]?.name });
     if (h) {
       (mine ? this.myVoice : sv?.voice)?.stop(0.03);
       if (mine) this.myVoice = h;
@@ -1365,12 +1453,19 @@ export class Game {
 
   private muzzleFlash(pos: THREE.Vector3, dir: THREE.Vector3, w: WeaponId, mine: boolean) {
     const c = WEAPONS[w].fx.color;
-    if (w === 'flamethrower') return;
+    if (w === 'flamethrower' || WEAPONS[w].projectile?.loftDeg) return; // (nothing flashes when a grenade is thrown)
     this.fxAdd.emit({ pos, count: mine ? 5 : 7, speed: [0.5, 3], dir, spread: 0.5, life: [0.04, 0.09], size: [mine ? 0.25 : 0.45, 0.05], color: 0xffffff, color1: c });
     if (!mine && this.q.flashLights > 1) this.lights.flash(pos, c, 3, 6, 0.08);
   }
 
-  private tracer(from: THREE.Vector3, to: THREE.Vector3, w: WeaponId) {
+  /** `via`: homing rounds that curved down into a hole bend over this point. */
+  private tracer(from: THREE.Vector3, to: THREE.Vector3, w: WeaponId, via?: Vec3T) {
+    if (via) {
+      const v = new THREE.Vector3(...via);
+      this.tracer(from, v, w);
+      this.tracer(v, to, w);
+      return;
+    }
     const def = WEAPONS[w];
     switch (def.fx.tracer) {
       case 'rail':
@@ -1488,8 +1583,9 @@ export class Game {
       if (hs !== sv.headScale) {
         sv.headScale = hs;
         sv.parts.head.scale.setScalar(hs);
-        sv.parts.head.position.y = 0.37 + (hs - 1) * 0.2;
       }
+      // a big head sinks back under the rim when its owner ducks (same as the hitbox)
+      sv.parts.head.position.y = 0.37 + bigHeadShift((hs - 1) * HEAD_R, p.exposure);
       // weapon
       if (sv.weapon !== p.weapon) {
         if (sv.weaponModel) {
@@ -1556,7 +1652,7 @@ export class Game {
       for (const b of sv.sauce) b.visible = sauced;
       if (sauced && Math.random() < dt * 6) this.fxSauce.emit({ pos: this.headPos(p).add(new THREE.Vector3((Math.random() - 0.5) * 0.4, -0.2, (Math.random() - 0.5) * 0.4)), count: 1, speed: [0, 0.3], gravity: 6, life: [0.5, 0.9], size: [0.12, 0.08], color: SAUCE.base, color1: SAUCE.shade, alpha: [1, 0.8] });
       // Pitre: the leader is the Cat in the Hat
-      sv.parts.catHat.visible = !!settings?.pitre && settings.pitreCatHat && s.leader === p.slot && !camo;
+      setCatCostume(sv.parts, !!settings?.pitre && settings.pitreCatHat && s.leader === p.slot && !camo);
       // charging & beams
       if (p.flags & F_CHARGING && sv.weaponModel && Math.random() < dt * 30) {
         const mz = this.muzzleOf(p.slot);
@@ -1649,7 +1745,7 @@ export class Game {
         const group = this.cans() ? buildCan(color, this.q.pbr, this.detailed) : buildOrb(color, this.q.pbr);
         const label = textSprite(`${def?.icon ?? '?'} ${def?.name ?? ''}`, '#ffffff', 36);
         group.add(label);
-        label.position.y = 1.25;
+        label.position.y = this.cans() ? (CAN_H / 2) * CAN_SCALE + 0.55 : 1.25;
         this.scene.add(group);
         v = { id, group, color, label };
         this.orbs.set(id, v);
@@ -1724,6 +1820,13 @@ export class Game {
         continue;
       }
       const pos = trackPos(tr, now, tmpP);
+      const stuckTo = pv.attach ? s.players[pv.attach.slot] : null;
+      if (stuckTo?.alive) {
+        const a = hitboxOf(this.holeOf(stuckTo), stuckTo.exposure, this.headScaleFor(stuckTo), this.liftOf(stuckTo)).torsoB;
+        pos.x = a.x + pv.attach!.off.x;
+        pos.y = a.y + pv.attach!.off.y;
+        pos.z = a.z + pv.attach!.off.z;
+      }
       if (pv.obj) {
         pv.obj.visible = ageTicks >= 0;
         pv.obj.position.set(pos.x, pos.y, pos.z);
@@ -1747,21 +1850,23 @@ export class Game {
         } else if (w === 'crossbow') this.fxAdd.emit({ pos, count: 1, speed: [0, 0.1], life: [0.15, 0.25], size: [0.12, 0.02], color: 0x9fe8ff });
         else if (w === 'needler') this.fxAdd.emit({ pos, count: 1, speed: [0, 0.1], life: [0.1, 0.2], size: [0.14, 0.02], color: 0xff5fd2 });
         else if (w === 'grenade') this.fxAdd.emit({ pos, count: 1, speed: [0, 0.1], life: [0.15, 0.3], size: [0.18, 0.02], color: 0x7cff6b });
+        else if (w === 'plasma') this.fxAdd.emit({ pos, count: 1, speed: [0, 0.2], life: [0.15, 0.3], size: [0.25, 0.03], color: 0x9fd4ff, color1: 0x2a7cff });
       }
     }
   }
 
   /** What my own predicted shots stop on: the other players as I see them, and power-up orbs. */
-  private ownShotTargets: TargetTest = (o, d, L, tick, r) => {
+  private ownShotTargets: TargetTest = (o, d, L, tick, r, from) => {
     const s = this.session;
+    const orbR = s.start ? orbRadius(s.start.settings) : 0.8;
     let best = Infinity;
     for (const p of s.players) {
       if (!p || p.slot === s.slot || !p.alive) continue;
-      const h = rayHitbox(o, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p)), r);
+      const h = rayHitbox(o, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p)), r, from);
       if (h && h.t < L && h.t < best) best = h.t;
     }
     for (const orb of s.orbs.values()) {
-      const to = raySphere(o, d, orbPos(orb, tick, this.arena), ORB_R + r);
+      const to = raySphere(o, d, orbPos(orb, tick, this.arena), orbR + r);
       if (to >= 0 && to < L && to < best) best = to;
     }
     return best;
@@ -2071,9 +2176,23 @@ export class Game {
     }
     const exp = other ? other.exposure : s.myExposure;
     const bob = Math.sin(this.time * 2) * 0.004;
+    // a throw: the hand swings forward, empty for a moment, then the next grenade comes up from below
+    this.vmThrow += dt;
+    let tY = 0, tZ = 0, tRot = 0, empty = false;
+    if (WEAPONS[w].projectile?.loftDeg && this.vmThrow < THROW_ANIM) {
+      const k = this.vmThrow / THROW_ANIM;
+      if (k < 0.3) {
+        const a = Math.sin((k / 0.3) * Math.PI);
+        tY = a * 0.1;
+        tZ = -a * 0.18;
+        tRot = -a * 0.9;
+      } else if (k < 0.6) empty = true;
+      else tY = -(1 - (k - 0.6) / 0.4) * 0.3;
+    }
+    if (this.vmModel) this.vmModel.visible = !empty;
     this.vmHolder.scale.setScalar(0.6);
-    this.vmHolder.position.set(0.3, -0.27 - (1 - exp) * 0.25 - reloadDip * 0.18 + bob, -0.46 + this.vmKick * 0.06);
-    this.vmHolder.rotation.set(this.vmKick * 0.12 - reloadDip * 0.6, 0.06, reloadDip * 0.35);
+    this.vmHolder.position.set(0.3, -0.27 - (1 - exp) * 0.25 - reloadDip * 0.18 + bob + tY, -0.46 + this.vmKick * 0.06 + tZ);
+    this.vmHolder.rotation.set(this.vmKick * 0.12 - reloadDip * 0.6 + tRot, 0.06, reloadDip * 0.35);
   }
 
   // -------------------------------------------------------------------------------------------
