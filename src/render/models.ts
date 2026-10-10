@@ -356,7 +356,7 @@ function proceduralSpartan(color: number, pbr: boolean): SpartanParts {
   const head = mk(headParts);
   head.position.set(0, 0.37, 0);
   aim.add(head);
-  const vis = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 10, Math.PI * 0.62, Math.PI * 0.76, Math.PI * 0.32, Math.PI * 0.3).scale(1.02, 1.05, 1.12), visor);
+  const vis = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 10, Math.PI * 1.12, Math.PI * 0.76, Math.PI * 0.32, Math.PI * 0.3).scale(1.06, 1.08, 1.17), visor);
   vis.position.set(0, -0.01, -0.012);
   head.add(vis);
   const weaponHolder = new THREE.Group();
@@ -538,6 +538,21 @@ export function buildCatHat(): THREE.Group {
 /** Geometry / materials used by many objects at once: never disposed with any one of them (see disposeTree). */
 export const SHARED = new Set<unknown>();
 const share = <T>(x: T): T => (SHARED.add(x), x);
+
+/** Dispose geometries, materials and textures of a detached subtree. */
+export function disposeTree(obj: THREE.Object3D) {
+  obj.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.geometry && !SHARED.has(m.geometry)) m.geometry.dispose();
+    const mats = m.material ? (Array.isArray(m.material) ? m.material : [m.material]) : [];
+    for (const mat of mats) {
+      if (SHARED.has(mat)) continue;
+      const map = (mat as THREE.MeshBasicMaterial).map;
+      if (map && !SHARED.has(map)) map.dispose();
+      mat.dispose();
+    }
+  });
+}
 
 export type GlbModel = 'spartan' | 'can' | 'soaker' | 'spring';
 /** The detailed (Blender-made) models once assets.ts has loaded them; `version` counts loads. */

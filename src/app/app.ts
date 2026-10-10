@@ -10,15 +10,17 @@ import type { LobbyState } from '../net/protocol';
 import { MuxHostNet, loopbackPair, type ClientNet, type HostNet, type VoiceLink } from '../net/transport';
 import { Backdrop } from '../render/backdrop';
 import { Game } from '../render/game';
+import { cancelPortraits, portrait, portraitKey, portraitNow } from '../render/portraits';
 import { GFX_FIELDS, QUALITY, QUALITY_LABEL, QUALITY_LEVELS, autoQuality, detectQuality, lowerAutoQuality, presetChoice, resolveQuality, type GfxOverrides, type QualityLevel } from '../render/quality';
 import { MAX_BOTS, MAX_HUMANS } from '../sim/constants';
-import { DEFAULT_SETTINGS, migrateSavedSettings, sanitizeSettings, settingsForStorage, type Settings } from '../sim/settings';
+import { DEFAULT_SETTINGS, migrateSavedSettings, sanitizeSettings, settingsForStorage, type Settings, type SettingsTabId } from '../sim/settings';
 import type { BotDifficulty } from '../sim/types';
 import { WEAPONS, type WeaponId } from '../sim/weapons';
-import { esc, hex, toast } from '../ui/dom';
+import { esc, hex, setHtml, toast } from '../ui/dom';
 import { MEDALS } from '../ui/hud';
 import { mapPreviewHtml } from '../ui/mapPreview';
-import { renderSettings } from '../ui/settingsForm';
+import { SettingsModal } from '../ui/settingsModal';
+import { gameSummary, lobbyWeapon } from '../ui/settingsSummary';
 
 interface Profile {
   name: string;
@@ -101,7 +103,9 @@ export class App {
   private hostRaf = 0;
   private worker: Worker | null = null;
   private wakeLock: { release(): Promise<void> } | null = null;
-  private settingsView: { update(s: Settings): void } | null = null;
+  private settingsModal: SettingsModal | null = null;
+  /** when each Spartan in the lobby (slot:kind:name) first showed up: they slide in once (a redraw doesn't replay it) */
+  private cardSeen = new Map<string, number>();
   private lastLobbyKey = '';
   private backdrop: Backdrop | null = null;
   private attempt = 0;
@@ -178,6 +182,8 @@ export class App {
   private setScreen(html: string, cls = ''): HTMLElement {
     this.watchVoice(null);
     this.optionsDone = null;
+    // the settings window (and the portraits) belong to the lobby
+    if (!cls.split(' ').includes('lobby-screen')) this.leaveLobbyUi();
     this.ensureBackdrop();
     this.screen?.remove();
     const s = document.createElement('div');
@@ -191,6 +197,7 @@ export class App {
   private clearScreen() {
     this.watchVoice(null);
     this.optionsDone = null;
+    this.leaveLobbyUi();
     this.screen?.remove();
     this.screen = null;
   }
@@ -416,7 +423,8 @@ export class App {
     clearInterval(this.hostRaf);
     this.worker?.terminate();
     this.worker = null;
-    this.settingsView = null;
+    this.closeSettings();
+    this.cardSeen.clear();
     this.lastLobbyKey = '';
   }
 
@@ -429,81 +437,111 @@ export class App {
     const lobby = s?.lobby;
     if (!s || !lobby) return;
     if (s.state === 'match' && this.game) return;
+    // Options opened from the lobby stays up until its Done (which comes back here)
+    if (!force && this.screen?.classList.contains('over-lobby')) return;
+    this.settingsModal?.update(lobby.settings, lobby.map, lobby.slots.length);
     const isHost = !!this.host;
-    const key = JSON.stringify({ slots: lobby.slots, phase: lobby.phase, me: s.slot, mode: lobby.settings.weaponMode });
+    const key = JSON.stringify({ slots: lobby.slots, phase: lobby.phase, me: s.slot, mode: lobby.settings.weaponMode, allowed: lobby.settings.allowedWeapons });
     if (!force && this.screen?.classList.contains('lobby-screen') && key === this.lastLobbyKey) {
-      // only settings changed → refresh the form in place
-      if (!isHost) this.settingsView?.update(lobby.settings);
-      this.renderMapPreview(lobby);
+      // only settings changed → refresh the cards in place
+      this.refreshLobby(this.screen, lobby);
       return;
     }
     this.lastLobbyKey = key;
-    const scrollTop = this.screen?.classList.contains('lobby-screen') ? this.screen.scrollTop : 0;
+    const prev = this.screen?.classList.contains('lobby-screen') ? this.screen : null;
+    const scrollTop = prev?.scrollTop ?? 0;
+    // someone joined while I was typing my name: keep what I typed
+    const nameWas = prev?.querySelector<HTMLInputElement>('.name');
+    const typing = nameWas && document.activeElement === nameWas ? { v: nameWas.value, a: nameWas.selectionStart, b: nameWas.selectionEnd } : null;
     const humans = lobby.slots.filter((x) => x.kind === 'human');
     const bots = lobby.slots.filter((x) => x.kind === 'bot');
     const me = lobby.slots.find((x) => x.slot === s.slot);
     const link = `${location.origin}${location.pathname}#/join/${lobby.code}`;
-    const slotHtml = lobby.slots
-      .map((x) => {
-        const tags = [x.isHost ? '<span class="tag host">Host</span>' : '', x.slot === s.slot ? '<span class="tag">You</span>' : '', x.kind === 'bot' ? '<span class="tag">Bot</span>' : '', !x.connected ? '<span class="tag">Reconnecting…</span>' : '', x.ping ? `<span class="tag">${x.ping}ms</span>` : '']
+    const choice = lobby.settings.weaponMode === 'choice';
+    // Spartans slide in when they arrive; a redraw meanwhile carries on from where the slide had got to
+    const now = performance.now();
+    const seen = new Map(lobby.slots.map((x) => [`${x.slot}:${x.kind}:${x.name}`, this.cardSeen.get(`${x.slot}:${x.kind}:${x.name}`) ?? now] as const));
+    this.cardSeen = seen;
+    const diffOptions = (cur: BotDifficulty) => Object.entries(BOT_PROFILES).map(([k, p]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${p.label}</option>`).join('');
+    const cards = lobby.slots
+      .map((x, i) => {
+        const age = Math.round(now - seen.get(`${x.slot}:${x.kind}:${x.name}`)!);
+        const fresh = age < 600 + i * 70;
+        const tags = [x.isHost ? '<span class="tag host">Host</span>' : '', x.slot === s.slot ? '<span class="tag you">You</span>' : '', x.kind === 'bot' ? '<span class="tag">Bot</span>' : '', !x.connected ? '<span class="tag warn">Reconnecting…</span>' : '', x.ping ? `<span class="tag">${x.ping} ms</span>` : '']
           .filter(Boolean)
           .join('');
-        const diff =
-          x.kind === 'bot'
-            ? isHost
-              ? `<select data-diff="${x.slot}">${Object.entries(BOT_PROFILES)
-                  .map(([k, p]) => `<option value="${k}" ${k === x.bot ? 'selected' : ''}>${p.label}</option>`)
-                  .join('')}</select>`
-              : `<span class="tag">${BOT_PROFILES[x.bot ?? 'normal'].label}</span>`
-            : '';
-        const rm = isHost && !x.isHost ? `<button class="btn small danger" data-rm="${x.slot}" title="Remove">✕</button>` : '';
+        const diff = x.kind === 'bot' ? (isHost ? `<select data-diff="${x.slot}" aria-label="${esc(x.name)}: difficulty">${diffOptions(x.bot ?? 'normal')}</select>` : `<span class="tag">${BOT_PROFILES[x.bot ?? 'normal'].label}</span>`) : '';
+        const rm = isHost && !x.isHost ? `<button class="btn small danger rm" data-rm="${x.slot}" title="Remove ${esc(x.name)}" aria-label="Remove ${esc(x.name)}">✕</button>` : '';
         const vc =
           voice.available && x.kind === 'human'
             ? `<span class="vdot"></span>${x.slot === s.slot ? '<button class="btn small vbtn" data-vme></button>' : `<button class="btn small vbtn" data-vmute="${x.slot}"></button>`}`
             : '';
-        return `<div class="slot" data-vslot="${x.slot}" style="--c:${hex(x.color)}">${vc}<span class="nm">${esc(x.name)}</span>${tags}${diff}${rm}</div>`;
+        const w = lobbyWeapon(lobby.settings, x.slot, x.pick);
+        return `<div class="slot pcard${x.slot === s.slot ? ' me' : ''}${x.connected ? '' : ' away'}${fresh ? ' new' : ''}" data-vslot="${x.slot}" style="--c:${hex(x.color)};--i:${i};--age:${age}ms">
+          ${rm}<div class="pic"><img alt="" data-pslot="${x.slot}" src="${portraitNow(x.color, w).url}"></div>
+          <div class="nm" title="${esc(x.name)}">${esc(x.name)}</div>
+          ${choice ? `<div class="wpn">${esc(WEAPONS[w].name)}</div>` : ''}
+          <div class="tags">${tags}</div>
+          ${diff || vc ? `<div class="ctl">${diff}${vc}</div>` : ''}
+        </div>`;
       })
       .join('');
+    const addCard = isHost
+      ? `<div class="pcard addcard"><button class="pic plus addbot" ${bots.length >= MAX_BOTS ? 'disabled' : ''} aria-label="Add a bot">+</button><div class="nm">Add a bot</div><select class="newdiff" aria-label="New bot’s difficulty">${diffOptions('normal')}</select><div class="note">${bots.length}/${MAX_BOTS} bots</div></div>`
+      : '';
     const empty = lobby.online ? Math.max(0, MAX_HUMANS - humans.length) : 0;
-    const choice = lobby.settings.weaponMode === 'choice';
+    const openCard = empty ? `<div class="pcard opencard"><div class="pic"><span>?</span></div><div class="nm">${empty} open slot${empty > 1 ? 's' : ''}</div><div class="note">Waiting for friends…</div></div>` : '';
     const html = `
       <div class="lobby-head">
-        <div><h2>${lobby.online ? 'Online lobby' : 'Offline match'}</h2>${lobby.online ? `<div class="note">Share the code or link — up to ${MAX_HUMANS} players</div>` : ''}</div>
-        ${lobby.online ? `<div class="row"><span class="code">${esc(lobby.code)}</span><button class="btn small copy">Copy invite link</button></div>` : ''}
+        <div><h2>${lobby.online ? 'Online lobby' : 'Bot match'}</h2><div class="note">${lobby.online ? `Share the code or link: up to ${MAX_HUMANS} players` : 'You against the bots'}</div></div>
+        <div class="row">
+          ${lobby.online ? `<span class="code" title="Room code">${esc(lobby.code)}</span><button class="btn small copy">Copy invite link</button>` : ''}
+          <button class="btn small opts">Options</button><button class="btn small leave">Leave</button>
+        </div>
       </div>
       <div class="lobby">
-        <div style="display:flex;flex-direction:column;gap:16px">
-          <div class="card"><h3>Spartans (${lobby.slots.length})</h3><div class="slots">${slotHtml}${lobby.online && empty ? `<div class="slot empty"><span class="nm">${empty} open slot${empty > 1 ? 's' : ''} — waiting for friends…</span></div>` : ''}</div>
-            ${voice.available ? `<div class="note" style="margin-top:8px">🎙️ Voice chat: <b>M</b> mutes your mic${voice.prefs.mode === 'ptt' ? ', hold <b>V</b> to talk' : ''} · volumes in Options</div>` : ''}
-            ${isHost ? `<div class="row" style="margin-top:10px"><select class="newdiff">${Object.entries(BOT_PROFILES).map(([k, p]) => `<option value="${k}" ${k === 'normal' ? 'selected' : ''}>${p.label}</option>`).join('')}</select><button class="btn small addbot" ${bots.length >= MAX_BOTS ? 'disabled' : ''}>+ Add bot</button><span class="note">${bots.length}/${MAX_BOTS} bots</span></div>` : ''}
-          </div>
-          <div class="card"><h3>Your Spartan</h3>
-            <div class="field"><label>Name</label><input type="text" class="name" maxlength="16" value="${esc(me?.name ?? this.profile.name)}"></div>
-            <div class="field"><label>Armor</label><div class="swatches">${PLAYER_COLORS.map((c) => `<span class="swatch ${c === (me?.color ?? this.profile.color) ? 'on' : ''}" data-c="${c}" style="background:${hex(c)}"></span>`).join('')}</div></div>
-            ${choice ? `<div class="field"><label>Weapon</label><select class="pick">${lobby.settings.allowedWeapons.map((w) => `<option value="${w}" ${me?.pick === w ? 'selected' : ''}>${WEAPONS[w].name}</option>`).join('')}</select></div>` : ''}
-          </div>
-          <div class="card"><h3>Map</h3><div class="mappreview"></div></div>
-          <div class="row">
-            ${isHost ? `<button class="btn primary start" style="flex:1">${lobby.phase === 'match' ? 'Match in progress' : 'Start match'}</button>` : `<div class="note" style="flex:1">Waiting for the host to start…</div>`}
-            <button class="btn small leave">Leave</button>
-          </div>
-        </div>
-        <div class="card"><h3>Match settings ${isHost ? '' : '<span class="note">(host decides)</span>'}</h3><div class="settings-root"></div></div>
+        <section class="card roster"><h3>Spartans <span class="count">${lobby.slots.length}</span></h3>
+          <div class="pcards">${cards}${addCard}${openCard}</div>
+          ${voice.available ? `<div class="note vnote">🎙️ Voice chat: <b>M</b> mutes your mic${voice.prefs.mode === 'ptt' ? ', hold <b>V</b> to talk' : ''} · volumes in Options</div>` : ''}
+        </section>
+        <section class="card mapcard"><div class="chead"><h3>Map</h3><button class="btn small" data-open="map">${isHost ? 'Change' : 'View'}</button></div><div class="mappreview"></div></section>
+        <section class="card gamecard" data-open="game"><div class="chead"><h3>Game</h3><button class="btn small" data-open="game">${isHost ? 'Change' : 'View'}</button></div><div class="gbody"></div></section>
+        <section class="card mecard"><h3>Your Spartan</h3>
+          <div class="field"><label>Name</label><input type="text" class="name" maxlength="16" value="${esc(me?.name ?? this.profile.name)}" aria-label="Your name"></div>
+          <div class="field"><label>Armor</label><div class="swatches">${PLAYER_COLORS.map((c) => `<button class="swatch ${c === (me?.color ?? this.profile.color) ? 'on' : ''}" data-c="${c}" style="background:${hex(c)}" aria-label="Armor colour ${hex(c)}"></button>`).join('')}</div></div>
+          ${choice ? `<div class="field"><label>Weapon</label><select class="pick">${lobby.settings.allowedWeapons.map((w) => `<option value="${w}" ${lobbyWeapon(lobby.settings, s.slot, me?.pick) === w ? 'selected' : ''}>${WEAPONS[w].name}</option>`).join('')}</select></div>` : ''}
+        </section>
+      </div>
+      <div class="lobby-bar">
+        <button class="btn open-settings">⚙ ${isHost ? 'Settings' : 'View settings'}</button>
+        ${isHost ? `<button class="btn primary start">${lobby.phase === 'match' ? 'Match in progress' : 'Start match'}</button>` : '<div class="note waiting">Waiting for the host to start…</div>'}
       </div>`;
     const scr = this.setScreen(html, 'lobby-screen');
     scr.scrollTop = scrollTop;
-    this.settingsView = renderSettings(scr.querySelector('.settings-root')!, lobby.settings, isHost, (ns) => this.host?.setSettings(ns));
-    this.renderMapPreview(lobby);
+    this.refreshLobby(scr, lobby);
     scr.querySelector('.copy')?.addEventListener('click', () => {
       void navigator.clipboard?.writeText(link).then(
         () => toast('Invite link copied!'),
         () => toast(link, 6000),
       );
     });
+    scr.querySelector('.opts')!.addEventListener('click', () => this.showOptions(() => this.showLobby(true), true));
+    scr.querySelector('.open-settings')!.addEventListener('click', () => this.openSettings());
+    scr.querySelectorAll<HTMLElement>('[data-open]').forEach((el) =>
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.openSettings(el.dataset.open as SettingsTabId);
+      }),
+    );
     scr.querySelector('.addbot')?.addEventListener('click', () => this.host?.addBot((scr.querySelector('.newdiff') as HTMLSelectElement).value as BotDifficulty));
     scr.querySelectorAll<HTMLSelectElement>('[data-diff]').forEach((sel) => sel.addEventListener('change', () => this.host?.setBotDifficulty(Number(sel.dataset.diff), sel.value as BotDifficulty)));
     scr.querySelectorAll<HTMLButtonElement>('[data-rm]').forEach((b) => b.addEventListener('click', () => this.host?.removeSlot(Number(b.dataset.rm))));
     const nameIn = scr.querySelector<HTMLInputElement>('.name')!;
+    if (typing) {
+      nameIn.value = typing.v;
+      nameIn.focus();
+      nameIn.setSelectionRange(typing.a, typing.b);
+    }
     nameIn.addEventListener('change', () => {
       const n = cleanName(nameIn.value);
       if (!n) return;
@@ -539,10 +577,69 @@ export class App {
     if (voice.available) this.watchVoice(() => this.refreshLobbyVoice(scr));
   }
 
+  /** The parts of the lobby that follow the settings: the Game card, the map, the guns in the portraits. */
+  private refreshLobby(scr: HTMLElement, lobby: LobbyState) {
+    const g = gameSummary(lobby.settings);
+    const body = scr.querySelector<HTMLElement>('.gamecard .gbody');
+    if (body)
+      setHtml(
+        body,
+        `<div class="gtitle">${esc(g.title)}</div><ul class="glines">${g.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>${g.chips.length ? `<div class="gchips">${g.chips.map((c) => `<span class="gchip">${esc(c)}</span>`).join('')}</div>` : ''}`,
+      );
+    this.renderMapPreview(lobby);
+    for (const x of lobby.slots) {
+      const img = scr.querySelector<HTMLImageElement>(`img[data-pslot="${x.slot}"]`);
+      if (!img) continue;
+      const w = lobbyWeapon(lobby.settings, x.slot, x.pick);
+      const want = portraitKey(x.color, w);
+      if (img.dataset.want === want) continue;
+      img.dataset.want = want;
+      const now = portraitNow(x.color, w);
+      if (img.getAttribute('src') !== now.url) img.src = now.url;
+      if (!now.done)
+        void portrait(x.color, w).then((url) => {
+          // still on screen, and still that Spartan with that gun
+          const el = this.screen?.querySelector<HTMLImageElement>(`img[data-pslot="${x.slot}"]`);
+          if (el?.dataset.want === want) el.src = url;
+        });
+    }
+  }
+
+  /** The match settings window (over the lobby). */
+  private openSettings(tab?: SettingsTabId) {
+    const lobby = this.session?.lobby;
+    if (!lobby) return;
+    this.closeSettings();
+    const modal = new SettingsModal(this.root, {
+      settings: lobby.settings,
+      editable: !!this.host,
+      tab,
+      map: lobby.map,
+      players: lobby.slots.length,
+      onChange: (ns) => this.host?.setSettings(ns),
+      onClose: () => {
+        if (this.settingsModal === modal) this.settingsModal = null;
+      },
+    });
+    this.settingsModal = modal;
+  }
+
+  private closeSettings() {
+    const m = this.settingsModal;
+    this.settingsModal = null;
+    m?.close();
+  }
+
+  /** Off the lobby screen: no settings window, and no portraits still being drawn (say, as a match starts). */
+  private leaveLobbyUi() {
+    this.closeSettings();
+    cancelPortraits();
+  }
+
   private renderMapPreview(lobby: LobbyState) {
     const el = this.screen?.querySelector<HTMLElement>('.mappreview');
     if (!el) return;
-    const html = mapPreviewHtml(lobby.map, lobby.slots.length);
+    const html = mapPreviewHtml(lobby.map, lobby.slots.length, 'mpLobby');
     if (el.dataset.html !== html) {
       el.dataset.html = html;
       el.innerHTML = html;
@@ -754,7 +851,8 @@ export class App {
   // options
   // ------------------------------------------------------------------------------------------
 
-  showOptions(back: () => void) {
+  /** `fromLobby`: lobby updates leave it be (Done goes back to a fresh lobby). */
+  showOptions(back: () => void, fromLobby = false) {
     const opts: Options = { ...(this.game?.input.opts ?? loadOptions()) };
     const v = audio.volumes;
     let turn = '';
@@ -765,7 +863,8 @@ export class App {
     }
     const slider = (key: string, label: string, min: number, max: number, step: number, val: number, help = '') =>
       `<div class="field"><label>${label}</label><div class="val"><input type="range" data-k="${key}" min="${min}" max="${max}" step="${step}" value="${val}"><output>${val}</output></div>${help ? `<div class="help">${help}</div>` : ''}</div>`;
-    const scr = this.setScreen(`
+    const scr = this.setScreen(
+      `
       <div class="lobby-head" style="width:min(720px,100%)"><h2>Options</h2><button class="btn small back">Done</button></div>
       <div class="card" style="width:min(720px,100%);margin-top:12px">
         <h3>Controls</h3>
@@ -790,7 +889,9 @@ export class App {
         <h3 style="margin-top:14px">Network (advanced)</h3>
         <div class="note">If a friend can’t connect, add a free TURN relay (e.g. Cloudflare or Open Relay). Paste JSON like <code>{"urls":"turn:host:3478","username":"u","credential":"p"}</code></div>
         <textarea class="turn" style="width:100%;min-height:70px;margin-top:6px;background:#0d1b2a;color:#eaf6ff;border:1px solid var(--line);border-radius:4px;font-family:monospace">${esc(turn)}</textarea>
-      </div>`);
+      </div>`,
+      fromLobby ? 'options-screen over-lobby' : 'options-screen',
+    );
     const save = () => {
       saveOptions(opts);
       if (this.game) this.game.input.opts = { ...opts };
@@ -799,7 +900,7 @@ export class App {
     };
     const redraw = () => {
       const top = this.screen?.scrollTop ?? 0;
-      this.showOptions(back);
+      this.showOptions(back, fromLobby);
       if (this.screen) this.screen.scrollTop = top;
     };
     scr.querySelectorAll<HTMLInputElement>('input[type=range]').forEach((inp) => {
@@ -861,7 +962,7 @@ export class App {
       audio.resetVolumes();
       voice.resetPeerVolumes();
       const top = scr.scrollTop;
-      this.showOptions(back);
+      this.showOptions(back, fromLobby);
       if (this.screen) this.screen.scrollTop = top;
       toast('Audio levels reset to defaults');
     });

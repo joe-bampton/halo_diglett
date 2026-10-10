@@ -153,6 +153,25 @@ export const SETTINGS_SCHEMA: Field[] = [
   { key: 'maxRewindMs', label: 'Lag compensation', group: 'Advanced', kind: 'number', min: 0, max: 400, step: 25, unit: 'ms', help: 'How far back the host rewinds to honour a laggy player’s shot. Phones on Wi-Fi or 4G usually need 200–300 ms.' },
 ];
 
+export type SettingsTabId = 'game' | 'rules' | 'powerups' | 'map' | 'extras';
+export interface SettingsTab {
+  id: SettingsTabId;
+  label: string;
+  icon: string;
+  groups: readonly FieldGroup[];
+  /** the preset buttons ("Game type") go at the top of this tab */
+  presets?: boolean;
+}
+
+/** The host settings window: every group on exactly one tab. */
+export const SETTINGS_TABS: readonly SettingsTab[] = [
+  { id: 'game', label: 'Game', icon: '🎯', groups: ['Match', 'Weapons', 'Ammo'], presets: true },
+  { id: 'rules', label: 'Rules', icon: '⚖️', groups: ['Damage', 'Respawn'] },
+  { id: 'powerups', label: 'Power-ups', icon: '✦', groups: ['Power-ups'] },
+  { id: 'map', label: 'Map', icon: '🗺️', groups: ['Map'] },
+  { id: 'extras', label: 'Extras', icon: '🎩', groups: ['Pitre Mode', 'Skulls', 'Advanced'] },
+];
+
 export const PRESETS: Record<string, { label: string; settings: Partial<Settings> }> = {
   classic: { label: 'Classic Diglett', settings: { weaponMode: 'fixed', weapon: 'sniper', orbRate: 'off', scoreLimit: 25, pitre: false } },
   rockets: { label: 'Rocket Whack', settings: { weaponMode: 'fixed', weapon: 'rpg', splashHitsDucked: true, orbRate: 'low', scoreLimit: 25 } },

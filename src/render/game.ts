@@ -23,7 +23,7 @@ import { hex, setHtml, setStyle } from '../ui/dom';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
 import { Decals, FlashLights, Particles, Ribbons, Shockwaves } from './fx';
 import { loadDetailedModels } from './assets';
-import { CAN_H, CAN_SCALE, GLB, SHARED, buildBallInterior, buildCan, buildOrb, setCatCostume, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
+import { CAN_H, CAN_SCALE, GLB, SHARED, buildBallInterior, buildCan, buildOrb, disposeTree, setCatCostume, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
 import { PAL, SAUCE } from './palette';
 import type { PostFx } from './post';
 import { DynRes } from './dynres';
@@ -103,21 +103,6 @@ interface StrikeView {
 const WEAPON_SFX: Record<WeaponId, SfxId> = {
   sniper: 'sniper', br: 'rifle', crossbow: 'crossbow', rpg: 'rocket', grenade: 'bloop', railgun: 'rail', hyperbeam: 'charge', needler: 'needle', flamethrower: 'flameLoop', minigun: 'minigun', orbital: 'beep', soaker: 'squirt', frag: 'toss', plasma: 'toss', pokeball: 'toss',
 };
-
-/** Dispose geometries, materials and textures of a detached subtree. */
-function disposeTree(obj: THREE.Object3D) {
-  obj.traverse((o) => {
-    const m = o as THREE.Mesh;
-    if (m.geometry && !SHARED.has(m.geometry)) m.geometry.dispose();
-    const mats = m.material ? (Array.isArray(m.material) ? m.material : [m.material]) : [];
-    for (const mat of mats) {
-      if (SHARED.has(mat)) continue;
-      const map = (mat as THREE.MeshBasicMaterial).map;
-      if (map && !SHARED.has(map)) map.dispose();
-      mat.dispose();
-    }
-  });
-}
 
 const projCache = new Map<string, () => THREE.Object3D>();
 /** Projectile visuals share geometry & materials (cheap to spawn dozens per second). */
