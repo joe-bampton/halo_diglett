@@ -12,7 +12,8 @@ export type WeaponId =
   | 'orbital'
   | 'soaker'
   | 'frag'
-  | 'plasma';
+  | 'plasma'
+  | 'pokeball';
 
 export type Trigger = 'semi' | 'auto' | 'burst' | 'charge' | 'beam';
 export type FireKind = 'hitscan' | 'projectile' | 'beam' | 'spray';
@@ -25,8 +26,12 @@ export interface ProjectileDef {
   bounce?: { restitution: number; max: number };
   /** thrown: launched this many degrees above the aim */
   loftDeg?: number;
-  /** 'bounce': glances off players instead of stopping on them (frag grenades) */
-  contact?: 'bounce';
+  /**
+   * 'bounce': glances off players instead of stopping on them (frag grenades). 'capture': the Poké Ball — shuts the
+   * first opponent it touches (or finds in a hole it drops into) inside it; with someone inside, it lets them out into
+   * the hole nearest wherever it first lands.
+   */
+  contact?: 'bounce' | 'capture';
   /** once it stops bouncing it sits where it is until its fuse runs out */
   rest?: boolean;
   /** sticks to the first player (or ground) it touches and goes off `fuse` s later; a stuck player can't duck out of it */
@@ -69,7 +74,7 @@ export interface WeaponDef {
   sauce?: { delay: number; duration: number };
   bot: { preferHead: number; skill: number };
   fx: {
-    tracer: 'bullet' | 'bolt' | 'rocket' | 'plasma' | 'rail' | 'flame' | 'grenade' | 'frag' | 'needle' | 'laser' | 'none';
+    tracer: 'bullet' | 'bolt' | 'rocket' | 'plasma' | 'rail' | 'flame' | 'grenade' | 'frag' | 'needle' | 'laser' | 'pokeball' | 'none';
     color: number;
     recoil: number;
   };
@@ -190,6 +195,14 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     clip: 2, reload: 1.6, zoom: [],
     bot: { preferHead: 0, skill: 1.2 },
     fx: { tracer: 'plasma', color: 0x5ab8ff, recoil: 0.6 },
+  },
+  pokeball: {
+    id: 'pokeball', name: 'Poké Ball', short: 'POKÉ', powerupOnly: true, trigger: 'semi', fireKind: 'projectile',
+    interval: 0.5, spreadDeg: 0, range: 120, damage: 0, headMult: 1,
+    projectile: { speed: 24, gravity: 14, radius: 0.12, life: 6, loftDeg: 10, contact: 'capture', rest: true, bounce: { restitution: 0.35, max: 4 }, fuse: 2 },
+    clip: 0, reload: 0, zoom: [],
+    bot: { preferHead: 0, skill: 1.2 },
+    fx: { tracer: 'pokeball', color: 0xff3b3b, recoil: 0.5 },
   },
 };
 

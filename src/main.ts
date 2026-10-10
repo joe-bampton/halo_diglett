@@ -6,12 +6,9 @@ import { BOT_PROFILES } from './bots/brain';
 import type { BotDifficulty } from './sim/types';
 import type { Settings } from './sim/settings';
 import type { WeaponId } from './sim/weapons';
-import { eyePos, hitboxOf } from './sim/hitbox';
-import { collectPowerup, damagePlayer, grantPowerup } from './sim/match';
+import { collectPowerup, damagePlayer, grantPowerup, playerHitbox } from './sim/match';
 import { fastChannelSelfTest } from './net/p2p';
 import { POWERUPS, type PowerUpId } from './sim/powerups';
-import { springLift } from './sim/spring';
-import { yawPitchOf } from './shared/vec';
 
 const root = document.getElementById('app')!;
 
@@ -82,16 +79,7 @@ if (!webglOk()) {
       },
       /** aim the local player at another player's head (uses the interpolated view) */
       aimAt(slot: number) {
-        const g = app.game, s = app.session;
-        const me = s?.players[s.slot], t = s?.players[slot];
-        if (!g || !s || !me || !t) return false;
-        const ar = g.arena;
-        const eye = eyePos(ar.holes[me.hole]!, s.myExposure, springLift(me.springAt, s.hostTick));
-        const hb = hitboxOf(ar.holes[t.hole]!, t.exposure, 1, springLift(t.springAt, s.renderTick));
-        const a = yawPitchOf({ x: hb.head.x - eye.x, y: hb.head.y - eye.y, z: hb.head.z - eye.z });
-        g.input.s.yaw = a.yaw;
-        g.input.s.pitch = a.pitch;
-        return t.exposure > 0.9 && s.myExposure > 0.95;
+        return app.game?.aimAtSlot(slot) ?? false;
       },
       /** kill a player (default: me) on the host — offline / host only */
       kill(slot?: number) {
@@ -115,6 +103,16 @@ if (!webglOk()) {
         app.host?.debugApply((m, ctx) => {
           const p = m.players[target];
           if (p?.alive) grantPowerup(m, ctx, p, id);
+        });
+      },
+      /** a Poké Ball from `by` flying side-on into `at` (default: me) — offline / host only */
+      pokeball(by: number, at?: number) {
+        const target = at ?? app.session?.slot ?? -1;
+        app.host?.debugApply((m, ctx) => {
+          const t = m.players[target];
+          if (!t?.alive) return;
+          const hb = playerHitbox(m, ctx.arena, t);
+          m.projectiles.push({ id: m.nextId++, owner: by, weapon: 'pokeball', x: hb.head.x + 2, y: hb.torsoB.y, z: hb.head.z, vx: -15, vy: 0, vz: 0, born: m.tick - 30, bounces: 0, target: -1, fuseAt: m.tick + 120, y0: hb.torsoB.y });
         });
       },
       /** press Jump while dead (manual respawn) */

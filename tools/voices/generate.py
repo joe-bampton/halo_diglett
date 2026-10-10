@@ -173,6 +173,9 @@ TAKES = [
     T("ann.quickhands", "announcer/quick_hands.mp3",       ANNOUNCER, 0.90, "announcer", "Quick hands!"),
     T("ann.spring",     "announcer/spring_jump.mp3",       ANNOUNCER, 0.90, "announcer", "Spring jump!"),
     T("ann.sauce",      "announcer/gerry_sauce.mp3",       ANNOUNCER, 0.90, "announcer", "/dʒˈɛɹi sˈɔːs!/"),
+    T("ann.pokeball",   "announcer/poke_ball.mp3",         ANNOUNCER, 0.90, "announcer", "/pˈoʊkeɪ bˈɔːl!/"),
+    T("ann.gotcha",     "announcer/gotcha.mp3",            ANNOUNCER, 0.90, "announcer", "Gotcha!"),
+    T("ann.escaped",    "announcer/opponent_escaped.mp3",  ANNOUNCER, 0.95, "announcer", "Opponent escaped!"),
     T("ann.gungame_level","announcer/weapon_upgraded.mp3", ANNOUNCER, 0.95, "announcer", "Weapon upgraded!"),
     T("ann.cat_hat",    "announcer/cat_in_the_hat.mp3",    ANNOUNCER, 0.95, "announcer", "Cat in the hat!",
       melody=[5, (1, 1, 8, 4)], keep=0.35),       # "CAT in the HAT": playful sing-song

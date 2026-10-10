@@ -241,6 +241,18 @@ export function buildWeaponModel(id: WeaponId, pbr = false, detailed = false): T
       ]);
       muzzle = new THREE.Vector3(0, 0.08, -0.12);
       break;
+    case 'pokeball':
+      // held up in the hand: red top, white bottom, the black band and its button
+      g = assemble([
+        [new THREE.SphereGeometry(0.075, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 0.08, -0.12), 0xe0282e],
+        [new THREE.SphereGeometry(0.075, 16, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2).translate(0, 0.08, -0.12), 0xf4f4f4],
+        [new THREE.TorusGeometry(0.0755, 0.006, 6, 24).rotateX(Math.PI / 2).translate(0, 0.08, -0.12), 0x1a1a1a],
+        [new THREE.CylinderGeometry(0.022, 0.022, 0.012, 14).rotateX(Math.PI / 2).translate(0, 0.08, -0.196), 0x1a1a1a],
+        [new THREE.CylinderGeometry(0.013, 0.013, 0.016, 12).rotateX(Math.PI / 2).translate(0, 0.08, -0.2), glow(0xffffff)],
+        [new THREE.BoxGeometry(0.05, 0.12, 0.07).translate(0, -0.04, -0.06), dark],
+      ]);
+      muzzle = new THREE.Vector3(0, 0.08, -0.12);
+      break;
   }
   g.userData.muzzle = muzzle;
   if (pbr) pbrify(g, { roughness: 0.42, metalness: 0.55 });
@@ -700,6 +712,31 @@ export function buildOrb(color: number, pbr = false): THREE.Group {
   g.userData.aura = aura;
   g.userData.kind = 'ball';
   if (pbr) pbrify(g, { roughness: 0.6, metalness: 0 });
+  return g;
+}
+
+/**
+ * Inside a Poké Ball (what a caught player sees): a shell round the camera, red above and white below, the black seam
+ * with its button ring in front. A little see-through, so the field flashes by faintly as the ball flies.
+ */
+export function buildBallInterior(): THREE.Group {
+  const g = new THREE.Group();
+  const R = 0.45;
+  const mat = (color: number, opacity: number) => new THREE.MeshBasicMaterial({ color, side: THREE.BackSide, transparent: true, opacity, depthWrite: false, depthTest: false, toneMapped: false });
+  const top = new THREE.Mesh(new THREE.SphereGeometry(R, 40, 20, 0, Math.PI * 2, 0, Math.PI / 2), mat(0xc81e26, 0.86));
+  const bottom = new THREE.Mesh(new THREE.SphereGeometry(R, 40, 20, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), mat(0xe9e6e1, 0.8));
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.995, R * 0.995, 0.05, 40, 1, true), mat(0x0d0d0d, 0.97));
+  // the button, from the inside: a glowing ring on the seam straight ahead
+  const ring = new THREE.Mesh(new THREE.RingGeometry(R * 0.13, R * 0.2, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false, depthTest: false, toneMapped: false }));
+  ring.position.z = -R * 0.97;
+  const rim = new THREE.Mesh(new THREE.RingGeometry(R * 0.2, R * 0.26, 32), mat(0x0d0d0d, 0.97));
+  rim.material.side = THREE.DoubleSide;
+  rim.position.z = -R * 0.975;
+  for (const [i, m] of [top, bottom, band, rim, ring].entries()) {
+    m.renderOrder = 50 + i;
+    g.add(m);
+  }
+  g.userData.button = ring;
   return g;
 }
 

@@ -13,7 +13,8 @@ export type PowerUpId =
   | 'orbital'
   | 'quickhands'
   | 'spring'
-  | 'sauce';
+  | 'sauce'
+  | 'pokeball';
 
 /**
  * Every power-up goes into your inventory when you pop its bubble, and does its thing when you use it: a timed
@@ -48,6 +49,7 @@ export const POWERUPS: Record<PowerUpId, PowerUpDef> = {
   quickhands: { id: 'quickhands', name: 'Quick Hands', color: 0x9dff4a, duration: 20, weight: 1, announce: 'ann.quickhands', icon: '⚡' },
   spring: { id: 'spring', name: 'Spring Jump', color: 0x3cffd0, duration: 0, held: true, weight: 0.8, announce: 'ann.spring', icon: '⇈' },
   sauce: { id: 'sauce', name: 'Gerry Sauce', color: 0xfff4d6, duration: 15, weapon: 'soaker', oneShot: true, weight: 0.5, announce: 'ann.sauce', icon: '💦' },
+  pokeball: { id: 'pokeball', name: 'Poké Ball', color: 0xff3b3b, duration: 15, weapon: 'pokeball', oneShot: true, weight: 0.7, announce: 'ann.pokeball', icon: '◓' },
 };
 
 export const POWERUP_IDS = Object.keys(POWERUPS) as PowerUpId[];

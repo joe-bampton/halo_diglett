@@ -4,7 +4,7 @@ import { PITRE_SLOT, PitreHitTracker, PitreVoiceThrottle, pitreCues, type PitreC
 import type { SfxId } from '../audio/synth';
 import { InputManager, zoomSensitivity, type AssistInfo } from '../input/input';
 import type { ClientSession, ViewPlayer } from '../net/client';
-import { COSMETIC_EVENTS, F_BEAM, F_BURNING, F_CAMO, F_CHARGING, F_DAMAGE, F_INVINCIBLE, F_OVERSHIELD, F_RELOAD, F_SAUCED } from '../net/protocol';
+import { COSMETIC_EVENTS, F_BEAM, F_BURNING, F_CAMO, F_CAPTURED, F_CHARGING, F_DAMAGE, F_HOLDING, F_INVINCIBLE, F_OVERSHIELD, F_RELOAD, F_SAUCED } from '../net/protocol';
 import { angleDiff, dirFromYawPitch, yawPitchOf } from '../shared/vec';
 import { Arena, MOUTH_R, RIM_OUT, WELL_DEPTH, wellWall } from '../sim/arena';
 import { sauceAimScale, sauceLeft } from '../sim/sauce';
@@ -13,6 +13,8 @@ import { FIRE_EXPOSURE, HEAD_R, RECHARGE_DELAY, SHIELD_MAX, SHIELD_RATE, TICK_RA
 import { raySphere } from '../sim/geom';
 import { bigHeadShift, drop, eyePos, hitboxOf, rayHitbox } from '../sim/hitbox';
 import { INV_MAX } from '../sim/inventory';
+import { CAPTURE_SEC, integrateProjectile, launchDir } from '../sim/match';
+import { seatOffset, type Seat } from '../sim/seats';
 import { orbPos, orbRadius } from '../sim/orbs';
 import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import type { Projectile, SimEvent, Vec3T } from '../sim/types';
@@ -21,7 +23,7 @@ import { hex, setHtml, setStyle } from '../ui/dom';
 import { Hud, MEDALS, scoreboardHtml, type ScoreRow } from '../ui/hud';
 import { Decals, FlashLights, Particles, Ribbons, Shockwaves } from './fx';
 import { loadDetailedModels } from './assets';
-import { CAN_H, CAN_SCALE, GLB, SHARED, buildCan, buildOrb, setCatCostume, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
+import { CAN_H, CAN_SCALE, GLB, SHARED, buildBallInterior, buildCan, buildOrb, setCatCostume, buildSauceBlob, buildSpartan, buildSpring, buildWeaponModel, textSprite, type SpartanParts } from './models';
 import { PAL, SAUCE } from './palette';
 import type { PostFx } from './post';
 import { DynRes } from './dynres';
@@ -53,7 +55,11 @@ interface SpartanView {
   bubbleUntil: number;
   /** dollops of Gerry Sauce stuck on them */
   sauce: THREE.Mesh[];
+  /** where in their hole they stood last (a body falls where it stood, even in a shared hole) */
+  seat: Seat;
 }
+
+const MIDDLE: Seat = { x: 0, z: 0 };
 
 /** "Auto" graphics on High / Ultra: seconds of play to average, and the frame rate it must keep. */
 const AUTO_CHECK = 12;
@@ -95,7 +101,7 @@ interface StrikeView {
 }
 
 const WEAPON_SFX: Record<WeaponId, SfxId> = {
-  sniper: 'sniper', br: 'rifle', crossbow: 'crossbow', rpg: 'rocket', grenade: 'bloop', railgun: 'rail', hyperbeam: 'charge', needler: 'needle', flamethrower: 'flameLoop', minigun: 'minigun', orbital: 'beep', soaker: 'squirt', frag: 'toss', plasma: 'toss',
+  sniper: 'sniper', br: 'rifle', crossbow: 'crossbow', rpg: 'rocket', grenade: 'bloop', railgun: 'rail', hyperbeam: 'charge', needler: 'needle', flamethrower: 'flameLoop', minigun: 'minigun', orbital: 'beep', soaker: 'squirt', frag: 'toss', plasma: 'toss', pokeball: 'toss',
 };
 
 /** Dispose geometries, materials and textures of a detached subtree. */
@@ -150,12 +156,25 @@ function projMesh(kind: string): THREE.Object3D | null {
       g.add(new THREE.Mesh(plasmaGlow, plasmaGlowMat));
       return g;
     });
+    const pbTop = keep(new THREE.SphereGeometry(0.12, 14, 7, 0, Math.PI * 2, 0, Math.PI / 2));
+    const pbBottom = keep(new THREE.SphereGeometry(0.12, 14, 7, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2));
+    const pbBand = keep(new THREE.TorusGeometry(0.121, 0.012, 6, 18).rotateX(Math.PI / 2));
+    const pbRed = keep(new THREE.MeshLambertMaterial({ color: 0xe0282e }));
+    const pbWhite = keep(new THREE.MeshLambertMaterial({ color: 0xf4f4f4 }));
+    const pbBlack = keep(new THREE.MeshLambertMaterial({ color: 0x151515 }));
+    projCache.set('pokeball', () => {
+      const g = new THREE.Group();
+      g.add(new THREE.Mesh(pbTop, pbRed), new THREE.Mesh(pbBottom, pbWhite), new THREE.Mesh(pbBand, pbBlack));
+      return g;
+    });
   }
   return projCache.get(kind)?.() ?? null;
 }
 
 const tmpV = new THREE.Vector3();
 const tmpV2 = new THREE.Vector3();
+const tmpQ = new THREE.Quaternion();
+const tmpE = new THREE.Euler();
 const tmpP = { x: 0, y: 0, z: 0 };
 /** the "running slow?" hint shows once per visit */
 let slowHintShown = false;
@@ -245,6 +264,15 @@ export class Game {
   private invSelIdx = 0;
   /** pickups this match (the first ones say how to use them) */
   private pickups = 0;
+  /** inside a Poké Ball: the shell round the camera (drawn with the viewmodel, so it sits over everything) */
+  private ballInside = buildBallInterior();
+  private ballSpin = 0;
+  /** holding someone in a Poké Ball: the ring on the hole the throw would land them in, and its label */
+  private throwRing: THREE.Mesh | null = null;
+  private throwLabel: THREE.Sprite | null = null;
+  private throwLabelText = '';
+  /** Poké Ball captives' own holes (where they were caught), by slot */
+  private captiveHome = new Map<number, number>();
   private chargeSound: SoundHandle | null = null;
   private lowShieldAt = 0;
   private prevShield = 70;
@@ -333,6 +361,8 @@ export class Game {
     vmSun.position.set(1, 2, 1);
     this.vmScene.add(vmSun, this.vmHolder);
     this.vmScene.add(this.vmCamera);
+    this.ballInside.visible = false;
+    this.vmScene.add(this.ballInside);
     // DOM
     this.hud = new Hud(container);
     this.scoreboardEl = document.createElement('div');
@@ -442,6 +472,7 @@ export class Game {
     this.beamSound?.stop();
     this.myVoice?.stop();
     for (const o of this.warmed) disposeTree(o);
+    for (const o of [this.ballInside, this.throwRing, this.throwLabel]) if (o) disposeTree(o);
     this.post?.dispose();
     this.envRT?.dispose();
     this.renderer.dispose();
@@ -557,12 +588,13 @@ export class Game {
     const world = new THREE.Group();
     const vm = new THREE.Group();
     world.visible = vm.visible = false;
-    for (const k of ['rocket', 'bolt', 'grenade', 'frag', 'plasma', 'needle']) {
+    for (const k of ['rocket', 'bolt', 'grenade', 'frag', 'plasma', 'needle', 'pokeball']) {
       const o = projMesh(k);
       if (o) world.add(o);
     }
     world.add(this.cans() ? buildCan(0xffffff, pbr, det) : buildOrb(0xffffff, pbr), buildSpring(det), buildSauceBlob(), textSprite('·'));
     world.add(buildSpartan(0xffffff, pbr, det).root);
+    vm.add(buildBallInterior());
     for (const w of Object.keys(WEAPONS) as WeaponId[]) {
       world.add(buildWeaponModel(w, pbr, det));
       vm.add(buildWeaponModel(w, pbr, det));
@@ -717,6 +749,31 @@ export class Game {
     return this.arena.holes[p.hole] ?? this.arena.holes[0]!;
   }
 
+  /** On the field: alive, and not shut inside a Poké Ball (where nobody sees or hits them). */
+  private onField(p: ViewPlayer): boolean {
+    return p.alive && (p.flags & F_CAPTURED) === 0;
+  }
+
+  /** Where in their hole a player stands: off to one side when someone was thrown in with them (see seats.ts). */
+  private seatOf(p: ViewPlayer): Seat {
+    if (!this.onField(p)) return MIDDLE;
+    const here: number[] = [];
+    for (const q of this.session.players) if (q && q.hole === p.hole && this.onField(q)) here.push(q.slot);
+    return here.length < 2 ? MIDDLE : seatOffset(this.holeOf(p), p.slot, here);
+  }
+
+  /** In the same hole as me, both down in it: no wall between us (as on the host). */
+  private holeMate(p: ViewPlayer): boolean {
+    const me = this.me;
+    return !!me && p.slot !== me.slot && p.hole === me.hole && this.onField(p) && this.onField(me) && this.liftOf(p) === 0 && this.liftOf(me) === 0;
+  }
+
+  /** Shut inside a Poké Ball right now (I can only look around). */
+  private caught(): boolean {
+    const me = this.session.me;
+    return !!me?.al && me.cb >= 0;
+  }
+
   /** Spring Jump height as drawn: mine on the host's clock, everyone else delayed like the rest of their state. */
   private liftOf(p: ViewPlayer | null | undefined): number {
     if (!p) return 0;
@@ -737,7 +794,8 @@ export class Game {
   /** Power-ups waiting to be used, in the order they were picked up (nothing while dead). */
   private inventory(): [PowerUpId, number][] {
     const me = this.session.me;
-    if (!me?.al || !Array.isArray(me.inv)) return [];
+    // (nothing usable from inside a Poké Ball either)
+    if (!me?.al || me.cb >= 0 || !Array.isArray(me.inv)) return [];
     return me.inv.filter(([id]) => Object.hasOwn(POWERUPS, id)) as [PowerUpId, number][];
   }
 
@@ -746,6 +804,11 @@ export class Game {
    * picked at that moment (switching right after can't change which one it was).
    */
   private applyInventoryInput() {
+    if (this.caught()) {
+      // (nothing to use from inside a Poké Ball)
+      this.input.takeInvOps();
+      return;
+    }
     const inv = this.inventory();
     // keep the pick on something that's there: the next one along when the picked kind runs out
     const at = this.invSel ? inv.findIndex(([id]) => id === this.invSel) : -1;
@@ -779,7 +842,7 @@ export class Game {
   }
 
   private headPos(p: ViewPlayer, out = new THREE.Vector3()): THREE.Vector3 {
-    const hb = hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p));
+    const hb = hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p), this.seatOf(p));
     return out.set(hb.head.x, hb.head.y, hb.head.z);
   }
 
@@ -807,7 +870,7 @@ export class Game {
   private eyeInto(out: THREE.Vector3): THREE.Vector3 {
     const me = this.me;
     if (!me) return out.set(0, 5, 0);
-    const e = eyePos(this.myHole(), this.session.myExposure, this.liftOf(me));
+    const e = eyePos(this.myHole(), this.session.myExposure, this.liftOf(me), this.seatOf(me));
     return out.set(e.x, e.y, e.z);
   }
 
@@ -815,7 +878,7 @@ export class Game {
     if (slot === this.session.slot) return this.fpMuzzle(this.eye(), this.input.s.yaw, this.input.s.pitch);
     const p = this.session.players[slot];
     if (p && slot === this.viewSlot()) {
-      const e = eyePos(this.holeOf(p), p.exposure, this.liftOf(p));
+      const e = eyePos(this.holeOf(p), p.exposure, this.liftOf(p), this.seatOf(p));
       return this.fpMuzzle(new THREE.Vector3(e.x, e.y, e.z), p.yaw, p.pitch);
     }
     const sv = this.spartans.get(slot);
@@ -844,7 +907,21 @@ export class Game {
     const s = this.session;
     if (s.me?.al) return s.slot;
     if (!this.spec.active || this.spec.view !== 'first') return -1;
-    return s.players[this.spec.target]?.alive ? this.spec.target : -1;
+    const t = s.players[this.spec.target];
+    return t && this.onField(t) ? this.spec.target : -1;
+  }
+
+  /** Test hook: turn my aim onto another player's head (seats and Spring Jumps included). True when we're both up. */
+  aimAtSlot(slot: number): boolean {
+    const s = this.session;
+    const t = s.players[slot];
+    if (!t || !this.me) return false;
+    const eye = this.eye();
+    const head = this.headPos(t);
+    const a = yawPitchOf({ x: head.x - eye.x, y: head.y - eye.y, z: head.z - eye.z });
+    this.input.s.yaw = a.yaw;
+    this.input.s.pitch = a.pitch;
+    return t.exposure > 0.9 && s.myExposure > 0.95;
   }
 
   /** Spectator state (tests / HUD). */
@@ -856,7 +933,8 @@ export class Game {
     const p = this.session.players[slot];
     if (!p) return null;
     const h = this.holeOf(p);
-    return new THREE.Vector3(h.x, h.rim + 0.6 + this.liftOf(p), h.z);
+    const seat = this.seatOf(p);
+    return new THREE.Vector3(h.x + seat.x, h.rim + 0.6 + this.liftOf(p), h.z + seat.z);
   }
 
   private predicted(w: WeaponId): boolean {
@@ -885,8 +963,8 @@ export class Game {
       t.slot = -1;
       const cands: { d: number; slot: number; x: number; y: number; z: number }[] = [];
       for (const p of this.session.players) {
-        if (!p || p.slot === me.slot || !p.alive || p.exposure < 0.2 || p.flags & F_CAMO) continue;
-        const hb = hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p));
+        if (!p || p.slot === me.slot || !this.onField(p) || p.exposure < 0.2 || p.flags & F_CAMO) continue;
+        const hb = hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p), this.seatOf(p));
         const x = hb.head.x, y = (hb.head.y + hb.torsoB.y) / 2, z = hb.head.z;
         const a = yawPitchOf({ x: x - eye.x, y: y - eye.y, z: z - eye.z });
         const d = Math.hypot(angleDiff(a.yaw, this.input.s.yaw), a.pitch - this.input.s.pitch);
@@ -922,7 +1000,7 @@ export class Game {
     this.input.mode = !s.me?.al && s.phase !== 'ended' && s.state === 'match' ? 'spectate' : 'play';
     this.input.update(dt);
     const inp = this.input.s;
-    if (!s.me?.al || s.phase === 'ended') {
+    if (!s.me?.al || s.phase === 'ended' || this.caught()) {
       inp.stand = false;
       inp.trigger = false;
     }
@@ -964,6 +1042,7 @@ export class Game {
     this.updateSauces(dt);
     this.updateCamera(dt);
     this.updateViewmodel(dt);
+    this.updateThrowMarker();
     this.updateHud();
     this.fxAdd.update(dt);
     this.fxNorm.update(dt);
@@ -983,11 +1062,13 @@ export class Game {
     // render
     this.renderer.info.reset();
     this.renderer.setClearColor(PAL.horizon);
-    if (this.post) this.post.render(dt, this.vmHolder.visible);
+    // (the inside of a Poké Ball is drawn in the viewmodel pass)
+    const vmPass = this.vmHolder.visible || this.ballInside.visible;
+    if (this.post) this.post.render(dt, vmPass);
     else {
       this.renderer.clear();
       this.renderer.render(this.scene, this.camera);
-      if (this.vmHolder.visible) {
+      if (vmPass) {
         this.renderer.clearDepth();
         this.renderer.render(this.vmScene, this.vmCamera);
       }
@@ -1031,6 +1112,11 @@ export class Game {
     this.pred.pending = false;
     this.pred.fresh = false;
     if (!me || !me.al) return;
+    if (me.cb >= 0) {
+      // inside a Poké Ball: clicks do nothing (now or once out)
+      this.pred.pendingAt = -1e9;
+      return;
+    }
     const infinite = s.start?.settings.ammoMode === 'noReload' || w.clip <= 0;
     // (as on the host: staying down, single shots and bursts go up out of the hole at bubbles)
     const up = s.myExposure >= FIRE_EXPOSURE;
@@ -1086,9 +1172,12 @@ export class Game {
       if (this.hasPu('homing') && !orbOnly) return;
       // cosmetic trace: terrain + interpolated players
       let end = Math.min(w.range, this.arena.raycast(eye, d, w.range), wall);
-      for (const p of orbOnly ? [] : s.players) {
-        if (!p || p.slot === s.slot || !p.alive) continue;
-        const h = rayHitbox(eye, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p)));
+      for (const p of s.players) {
+        if (!p || p.slot === s.slot || !this.onField(p)) continue;
+        // (from a duck only a hole-mate can be hit)
+        const mate = this.holeMate(p);
+        if (orbOnly && !mate) continue;
+        const h = rayHitbox(eye, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p), this.seatOf(p)), 0, eye.y, mate);
         if (h && h.t < end) end = h.t;
       }
       const endP = eye.clone().addScaledVector(dir, end);
@@ -1161,9 +1250,13 @@ export class Game {
           break;
         }
         case 'proj': {
-          if (e.p === mySlot && this.ownShotPredicted(e.w) && !hostDrawn(WEAPONS[e.w].projectile!)) break;
+          const predictedHere = e.p === mySlot && this.ownShotPredicted(e.w);
+          if (predictedHere && !hostDrawn(WEAPONS[e.w].projectile!)) break;
           const pr: Projectile = { id: e.id, owner: e.p, weapon: e.w, x: e.pos[0], y: e.pos[1], z: e.pos[2], vx: e.vel[0], vy: e.vel[1], vz: e.vel[2], born: e.t, bounces: 0, target: e.tgt, fuseAt: 0, y0: e.pos[1] };
+          if (e.cap !== undefined) pr.cap = e.cap;
           this.addProjectile(String(e.id), pr, false);
+          // projectile shots send no 'fire': the shot itself (throw, flash, sound), unless it was already predicted here
+          if (!predictedHere) this.projectileShot(e.p, e.w, pr);
           break;
         }
         case 'pmove': {
@@ -1331,6 +1424,17 @@ export class Game {
             audio.play('lowShield', { gain: 0.5 });
           }
           break;
+        case 'capture':
+          this.captiveHome.set(e.v, e.hole);
+          this.onCapture(e.p, e.v, new THREE.Vector3(...e.pos));
+          break;
+        case 'release':
+          this.onRelease(e.p, e.v, e.hole);
+          break;
+        case 'escape':
+          this.captiveHome.delete(e.v);
+          this.onEscape(e.p, e.v, e.hole);
+          break;
       }
     }
     // Pitre Mode voice lines
@@ -1345,6 +1449,155 @@ export class Game {
         this.pitreLocalCue(cue, fw && fw.k === 'fire' ? fw.w : undefined);
       }
     }
+  }
+
+  /** A projectile was fired (they send no 'fire' event): its sound, a throw or a muzzle flash, the kick if it's whose eyes we see through. */
+  private projectileShot(slot: number, w: WeaponId, pr: Projectile) {
+    const def = WEAPONS[w];
+    const fp = slot === this.viewSlot();
+    this.muzzleFlash(this.muzzleOf(slot), new THREE.Vector3(pr.vx, pr.vy, pr.vz).normalize(), w, fp);
+    if (fp) {
+      if (def.projectile?.loftDeg) this.vmThrow = 0;
+      this.vmKick = Math.min(1, this.vmKick + def.fx.recoil * 0.6);
+    }
+    // (a rocket's sound starts with the rocket itself: addProjectile)
+    if (w !== 'rpg') this.playFireSound(slot, w, slot === this.session.slot ? null : this.posOf(slot));
+  }
+
+  /** Who's in that hole (on the field), other than `except`. */
+  private inHole(hole: number, except: number): ViewPlayer[] {
+    return this.session.players.filter((q): q is ViewPlayer => !!q && q.slot !== except && q.hole === hole && this.onField(q));
+  }
+
+  /** Poké Ball: `by` caught `v`. */
+  private onCapture(by: number, v: number, pos: THREE.Vector3) {
+    const s = this.session;
+    const mine = by === s.slot || v === s.slot;
+    this.fxAdd.emit({ pos, count: 26, speed: [1, 5], life: [0.2, 0.5], size: [0.45, 0.06], color: 0xffffff, color1: 0xff3b3b });
+    this.lights.flash(pos, 0xff3b3b, 4, 8, 0.15);
+    audio.play('capture', { pos: mine ? null : pos, gain: 0.9 });
+    const a = s.players[by], b = s.players[v];
+    if (by === s.slot) {
+      this.hud.message(`Caught ${b?.name ?? 'them'}!`, 1600);
+      // (a click queued before the catch doesn't throw it)
+      this.pred.pendingAt = -1e9;
+    }
+    if (v === s.slot) this.input.s.zoom = 0;
+    this.hud.feedLine(a, '◓ caught', b);
+  }
+
+  /** …threw them on, into `hole`. */
+  private onRelease(by: number, v: number, hole: number) {
+    const s = this.session;
+    const h = this.arena.holes[hole]!;
+    const at = new THREE.Vector3(h.x, h.rim + 0.4, h.z);
+    const a = s.players[by], b = s.players[v];
+    this.fxAdd.emit({ pos: at, count: 34, speed: [1, 6], dir: new THREE.Vector3(0, 1, 0), spread: 0.7, life: [0.3, 0.8], size: [0.55, 0.08], color: 0xffffff, color1: 0xff8080 });
+    this.ribbons.add(at.clone().add(new THREE.Vector3(0, -1, 0)), at.clone().add(new THREE.Vector3(0, 7, 0)), 0xffffff, 0.3, 0.05, 0.5);
+    this.lights.flash(at, 0xffffff, 5, 10, 0.2);
+    audio.play('release', { pos: v === s.slot ? null : at, gain: 1 });
+    const there = this.inHole(hole, v);
+    const home = this.captiveHome.get(v);
+    this.captiveHome.delete(v);
+    const desc = there.some((q) => q.slot === s.slot) ? 'your hole' : there.length ? `${there.map((q) => q.name).join(' & ')}’s hole` : hole === home ? 'their own hole' : 'an empty hole';
+    if (v === s.slot) {
+      this.hud.message(there.length ? `Thrown in with ${there.map((q) => q.name).join(' & ')}!` : 'Thrown into a hole!', 2000, 'warn');
+      this.input.s.pitch = 0;
+    } else if (by === s.slot) this.hud.message(`Into ${desc}!`, 1600);
+    this.hud.feedLine(a, '◓ threw', b, `into ${desc === 'your hole' ? `${a?.name ?? 'their'}’s hole` : desc}`);
+  }
+
+  /** …or didn't in time (or was killed): `v` broke free, back in their own hole. */
+  private onEscape(by: number, v: number, hole: number) {
+    const s = this.session;
+    const h = this.arena.holes[hole];
+    const at = h ? new THREE.Vector3(h.x, h.rim + 0.3, h.z) : null;
+    if (at) this.fxAdd.emit({ pos: at, count: 18, speed: [1, 4], dir: new THREE.Vector3(0, 1, 0), spread: 0.9, life: [0.2, 0.5], size: [0.4, 0.06], color: 0xffffff, color1: 0xff3b3b });
+    audio.play('escape', { pos: v === s.slot ? null : at, gain: 0.9 });
+    if (s.phase === 'ended') return;
+    if (by === s.slot) {
+      this.hud.message('Opponent escaped!', 2200, 'warn');
+      audio.announce('ann.escaped');
+    }
+    if (v === s.slot) this.hud.message('You broke free!', 1600);
+    this.hud.feedLine(s.players[v] ?? null, 'escaped', null);
+  }
+
+  /** Holding someone in a Poké Ball: ring the hole the throw would land them in (flown like the host's), with whose it is. */
+  private updateThrowMarker() {
+    const s = this.session;
+    const me = s.me;
+    const show = !!me?.al && me.cv >= 0 && me.cb < 0 && this.myWeapon() === 'pokeball' && s.phase === 'live';
+    if (!show) {
+      if (this.throwRing) this.throwRing.visible = false;
+      if (this.throwLabel) this.throwLabel.visible = false;
+      return;
+    }
+    const def = WEAPONS.pokeball.projectile!;
+    const eye = this.eye();
+    const d = launchDir(dirFromYawPitch(this.input.s.yaw, this.input.s.pitch), def);
+    const pr: Projectile = { id: -1, owner: s.slot, weapon: 'pokeball', x: eye.x + d.x * 0.6, y: eye.y + d.y * 0.6 - 0.1, z: eye.z + d.z * 0.6, vx: d.x * def.speed, vy: d.y * def.speed, vz: d.z * def.speed, born: 0, bounces: 0, target: -1, fuseAt: 0 };
+    let land = { x: pr.x, z: pr.z };
+    for (let i = 0; i < def.life * TICK_RATE; i++) {
+      const ox = pr.x, oy = pr.y, oz = pr.z;
+      integrateProjectile(pr, def, null);
+      const L = Math.hypot(pr.x - ox, pr.y - oy, pr.z - oz) || 1e-9;
+      const dir = { x: (pr.x - ox) / L, y: (pr.y - oy) / L, z: (pr.z - oz) / L };
+      const tw = this.arena.raycast({ x: ox, y: oy, z: oz }, dir, L);
+      land = { x: ox + dir.x * Math.min(tw, L), z: oz + dir.z * Math.min(tw, L) };
+      const hole = this.arena.nearestHole(pr.x, pr.z);
+      if (tw < L || (hole && Math.hypot(hole.x - pr.x, hole.z - pr.z) < MOUTH_R && pr.y < hole.rim) || pr.y < -20) break;
+    }
+    const h = this.arena.closestHole(land.x, land.z);
+    if (!this.throwRing) {
+      this.throwRing = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.28, 40).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xff3b3b, transparent: true, opacity: 0.85, depthTest: false, depthWrite: false, toneMapped: false }));
+      this.throwRing.renderOrder = 30;
+      this.scene.add(this.throwRing);
+    }
+    const pulse = 1 + 0.08 * Math.sin(this.time * 10);
+    this.throwRing.visible = true;
+    this.throwRing.position.set(h.x, h.rim + 0.06, h.z);
+    this.throwRing.scale.setScalar(pulse);
+    const there = this.inHole(h.id, me.cv);
+    const text = there.some((q) => q.slot === s.slot) ? 'YOUR HOLE' : there.length ? `${there[0]!.name.toUpperCase()}’S HOLE` : h.id === (this.captiveHome.get(me.cv) ?? s.players[me.cv]?.hole) ? 'THEIR OWN HOLE' : 'EMPTY HOLE';
+    if (text !== this.throwLabelText) {
+      if (this.throwLabel) {
+        this.scene.remove(this.throwLabel);
+        disposeTree(this.throwLabel);
+      }
+      this.throwLabel = textSprite(`◓ ${text}`, '#ffb0b0', 40);
+      this.throwLabel.renderOrder = 31;
+      (this.throwLabel.material as THREE.SpriteMaterial).depthTest = false;
+      this.scene.add(this.throwLabel);
+      this.throwLabelText = text;
+    }
+    const lb = this.throwLabel!;
+    const dist = Math.hypot(h.x - eye.x, h.rim - eye.y, h.z - eye.z);
+    const k = (0.6 + dist * 0.035) * (this.camera.fov / this.input.opts.fov);
+    lb.visible = true;
+    lb.position.set(h.x, h.rim + 1.4 + dist * 0.015, h.z);
+    lb.scale.set(k * (lb.scale.x / lb.scale.y) * 0.5, k * 0.5, 1);
+  }
+
+  /** Where the Poké Ball I'm shut in is: flying (drawn here, or the host's latest), or in the thrower's hand. */
+  private ballCamPos(out: THREE.Vector3): THREE.Vector3 {
+    const s = this.session;
+    for (const pv of this.projs.values()) {
+      if (pv.track.pr.cap !== s.slot) continue;
+      const p = trackPos(pv.track, s.hostTick, tmpP);
+      return out.set(p.x, p.y, p.z);
+    }
+    for (const b of s.fullBalls.values()) if (b.cap === s.slot) return out.set(b.x, b.y, b.z);
+    const by = s.me?.cb ?? -1;
+    return by >= 0 && s.players[by] ? out.copy(this.muzzleOf(by)) : this.eyeInto(out);
+  }
+
+  /** In a thrown ball (not in a hand). */
+  private ballFlying(): boolean {
+    const s = this.session;
+    for (const pv of this.projs.values()) if (pv.track.pr.cap === s.slot) return true;
+    for (const b of s.fullBalls.values()) if (b.cap === s.slot) return true;
+    return false;
   }
 
   /** A popped bubble's power-up went into my inventory (or didn't: two of it already). */
@@ -1618,7 +1871,7 @@ export class Game {
     if (!sv) {
       const parts = buildSpartan(p.color, this.q.pbr, this.detailed);
       this.scene.add(parts.root);
-      sv = { slot: p.slot, parts, color: p.color, weapon: '', weaponModel: null, alive: p.alive, deathT: 0, deathDir: 1, flare: 0, flareColor: 0x6ad8ff, estShield: SHIELD_MAX, lastHitAt: -99, name: '', tag: null, tagFor: '', beamSound: null, voice: null, headScale: 1, bubble: null, bubbleUntil: 0, sauce: [] };
+      sv = { slot: p.slot, parts, color: p.color, weapon: '', weaponModel: null, alive: p.alive, deathT: 0, deathDir: 1, flare: 0, flareColor: 0x6ad8ff, estShield: SHIELD_MAX, lastHitAt: -99, name: '', tag: null, tagFor: '', beamSound: null, voice: null, headScale: 1, bubble: null, bubbleUntil: 0, sauce: [], seat: MIDDLE };
       this.spartans.set(p.slot, sv);
     }
     return sv;
@@ -1639,11 +1892,21 @@ export class Game {
       seen.add(p.slot);
       const sv = this.ensureSpartan(p);
       const root = sv.parts.root;
-      if (p.slot === s.slot || p.slot === hidden) {
+      // (inside a Poké Ball in their hand, there's no seeing the one holding it)
+      if (p.slot === s.slot || p.slot === hidden || (this.caught() && s.me!.cb === p.slot && !this.ballFlying())) {
         root.visible = false;
+        if (sv.tag) sv.tag.visible = false;
+        continue;
+      }
+      // shut inside a Poké Ball: they're in a ball in someone's hand (or flying), not in a hole
+      if (p.alive && p.flags & F_CAPTURED) {
+        root.visible = false;
+        if (sv.tag) sv.tag.visible = false;
         continue;
       }
       const hole = this.holeOf(p);
+      if (p.alive) sv.seat = this.seatOf(p);
+      const hx = hole.x + sv.seat.x, hz = hole.z + sv.seat.z;
       // estimated shield regen for flare colours
       if (this.time - sv.lastHitAt > RECHARGE_DELAY) sv.estShield = Math.min(SHIELD_MAX, sv.estShield + SHIELD_RATE * dt);
       if (!p.alive && sv.alive) {
@@ -1660,12 +1923,12 @@ export class Game {
         const t = Math.min(1, sv.deathT / 0.6);
         root.rotation.x = -t * 1.2 * sv.deathDir;
         // shot down mid Spring Jump: the body keeps falling back into the hole
-        root.position.set(hole.x, hole.rim + drop(0.6) - t * t * 1.4 + this.liftOf(p), hole.z);
+        root.position.set(hx, hole.rim + drop(0.6) - t * t * 1.4 + this.liftOf(p), hz);
         continue;
       }
       root.visible = true;
       root.rotation.set(0, 0, 0);
-      root.position.set(hole.x, hole.rim + drop(p.exposure) + this.liftOf(p), hole.z);
+      root.position.set(hx, hole.rim + drop(p.exposure) + this.liftOf(p), hz);
       sv.parts.body.rotation.y = p.yaw;
       sv.parts.aim.rotation.x = p.pitch * 0.85;
       const hs = this.headScaleFor(p);
@@ -1684,6 +1947,11 @@ export class Game {
         sv.weaponModel = buildWeaponModel(p.weapon, this.q.pbr, this.detailed);
         sv.parts.weaponHolder.add(sv.weaponModel);
         sv.weapon = p.weapon;
+      }
+      // a Poké Ball with someone inside shakes in their hand
+      if (sv.weaponModel) {
+        const shaking = (p.flags & F_HOLDING) !== 0;
+        sv.weaponModel.rotation.set(shaking ? Math.sin(this.time * 31 + p.slot) * 0.35 : 0, 0, shaking ? Math.sin(this.time * 23) * 0.3 : 0);
       }
       // camo & effects
       const camo = (p.flags & F_CAMO) !== 0;
@@ -1910,8 +2178,8 @@ export class Game {
       }
       const pos = trackPos(tr, now, tmpP);
       const stuckTo = pv.attach ? s.players[pv.attach.slot] : null;
-      if (stuckTo?.alive) {
-        const a = hitboxOf(this.holeOf(stuckTo), stuckTo.exposure, this.headScaleFor(stuckTo), this.liftOf(stuckTo)).torsoB;
+      if (stuckTo && this.onField(stuckTo)) {
+        const a = hitboxOf(this.holeOf(stuckTo), stuckTo.exposure, this.headScaleFor(stuckTo), this.liftOf(stuckTo), this.seatOf(stuckTo)).torsoB;
         pos.x = a.x + pv.attach!.off.x;
         pos.y = a.y + pv.attach!.off.y;
         pos.z = a.z + pv.attach!.off.z;
@@ -1921,7 +2189,9 @@ export class Game {
         pv.obj.position.set(pos.x, pos.y, pos.z);
         const pr = tr.pr;
         tmpV.set(pr.vx, pr.vy, pr.vz);
-        if (tmpV.lengthSq() > 0.01) pv.obj.lookAt(tmpV2.set(pos.x, pos.y, pos.z).sub(tmpV));
+        if (pv.weapon === 'pokeball') {
+          if (!tr.stopped) pv.obj.rotation.set(this.time * 9, this.time * 4, 0);
+        } else if (tmpV.lengthSq() > 0.01) pv.obj.lookAt(tmpV2.set(pos.x, pos.y, pos.z).sub(tmpV));
       }
       if (tr.stopped || ageTicks < 0) continue;
       // trails
@@ -1944,7 +2214,6 @@ export class Game {
     }
   }
 
-  /** What my own predicted shots stop on: the other players as I see them, and power-up orbs. */
   /** My shot from a duck: only the bubbles. */
   private ownOrbTargets: TargetTest = (o, d, L, tick, r) => {
     const s = this.session;
@@ -1957,13 +2226,14 @@ export class Game {
     return best;
   };
 
+  /** What my own predicted shots stop on: the other players as I see them, and power-up orbs. */
   private ownShotTargets: TargetTest = (o, d, L, tick, r, from) => {
     const s = this.session;
     const orbR = s.start ? orbRadius(s.start.settings) : 0.8;
     let best = Infinity;
     for (const p of s.players) {
-      if (!p || p.slot === s.slot || !p.alive) continue;
-      const h = rayHitbox(o, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p)), r, from);
+      if (!p || p.slot === s.slot || !this.onField(p)) continue;
+      const h = rayHitbox(o, d, hitboxOf(this.holeOf(p), p.exposure, this.headScaleFor(p), this.liftOf(p), this.seatOf(p)), r, from, this.holeMate(p));
       if (h && h.t < L && h.t < best) best = h.t;
     }
     for (const orb of s.orbs.values()) {
@@ -2013,7 +2283,7 @@ export class Game {
         const from = this.muzzleOf(v.owner);
         const T = (v.at - v.fired) / TICK_RATE;
         v.jets = s.players
-          .filter((p): p is ViewPlayer => !!p && p.slot !== v.owner && p.alive)
+          .filter((p): p is ViewPlayer => !!p && p.slot !== v.owner && this.onField(p))
           .map((p) => {
             const to = this.headPos(p);
             return { from: from.clone(), v: new THREE.Vector3((to.x - from.x) / T, (to.y - from.y) / T + 0.5 * gj * T, (to.z - from.z) / T) };
@@ -2135,7 +2405,15 @@ export class Game {
     const sx = (Math.random() - 0.5) * this.shake * 0.02;
     const sy = (Math.random() - 0.5) * this.shake * 0.02;
     let fov = settings.fov;
-    if (alive) {
+    if (alive && this.caught()) {
+      // inside a Poké Ball: seeing from the ball (in the thrower's hand, or flying), looking wherever you like
+      this.spec.active = false;
+      this.ballCamPos(this.camera.position);
+      this.camera.rotation.set(0, 0, 0, 'YXZ');
+      this.camera.rotation.y = inp.yaw;
+      this.camera.rotation.x = inp.pitch;
+      this.wasAlive = true;
+    } else if (alive) {
       this.spec.active = false;
       this.eyeInto(this.camera.position);
       this.camera.rotation.set(0, 0, 0, 'YXZ');
@@ -2176,7 +2454,8 @@ export class Game {
     const s = this.session;
     const sp = this.spec;
     const fov = this.input.opts.fov;
-    const others = s.players.filter((p): p is ViewPlayer => !!p && p.slot !== s.slot);
+    // (anyone shut in a Poké Ball isn't anywhere to watch)
+    const others = s.players.filter((p): p is ViewPlayer => !!p && p.slot !== s.slot && !(p.alive && p.flags & F_CAPTURED));
     const act = this.input.takeSpec();
     if (!sp.active) {
       // start on whoever killed me, else the leader, else anyone alive
@@ -2188,7 +2467,8 @@ export class Game {
       this.input.spec.pitch = -0.35;
       sp.snap = true;
     }
-    if (others.length && (act.cycle !== 0 || !s.players[sp.target] || sp.target === s.slot)) {
+    const gone = !s.players[sp.target] || sp.target === s.slot || !others.some((p) => p.slot === sp.target);
+    if (others.length && (act.cycle !== 0 || gone)) {
       const n = others.length;
       const i = Math.max(0, others.findIndex((p) => p.slot === sp.target));
       const next = others[(((i + act.cycle) % n) + n) % n]!;
@@ -2212,7 +2492,7 @@ export class Game {
     const hole = this.holeOf(t);
     if (sp.view === 'first' && t.alive) {
       // through their eyes
-      const e = eyePos(hole, t.exposure, this.liftOf(t));
+      const e = eyePos(hole, t.exposure, this.liftOf(t), this.seatOf(t));
       const k = sp.snap ? 1 : 1 - Math.exp(-dt * 25);
       sp.yaw += angleDiff(t.yaw, sp.yaw) * k;
       sp.pitch += (t.pitch - sp.pitch) * k;
@@ -2249,7 +2529,20 @@ export class Game {
     const w = other ? other.weapon : this.myWeapon();
     const zoom = other ? (this.zoomOf(other) > 1 ? other.zoom : 0) : this.input.s.zoom;
     const scoped = zoom > 0 && (WEAPONS[w].zoom[zoom - 1] ?? 1) >= 2.4;
-    this.vmHolder.visible = vs >= 0 && !scoped && s.phase !== 'ended';
+    const caught = this.caught();
+    this.vmHolder.visible = vs >= 0 && !scoped && s.phase !== 'ended' && !caught;
+    this.ballInside.visible = caught;
+    if (caught) {
+      // the shell stays put in the world as you look round inside it; it rocks in the thrower's hand, tumbles in flight
+      const flying = this.ballFlying();
+      this.ballSpin += flying ? dt * 7 : 0;
+      const wob = flying ? 0 : 0.14;
+      tmpE.set(Math.sin(this.time * 14) * wob + this.ballSpin, 0, Math.sin(this.time * 11) * wob);
+      this.ballInside.quaternion.copy(this.camera.quaternion).invert().multiply(tmpQ.setFromEuler(tmpE));
+      // the button blinks red while you struggle
+      const btn = this.ballInside.userData.button as THREE.Mesh;
+      (btn.material as THREE.MeshBasicMaterial).color.setHex(!flying && Math.sin(this.time * 9) > 0 ? 0xff4040 : 0xffffff);
+    } else this.ballSpin = 0;
     const color = other ? other.color : this.me?.color ?? 0x3d7bff;
     if (w !== this.vmWeapon || color !== this.vmColor) {
       if (this.vmModel) {
@@ -2290,7 +2583,12 @@ export class Game {
       } else if (k < 0.6) empty = true;
       else tY = -(1 - (k - 0.6) / 0.4) * 0.3;
     }
-    if (this.vmModel) this.vmModel.visible = !empty;
+    if (this.vmModel) {
+      this.vmModel.visible = !empty;
+      // someone shut in the ball in my hand: it shakes
+      const shaking = !other && w === 'pokeball' && (me?.cv ?? -1) >= 0;
+      this.vmModel.rotation.set(shaking ? Math.sin(this.time * 31) * 0.3 : 0, 0, shaking ? Math.sin(this.time * 23) * 0.25 : 0);
+    }
     this.vmHolder.scale.setScalar(0.6);
     this.vmHolder.position.set(0.3, -0.27 - (1 - exp) * 0.25 - reloadDip * 0.18 + bob + tY, -0.46 + this.vmKick * 0.06 + tZ);
     this.vmHolder.rotation.set(this.vmKick * 0.12 - reloadDip * 0.6 + tRot, 0.06, reloadDip * 0.35);
@@ -2341,6 +2639,8 @@ export class Game {
         hud.charge(0);
       } else {
         hud.ammo(w, me.clip, clipMax, infinite, me.rl > s.hostTick);
+        const by = me.cb >= 0 ? s.players[me.cb] : null;
+        hud.caught(me.al && me.cb >= 0 ? { by: by?.name ?? '?', color: by?.color ?? 0xffffff, left: me.cu > 0 ? Math.max(0, (me.cu - s.hostTick) / TICK_RATE) : -1 } : null);
         // reticle turns red over an enemy
         const a = this.assistInfo();
         const red = !!a && Math.hypot(a.dYaw, a.dPitch) < a.radius * 1.2;
@@ -2351,6 +2651,8 @@ export class Game {
         let charge = 0;
         if (me.cs >= 0 && def.chargeTime) charge = (s.hostTick - me.cs) / (def.chargeTime * TICK_RATE);
         if (me.bu > s.hostTick && def.beamTime) charge = (me.bu - s.hostTick) / (def.beamTime * TICK_RATE);
+        // someone in the Poké Ball in my hand: the time left to throw them on
+        if (me.cv >= 0 && w === 'pokeball') charge = Math.max(0.001, (me.wu - s.hostTick) / (CAPTURE_SEC * TICK_RATE));
         hud.charge(me.al ? charge : 0);
       }
       // power-ups
@@ -2379,7 +2681,9 @@ export class Game {
         if (settings.respawnMode !== 'manual') hud.sub(left > 0 ? `Respawn in ${left}` : 'Respawning…');
         else if (me.rq) hud.sub(left > 0 ? `Respawning in ${left}…` : 'Respawning…');
         else hud.sub(left > 0 ? `Respawn in ${left} · press ${key} when ready` : `Press ${key} to respawn`);
-      } else if (me.al && settings.antiTurtleSec > 0 && me.ds >= 0 && s.phase === 'live') {
+      } else if (me.al && me.cv >= 0 && w === 'pokeball' && s.phase === 'live') {
+        hud.sub(`Throw them into a hole! ${Math.max(0, (me.wu - s.hostTick) / TICK_RATE).toFixed(1)}`);
+      } else if (me.al && settings.antiTurtleSec > 0 && me.ds >= 0 && s.phase === 'live' && me.cb < 0) {
         const left = settings.antiTurtleSec - (s.hostTick - me.ds) / TICK_RATE;
         hud.sub(left < 3 ? `Pop up in ${Math.max(0, left).toFixed(1)}s` : '');
       } else if (!this.endShown) hud.sub(me.al && me.rl > s.hostTick ? 'Reloading' : '');

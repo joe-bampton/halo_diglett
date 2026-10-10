@@ -26,6 +26,7 @@ export const MEDALS: Record<string, { name: string; icon: string; color: string;
   supercombine: { name: 'Supercombine', icon: '✸', color: '#ff5fd2' },
   stuck: { name: 'Stuck', icon: '✦', color: '#5ab8ff' },
   orb: { name: 'Orb Popper', icon: '◓', color: '#e0282e' },
+  gotcha: { name: 'Gotcha!', icon: '◓', color: '#ff3b3b', ann: 'ann.gotcha' },
   perfection: { name: 'Perfection', icon: '★', color: '#ffd35a', ann: 'ann.perfection' },
 };
 
@@ -38,7 +39,7 @@ const RETICLES: Record<string, string> = {
   ring: `<circle cx="40" cy="40" r="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 4"/><circle cx="40" cy="40" r="2" fill="currentColor"/>`,
 };
 const WEAPON_RETICLE: Record<WeaponId, string> = {
-  sniper: 'dot', br: 'br', crossbow: 'dot', rpg: 'bracket', grenade: 'arc', railgun: 'bracket', hyperbeam: 'ring', needler: 'needle', flamethrower: 'ring', minigun: 'br', orbital: 'bracket', soaker: 'ring', frag: 'arc', plasma: 'arc',
+  sniper: 'dot', br: 'br', crossbow: 'dot', rpg: 'bracket', grenade: 'arc', railgun: 'bracket', hyperbeam: 'ring', needler: 'needle', flamethrower: 'ring', minigun: 'br', orbital: 'bracket', soaker: 'ring', frag: 'arc', plasma: 'arc', pokeball: 'arc',
 };
 
 export interface ScoreRow {
@@ -89,6 +90,7 @@ export class Hud {
       <svg class="charge" viewBox="0 0 64 64"><circle cx="32" cy="32" r="26" fill="none" stroke="rgba(159,231,255,0.9)" stroke-width="3" stroke-dasharray="163.4" stroke-dashoffset="163.4" transform="rotate(-90 32 32)"/></svg>
       <svg class="hitmark" viewBox="0 0 36 36"><path d="M6 6l8 8M30 6l-8 8M6 30l8-8M30 30l-8-8" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>
       <div class="dmgdir"></div>
+      <div class="caught"></div>
       <div class="center-msg"></div><div class="sub-msg"></div>
       <div class="killfeed"></div>
       <div class="medals"></div>
@@ -99,7 +101,7 @@ export class Hud {
       <div class="ammo"><div class="wname"></div><div class="count"></div><div class="pips"></div></div>`;
     parent.appendChild(r);
     this.root = r;
-    for (const k of ['vignette', 'flash', 'sauce', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'inv', 'spectate', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
+    for (const k of ['vignette', 'flash', 'sauce', 'scope', 'shield', 'cathat', 'timer', 'mode', 'conn', 'reticle', 'charge', 'hitmark', 'dmgdir', 'caught', 'center-msg', 'sub-msg', 'killfeed', 'medals', 'powerups', 'inv', 'spectate', 'score', 'ammo', 'wname', 'count', 'pips', 'vchat']) {
       this.el[k] = r.querySelector(`.${k}`) as HTMLElement;
     }
     // the bits that change every frame, looked up once
@@ -239,6 +241,22 @@ export class Hud {
     const w = `<span class="w">[${esc(WEAPONS[weapon].short)}${head ? ' ⊕' : ''}]</span>`;
     if (!killer || killer.name === victim.name) this.killfeed(`<span style="color:${hex(victim.color)}">${esc(victim.name)}</span> <span class="w">committed suicide</span>`);
     else this.killfeed(`<span style="color:${hex(killer.color)}">${esc(killer.name)}</span>${w}<span style="color:${hex(victim.color)}">${esc(victim.name)}</span>`);
+  }
+
+  /** A kill-feed line that isn't a kill (Poké Ball catches, throws, escapes): who, what, whom, and where. */
+  feedLine(a: { name: string; color: number } | null, what: string, b: { name: string; color: number } | null, tail = '') {
+    const who = (p: { name: string; color: number } | null) => (p ? `<span style="color:${hex(p.color)}">${esc(p.name)}</span>` : '');
+    this.killfeed(`${who(a)} <span class="w">${esc(what)}</span> ${who(b)}${tail ? ` <span class="w">${esc(tail)}</span>` : ''}`);
+  }
+
+  /**
+   * Shut inside a Poké Ball: who caught you, and how long until you break free (`left` < 0: thrown on, flying).
+   * null: you're out. (The HUD hides your gun, inventory and reticle meanwhile.)
+   */
+  caught(info: { by: string; color: number; left: number } | null) {
+    this.root.classList.toggle('captured', !!info);
+    if (!info) return;
+    setHtml(this.el.caught!, `<div class="t1">Caught by <span style="color:${hex(info.color)}">${esc(info.by)}</span></div><div class="t2">${info.left >= 0 ? `Breaking free in ${info.left.toFixed(1)}` : 'Wheee!'}</div>`);
   }
 
   medal(id: string) {

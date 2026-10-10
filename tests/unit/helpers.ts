@@ -58,6 +58,11 @@ export function faceOff(m: MatchState) {
           arena.lineClear({ x: A.x, y: A.rim + 0.88, z: A.z }, { x: B.x, y: B.rim + 0.3, z: B.z }, 0.5)) {
         a.hole = h1;
         b.hole = h2;
+        // nobody else in those two holes (they'd squeeze in beside them: see seats.ts)
+        for (const p of m.players) {
+          if (!p || p === a || p === b || (p.hole !== h1 && p.hole !== h2)) continue;
+          p.hole = m.activeHoles.find((h) => !m.players.some((q) => q?.hole === h)) ?? p.hole;
+        }
         return;
       }
     }

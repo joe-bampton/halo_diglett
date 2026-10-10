@@ -240,6 +240,20 @@ export class Arena {
     return best;
   }
 
+  /** The hole nearest (x, z), however far away (nearestHole only looks close by). */
+  closestHole(x: number, z: number): Hole {
+    let best = this.holes[0]!;
+    let bd = Infinity;
+    for (const h of this.holes) {
+      const d = (h.x - x) ** 2 + (h.z - z) ** 2;
+      if (d < bd) {
+        bd = d;
+        best = h;
+      }
+    }
+    return best;
+  }
+
   /** Visible ground surface (flattened around holes). */
   groundAt(x: number, z: number): number {
     const b = this.baseHeight(x, z);

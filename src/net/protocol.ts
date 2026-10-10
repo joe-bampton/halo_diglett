@@ -101,6 +101,10 @@ export const F_DAMAGE = 256;
 export const F_BIGHEAD = 512;
 export const F_BURNING = 1024;
 export const F_SAUCED = 2048;
+/** shut inside a Poké Ball (not on the field: not drawn, not a target) */
+export const F_CAPTURED = 4096;
+/** holding a Poké Ball with someone inside (it shakes) */
+export const F_HOLDING = 8192;
 
 /** Private state for the receiving player only. */
 export interface PrivateState {
@@ -129,6 +133,9 @@ export interface PrivateState {
   rq: boolean; // respawn requested (manual respawn)
   sa: number; // Gerry Sauce hit at (-1 never)
   su: number; // ...and gone at
+  cb: number; // Poké Ball: caught by this slot (-1 free)…
+  cu: number; // …breaking free at this tick (0 while thrown on)
+  cv: number; // my captive's slot (-1 none)
 }
 
 /**
@@ -143,6 +150,8 @@ export interface SnapshotMsg {
   a: number; // last input seq applied
   p: PackedPlayer[];
   h?: [number, number, number, number][]; // homing projectile positions [id,x,y,z]
+  /** thrown Poké Balls with someone inside [id,x,y,z,captive]: whoever's in one sees from it (even if its 'proj' was skipped) */
+  fb?: [number, number, number, number, number][];
   e?: SimEvent[];
   me?: PrivateState;
   sb?: [number, number, number, number][]; // [slot, kills, deaths, gunLevel]

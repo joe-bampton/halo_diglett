@@ -1,8 +1,17 @@
 import { expect, test, type Page } from '@playwright/test';
 
 type HD = {
-  state(): { phase: string; slot: number; me: { al: boolean; pu: [string, number][]; inv: [string, number][]; sa: number; su: number } | null; players: { slot: number }[] };
+  state(): {
+    phase: string;
+    slot: number;
+    me: { al: boolean; pu: [string, number][]; inv: [string, number][]; sa: number; su: number; cb: number; cv: number } | null;
+    players: { slot: number; exposure: number }[];
+    events: Record<string, number>;
+  };
   grant(id: string, slot?: number): void;
+  pokeball(by: number, at?: number): void;
+  stand(on?: boolean): void;
+  fire(): void;
   session: { slot: number; hostTick: number; players: ({ springAt: number } | null)[] };
   game: { camera: { position: { y: number } }; input: { s: { springs: number } }; orbs: Map<number, { group: { userData: { kind?: string } } }> } | null;
 };
@@ -73,6 +82,40 @@ test('Spring Jump: double-tap Space launches you 20 m up', async ({ page }) => {
   // ...and comes back down into the hole
   await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.game?.camera.position.y ?? 99) < 5, null, { timeout: 10_000 });
   expect((await W(page)).me?.al).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('Poké Ball: caught, I see from inside the ball and get out; caught one of mine, I throw them into a hole', async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.goto('/?test=1&autostart=offline&bots=1&botdiff=jerry&quality=low&respawn=auto');
+  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd?.state().phase === 'live', null, { timeout: 60_000 });
+  const st = await W(page);
+  const bot = st.players.find((p) => p.slot !== st.slot)!.slot;
+  await page.evaluate(() => (window as unknown as { __hd: HD }).__hd.stand(true));
+  await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.state().players.find((p) => p.slot === (window as unknown as { __hd: HD }).__hd.state().slot)?.exposure ?? 0) > 0.9, null, { timeout: 10_000 });
+  // the bot's ball catches me
+  await page.evaluate((b) => (window as unknown as { __hd: HD }).__hd.pokeball(b), bot);
+  await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.state().me?.cb ?? -1) >= 0, null, { timeout: 10_000 });
+  await expect(page.locator('.hud.captured .caught')).toContainText('Caught by');
+  // thrown on by the bot, or broken free: out again either way
+  await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().me?.cb === -1, null, { timeout: 30_000 });
+  await expect(page.locator('.hud.captured')).toHaveCount(0);
+  // now I catch the bot (it stands up now and then) and throw it on
+  await page.waitForFunction(
+    (b) => {
+      const h = (window as unknown as { __hd: HD }).__hd;
+      if ((h.state().me?.cv ?? -1) >= 0) return true;
+      if ((h.state().players.find((p) => p.slot === b)?.exposure ?? 0) > 0.9) h.pokeball(h.state().slot, b);
+      return false;
+    },
+    bot,
+    { timeout: 60_000, polling: 300 },
+  );
+  await expect(page.locator('.hud .sub-msg')).toContainText('Throw them into a hole');
+  await expect(page.locator('.hud .charge')).toBeVisible();
+  await page.evaluate(() => (window as unknown as { __hd: HD }).__hd.fire());
+  await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.state().events.release ?? 0) + ((window as unknown as { __hd: HD }).__hd.state().events.escape ?? 0) >= 2, null, { timeout: 15_000 });
+  expect((await W(page)).me?.cv).toBe(-1);
   expect(errors).toEqual([]);
 });
 

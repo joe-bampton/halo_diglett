@@ -100,6 +100,8 @@ export class ClientSession {
   leader = -1;
   orbs = new Map<number, ViewOrb>();
   homing = new Map<number, { x: number; y: number; z: number }>();
+  /** thrown Poké Balls with someone inside, as of the latest snapshot */
+  fullBalls = new Map<number, { x: number; y: number; z: number; cap: number }>();
   events: SimEvent[] = [];
   latestTick = 0;
 
@@ -290,6 +292,8 @@ export class ClientSession {
       this.homing.clear();
       for (const [id, x, y, z] of s.h) this.homing.set(id, { x, y, z });
     } else this.homing.clear();
+    this.fullBalls.clear();
+    if (s.fb) for (const [id, x, y, z, cap] of s.fb) this.fullBalls.set(id, { x, y, z, cap });
     // players present in the snapshot but not in roster (late joiners)
     for (const pp of s.p) {
       if (!this.players[pp[0]]) {
@@ -322,6 +326,9 @@ export class ClientSession {
       if (e.k === 'orb') this.orbs.set(e.id, { id: e.id, type: e.type, seed: e.seed, spawn: e.spawn, expire: e.expire });
       else if (e.k === 'orbPop') this.orbs.delete(e.id);
       else if (e.k === 'spawn' && e.p === this.slot) this.myExposure = 0;
+      // thrown out of a Poké Ball: up and standing at once; broken free: down in my hole
+      else if (e.k === 'release' && e.v === this.slot) this.myExposure = 1;
+      else if (e.k === 'escape' && e.v === this.slot) this.myExposure = 0;
       this.events.push(e);
     }
   }
@@ -349,7 +356,10 @@ export class ClientSession {
     // own stance prediction
     const me = this.me;
     const mine = this.players[this.slot];
-    if (me && me.al) {
+    if (me && me.al && me.cb >= 0) {
+      // inside a Poké Ball: nothing to stand up in
+      this.myExposure = 0;
+    } else if (me && me.al) {
       const forced = me.fs > this.hostTick;
       const want = (this.input.stand || forced) && this.phase !== 'ended';
       this.myExposure = want ? Math.min(1, this.myExposure + dt / RISE_TIME) : Math.max(0, this.myExposure - dt / LOWER_TIME);

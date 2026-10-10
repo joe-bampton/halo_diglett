@@ -24,6 +24,8 @@ import {
   F_OVERSHIELD,
   F_RELOAD,
   F_SAUCED,
+  F_CAPTURED,
+  F_HOLDING,
   COSMETIC_EVENTS,
   PROTOCOL_VERSION,
   type Channel,
@@ -553,11 +555,15 @@ export class HostSession {
       if (hasPowerup(q, 'damage', t)) f |= F_DAMAGE;
       if (q.burn) f |= F_BURNING;
       if (q.saucedUntil > t) f |= F_SAUCED;
+      if (q.capturedBy >= 0) f |= F_CAPTURED;
+      if (q.captive >= 0) f |= F_HOLDING;
       p.push([q.slot, Math.round(q.exposure * 255), Math.round(q.yaw * 1000), Math.round(q.pitch * 1000), f, weaponIndex(q.weapon), q.hole, Math.round(q.beamLen * 10), q.zoom, q.springAt]);
     }
     const snap: SnapshotMsg = { k: t, id: m.seed, ph: m.phase, a: c.seq, p, ld: m.leader };
     const homing = m.projectiles.filter((pr) => pr.target >= 0);
     if (homing.length) snap.h = homing.map((pr) => [pr.id, round2(pr.x), round2(pr.y), round2(pr.z)]);
+    const full = m.projectiles.filter((pr) => pr.cap !== undefined);
+    if (full.length) snap.fb = full.map((pr) => [pr.id, round2(pr.x), round2(pr.y), round2(pr.z), pr.cap!]);
     const me = m.players[c.slot];
     if (me) snap.me = privateState(m, me);
     // the scoreboard is small, and with every snapshot a lost one can't leave it stale
@@ -650,6 +656,9 @@ export function privateState(m: MatchState, me: PlayerState): PrivateState {
     rq: me.respawnRequested,
     sa: me.saucedAt,
     su: me.saucedUntil,
+    cb: me.capturedBy,
+    cu: me.captureUntil,
+    cv: me.captive,
   };
 }
 

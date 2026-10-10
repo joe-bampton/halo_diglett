@@ -287,6 +287,24 @@
       ],
       "gain": 1.0
     },
+    "ann.pokeball": {
+      "files": [
+        "audio/announcer/poke_ball.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.gotcha": {
+      "files": [
+        "audio/announcer/gotcha.mp3"
+      ],
+      "gain": 1.0
+    },
+    "ann.escaped": {
+      "files": [
+        "audio/announcer/opponent_escaped.mp3"
+      ],
+      "gain": 1.0
+    },
     "ann.gungame_level": {
       "files": [
         "audio/announcer/weapon_upgraded.mp3"

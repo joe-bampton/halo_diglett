@@ -6,7 +6,8 @@ import { Rng } from '../../src/shared/rng';
 import { yawPitchOf } from '../../src/shared/vec';
 import { eyePos, hitboxOf } from '../../src/sim/hitbox';
 import { MAX_BOTS, MAX_HUMANS } from '../../src/sim/constants';
-import { collectPowerup, damagePlayer } from '../../src/sim/match';
+import { collectPowerup, damagePlayer, playerHitbox } from '../../src/sim/match';
+import { F_CAPTURED } from '../../src/net/protocol';
 import { FakeWorld, LagHub } from './laglink';
 
 function flush() {
@@ -142,6 +143,52 @@ describe('power-up inventory over the wire', () => {
     expect(client.me?.inv).toEqual([['overshield', 1], ['xray', 1]]);
     expect(client.me?.pu.map(([id]) => id)).toEqual(['xray']);
     expect(events).toContain('pu');
+  });
+});
+
+describe('Poké Ball over the wire', () => {
+  it('the captive hears they were caught, can see from the ball, and gets out (thrown on or escaped)', async () => {
+    const { host: hn, client: cn } = loopbackPair();
+    let now = 0;
+    const host = new HostSession(hn, 'LOCAL', false);
+    host.clock = () => now;
+    const client = new ClientSession(cn, { name: 'Me', color: 0x3d7bff, token: 'tok' });
+    client.clock = () => now;
+    await flush();
+    host.addBot('legendary');
+    host.setSettings({ ...host.lobby.settings, orbRate: 'off', antiTurtleSec: 0 });
+    host.startMatch(5);
+    const events: string[] = [];
+    const step = (n: number) => {
+      for (let i = 0; i < n; i++) {
+        now += 1000 / 60;
+        host.update(now);
+        client.update(now);
+        for (const e of client.drainEvents()) events.push(e.k);
+      }
+    };
+    client.input.stand = true;
+    step(host.match!.liveAt + 30);
+    const bot = host.lobby.slots.find((x) => x.kind === 'bot')!.slot;
+    host.debugApply((m) => {
+      const hb = playerHitbox(m, host.arena, m.players[client.slot]!);
+      m.projectiles.push({ id: m.nextId++, owner: bot, weapon: 'pokeball', x: hb.head.x + 2, y: hb.torsoB.y, z: hb.head.z, vx: -15, vy: 0, vz: 0, born: m.tick - 30, bounces: 0, target: -1, fuseAt: m.tick + 120, y0: hb.torsoB.y });
+    });
+    for (let i = 0; i < 60 && (client.me?.cb ?? -1) < 0; i++) step(1);
+    expect(client.me?.cb).toBe(bot);
+    expect(events).toContain('capture');
+    step(2);
+    expect((client.players[client.slot]!.flags & F_CAPTURED) !== 0).toBe(true);
+    expect(client.myExposure).toBe(0);
+    // the bot throws them on (a full ball the captive can see from), or they break free
+    let sawBall = false;
+    for (let i = 0; i < 60 * 8 && client.me!.cb >= 0; i++) {
+      step(1);
+      if ([...client.fullBalls.values()].some((b) => b.cap === client.slot)) sawBall = true;
+    }
+    expect(client.me!.cb).toBe(-1);
+    expect(events.includes('release') || events.includes('escape')).toBe(true);
+    if (events.includes('release')) expect(sawBall).toBe(true);
   });
 });
 
