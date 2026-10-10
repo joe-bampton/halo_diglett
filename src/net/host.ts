@@ -3,6 +3,7 @@ import { Rng } from '../shared/rng';
 import { Arena, HOLE_SPACING, layoutForSettings } from '../sim/arena';
 import { MAX_BOTS, MAX_HUMANS, MAX_SLOTS, TICK_RATE, secToTicks } from '../sim/constants';
 import { addPlayer, clipSize, createMatch, hasPowerup, isCamo, removePlayer, score, stepMatch, type StepContext } from '../sim/match';
+import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import { sanitizeSettings, DEFAULT_SETTINGS, type Settings } from '../sim/settings';
 import type { BotDifficulty, MatchState, PlayerCommand, PlayerState, RosterEntry, SimEvent } from '../sim/types';
 import { WEAPONS, weaponIndex } from '../sim/weapons';
@@ -23,6 +24,8 @@ import {
   F_OVERSHIELD,
   F_RELOAD,
   F_SAUCED,
+  F_CAPTURED,
+  F_HOLDING,
   COSMETIC_EVENTS,
   PROTOCOL_VERSION,
   type Channel,
@@ -326,9 +329,12 @@ export class HostSession {
       reloads: num(k.reloads) | 0,
       respawns: num(k.respawns) | 0,
       springs: num(k.springs) | 0,
+      uses: num(k.uses) | 0,
+      // (hasOwn: an inherited name like "constructor" is no power-up)
+      useId: typeof k.useId === 'string' && Object.hasOwn(POWERUPS, k.useId) ? (k.useId as PowerUpId) : undefined,
       zoom: num(k.zoom) | 0,
       vt: num(k.vt),
-      pick: typeof k.pick === 'string' && k.pick in WEAPONS ? k.pick : undefined,
+      pick: typeof k.pick === 'string' && Object.hasOwn(WEAPONS, k.pick) ? k.pick : undefined,
     };
   }
 
@@ -441,7 +447,7 @@ export class HostSession {
     }
     for (const s of this.lobby.slots) {
       const p = m.players[s.slot];
-      if (s.kind === 'human' && !s.connected && p) cmds[s.slot] = { yaw: p.yaw, pitch: p.pitch, stand: false, trigger: false, presses: p.presses, reloads: p.reloads, respawns: p.respawns, springs: p.springs, zoom: 0, vt: m.tick };
+      if (s.kind === 'human' && !s.connected && p) cmds[s.slot] = { yaw: p.yaw, pitch: p.pitch, stand: false, trigger: false, presses: p.presses, reloads: p.reloads, respawns: p.respawns, springs: p.springs, uses: p.uses, zoom: 0, vt: m.tick };
     }
     for (const [slot, b] of this.bots) if (m.players[slot]) cmds[slot] = b.think(m, this.arena);
     const events = stepMatch(m, cmds, this.arena);
@@ -549,11 +555,15 @@ export class HostSession {
       if (hasPowerup(q, 'damage', t)) f |= F_DAMAGE;
       if (q.burn) f |= F_BURNING;
       if (q.saucedUntil > t) f |= F_SAUCED;
+      if (q.capturedBy >= 0) f |= F_CAPTURED;
+      if (q.captive >= 0) f |= F_HOLDING;
       p.push([q.slot, Math.round(q.exposure * 255), Math.round(q.yaw * 1000), Math.round(q.pitch * 1000), f, weaponIndex(q.weapon), q.hole, Math.round(q.beamLen * 10), q.zoom, q.springAt]);
     }
     const snap: SnapshotMsg = { k: t, id: m.seed, ph: m.phase, a: c.seq, p, ld: m.leader };
     const homing = m.projectiles.filter((pr) => pr.target >= 0);
     if (homing.length) snap.h = homing.map((pr) => [pr.id, round2(pr.x), round2(pr.y), round2(pr.z)]);
+    const full = m.projectiles.filter((pr) => pr.cap !== undefined);
+    if (full.length) snap.fb = full.map((pr) => [pr.id, round2(pr.x), round2(pr.y), round2(pr.z), pr.cap!]);
     const me = m.players[c.slot];
     if (me) snap.me = privateState(m, me);
     // the scoreboard is small, and with every snapshot a lost one can't leave it stale
@@ -632,6 +642,7 @@ export function privateState(m: MatchState, me: PlayerState): PrivateState {
     w: weaponIndex(me.weapon),
     wu: me.weaponUntil,
     pu: me.powerups.map((x) => [x.id, x.until]),
+    inv: me.inv.map((x) => [x.id, x.n]),
     fs: me.forcedStandUntil,
     ra: me.alive ? 0 : me.respawnAt,
     ud: me.underdogUntil,
@@ -645,6 +656,9 @@ export function privateState(m: MatchState, me: PlayerState): PrivateState {
     rq: me.respawnRequested,
     sa: me.saucedAt,
     su: me.saucedUntil,
+    cb: me.capturedBy,
+    cu: me.captureUntil,
+    cv: me.captive,
   };
 }
 

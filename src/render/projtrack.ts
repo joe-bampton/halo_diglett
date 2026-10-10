@@ -80,7 +80,8 @@ export function stepTrack(t: ProjTrack, def: ProjectileDef, arena: Arena, homing
   }
   const fused = pr.fuseAt > 0 && t.tick >= pr.fuseAt;
   if (hitWorld) {
-    if (def.bounce && pr.bounces < def.bounce.max && !fused) {
+    // (a Poké Ball with someone inside lets them out where it first lands: no bouncing)
+    if (def.bounce && pr.bounces < def.bounce.max && !fused && pr.cap === undefined) {
       bounceOffTerrain(pr, arena, at, def.bounce.restitution);
       return 'fly';
     }

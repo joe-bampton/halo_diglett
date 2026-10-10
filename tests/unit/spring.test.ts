@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { Rng } from '../../src/shared/rng';
 import { sub, yawPitchOf } from '../../src/shared/vec';
 import { secToTicks } from '../../src/sim/constants';
-import { damagePlayer, grantPowerup, hasPowerup, isCamo, playerEye, playerHitbox, stepMatch } from '../../src/sim/match';
-import { HELD_UNTIL, SPRING_COOLDOWN, SPRING_H, SPRING_TICKS, inFlight, springLift } from '../../src/sim/spring';
+import { invCount } from '../../src/sim/inventory';
+import { collectPowerup, damagePlayer, grantPowerup, isCamo, playerEye, playerHitbox, stepMatch } from '../../src/sim/match';
+import { SPRING_COOLDOWN, SPRING_H, SPRING_TICKS, inFlight, springLift } from '../../src/sim/spring';
 import type { MatchState, PlayerCommand, SimEvent } from '../../src/sim/types';
 import { arena, cmd, faceOff, liveAndStanding, makeMatch, run } from './helpers';
 
@@ -47,16 +48,16 @@ describe('Spring Jump', () => {
     const m = makeMatch(2);
     const cmds = liveAndStanding(m);
     const p = m.players[0]!;
-    grantPowerup(m, ctx(), p, 'spring');
-    expect(p.powerups).toEqual([{ id: 'spring', until: HELD_UNTIL }]);
+    collectPowerup(m, ctx(), p, 'spring');
+    expect(p.inv).toEqual([{ id: 'spring', n: 1 }]);
     run(m, secToTicks(30), cmds);
-    expect(hasPowerup(p, 'spring', m.tick)).toBe(true);
+    expect(invCount(p, 'spring')).toBe(1);
     // let go of stand: in the air you can't duck anyway
     cmds[0] = { ...cmds[0]!, stand: false };
     const ev = launch(m, cmds, 0);
     expect(ev.some((e) => e.k === 'spring' && e.p === 0)).toBe(true);
     expect(p.springAt).toBe(m.tick);
-    expect(hasPowerup(p, 'spring', m.tick)).toBe(false);
+    expect(invCount(p, 'spring')).toBe(0);
     run(m, Math.round(SPRING_TICKS / 2) - 1, cmds);
     expect(springLift(p.springAt, m.tick)).toBeCloseTo(SPRING_H, 0);
     expect(p.exposure).toBe(1);
@@ -68,17 +69,33 @@ describe('Spring Jump', () => {
     expect(p.exposure).toBe(0);
   });
 
+  it('the Use button launches it too (it is in the inventory like any power-up)', () => {
+    const m = makeMatch(2);
+    const cmds = liveAndStanding(m);
+    const p = m.players[0]!;
+    collectPowerup(m, ctx(), p, 'spring');
+    collectPowerup(m, ctx(), p, 'spring');
+    expect(invCount(p, 'spring')).toBe(2);
+    cmds[0] = { ...cmds[0]!, uses: 1, useId: 'spring' };
+    const ev = run(m, 1, cmds);
+    expect(ev.some((e) => e.k === 'spring' && e.p === 0)).toBe(true);
+    // the second one waits for the landing: a press in the air is not wasted
+    cmds[0] = { ...cmds[0]!, uses: 2 };
+    expect(run(m, 1, cmds).some((e) => e.k === 'spring')).toBe(false);
+    expect(invCount(p, 'spring')).toBe(1);
+  });
+
   it('one launch per pickup; a new one only after landing', () => {
     const m = makeMatch(2);
     const cmds = liveAndStanding(m);
     const p = m.players[0]!;
-    grantPowerup(m, ctx(), p, 'spring');
+    collectPowerup(m, ctx(), p, 'spring');
     launch(m, cmds, 0);
     const first = p.springAt;
     // no spring left
     expect(launch(m, cmds, 0).some((e) => e.k === 'spring')).toBe(false);
     // a second one picked up mid-air waits for the landing
-    grantPowerup(m, ctx(), p, 'spring');
+    collectPowerup(m, ctx(), p, 'spring');
     expect(launch(m, cmds, 0).some((e) => e.k === 'spring')).toBe(false);
     run(m, first + SPRING_TICKS + SPRING_COOLDOWN - m.tick, cmds);
     expect(launch(m, cmds, 0).some((e) => e.k === 'spring')).toBe(true);
@@ -91,7 +108,7 @@ describe('Spring Jump', () => {
     const p = m.players[0]!;
     grantPowerup(m, ctx(), p, 'camo');
     expect(isCamo(m, p)).toBe(true);
-    grantPowerup(m, ctx(), p, 'spring');
+    collectPowerup(m, ctx(), p, 'spring');
     launch(m, cmds, 0);
     expect(isCamo(m, p)).toBe(false);
     run(m, SPRING_TICKS, cmds);
@@ -104,7 +121,7 @@ describe('Spring Jump', () => {
     const cmds = liveAndStanding(m);
     // where the head is on the ground
     const ground = aim(m, 1, 0);
-    grantPowerup(m, ctx(), m.players[0]!, 'spring');
+    collectPowerup(m, ctx(), m.players[0]!, 'spring');
     launch(m, cmds, 0);
     run(m, 60, cmds);
     cmds[1] = { ...cmds[1]!, yaw: ground.yaw, pitch: ground.pitch, presses: cmds[1]!.presses + 1 };
@@ -127,7 +144,7 @@ describe('Spring Jump', () => {
     const blocked = shoot(m, cmds, 0, 1);
     expect(blocked.some((e) => e.k === 'dmg' && e.v === 1)).toBe(false);
     run(m, 40, cmds);
-    grantPowerup(m, ctx(), m.players[0]!, 'spring');
+    collectPowerup(m, ctx(), m.players[0]!, 'spring');
     launch(m, cmds, 0);
     run(m, Math.round(SPRING_TICKS / 2) - 2, cmds);
     const ev = shoot(m, cmds, 0, 1);
@@ -141,7 +158,7 @@ describe('Spring Jump', () => {
     // the shooter saw the target still on the ground, a few ticks before it launched
     const ground = aim(m, 1, 0);
     const seen = m.tick;
-    grantPowerup(m, ctx(), m.players[0]!, 'spring');
+    collectPowerup(m, ctx(), m.players[0]!, 'spring');
     cmds[0] = { ...cmds[0]!, springs: 1 };
     stepMatch(m, cmds.map((c) => c && { ...c, vt: m.tick }), arena);
     stepMatch(m, cmds.map((c) => c && { ...c, vt: m.tick }), arena);
@@ -167,7 +184,7 @@ describe('Spring Jump', () => {
     const m = makeMatch(2, { respawnSec: 1 });
     const cmds = liveAndStanding(m);
     const p = m.players[0]!;
-    grantPowerup(m, ctx(), p, 'spring');
+    collectPowerup(m, ctx(), p, 'spring');
     launch(m, cmds, 0);
     run(m, 30, cmds);
     damagePlayer(m, ctx(), 1, p, 999, { head: false, weapon: 'sniper', kind: 'direct' });
@@ -175,6 +192,6 @@ describe('Spring Jump', () => {
     run(m, secToTicks(1.2), cmds);
     expect(p.alive).toBe(true);
     expect(p.springAt).toBe(-1);
-    expect(hasPowerup(p, 'spring', m.tick)).toBe(false);
+    expect(invCount(p, 'spring')).toBe(0);
   });
 });

@@ -79,6 +79,9 @@ longer files work, but a gunshot with a 3-second tail smears when someone fires 
 | `fizz` | Pitre Mode: the can fizzing over, right after `canOpen` | Fizzing bubbles | 1–1.5 s | soda fizz, carbonation, fizzy drink |
 | `clink` | A frag grenade bouncing off a player | A metallic clink of a grenade on stone or armour | 0.1–0.3 s | grenade bounce, metal clink, grenade drop |
 | `plasmaStick` | A plasma grenade sticking to someone (or the ground), fizzing until it goes off | A wet electric thunk into a rising sizzle | 1–1.3 s | plasma grenade stick, electric sizzle, sci-fi charge buzz |
+| `capture` | A Poké Ball catches someone | A shell snapping shut, then a few wobbly clicks | 0.8–1.2 s | capture, snap shut, latch click, magic seal |
+| `release` | Someone bursts out of a thrown Poké Ball | A bright pop and a rising chime | 0.5–0.9 s | magic pop, release burst, sparkle chime |
+| `escape` | A caught player breaks free of the ball | A shell bursting open with a falling wobble | 0.4–0.8 s | break free, pop open, burst, cartoon release |
 
 ### Feedback and menus ("ui" level)
 
@@ -92,6 +95,7 @@ longer files work, but a gunshot with a 3-second tail smears when someone fires 
 | `medal` | You earn a medal (double kill, killing spree…) | A short reward chime | 0.3–0.7 s | achievement, reward chime, UI success |
 | `beep` | The last 10 seconds of a match, once a second. Also the Orbital Designator firing. | A short clean beep | 0.1–0.2 s | countdown beep, timer beep, UI beep |
 | `spawn` | You spawn | A soft sci-fi shimmer | 0.4–0.8 s | spawn, teleport, materialize |
+| `invTick` | Picking another power-up in your inventory | A tiny two-step blip | 0.05–0.1 s | UI select, menu tick, blip |
 
 ### Small handling noises ("foley" level: the quietest)
 

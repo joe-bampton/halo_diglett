@@ -46,7 +46,7 @@ const only = args;
 
 const CHARACTERS = ['spartan', 'cat'];
 const PROPS = ['can', 'spring'];
-const WEAPONS = ['sniper', 'br', 'crossbow', 'rpg', 'grenade', 'railgun', 'hyperbeam', 'needler', 'flamethrower', 'minigun', 'orbital', 'soaker', 'frag', 'plasma'];
+const WEAPONS = ['sniper', 'br', 'crossbow', 'rpg', 'grenade', 'railgun', 'hyperbeam', 'needler', 'flamethrower', 'minigun', 'orbital', 'soaker', 'frag', 'plasma', 'pokeball'];
 const SLOTS = [...CHARACTERS, ...PROPS, ...WEAPONS];
 /** most triangles and biggest texture per kind of model (kept small: phones download these too) */
 const BUDGET = { character: { tris: 15000, tex: 1024 }, prop: { tris: 4000, tex: 512 }, weapon: { tris: 6000, tex: 512 } };

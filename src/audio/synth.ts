@@ -439,6 +439,59 @@ const clink: Gen = (sr) => {
   );
 };
 
+/** Picking another power-up in the inventory: a small two-step blip. */
+const invTick: Gen = (sr) => normalize(buf(sr, 0.07, (t) => Math.sin(TAU * (t < 0.03 ? 1500 : 2100) * t) * env(t, 0.001, 0.02)), 0.35);
+
+/** Poké Ball catch: the shell snapping shut, then three wobble clicks as whoever is inside struggles. */
+const capture: Gen = (sr) => {
+  const l1 = lp(900, sr);
+  let ph = 0;
+  return normalize(
+    buf(sr, 1.0, (t) => {
+      const snap = noise() * env(t, 0.0005, 0.012) + l1(noise()) * env(t, 0.001, 0.05) * 0.8;
+      ph += (TAU * (90 + 60 * env(t, 0.001, 0.04))) / sr;
+      const thump = Math.sin(ph) * env(t, 0.002, 0.07) * 0.7;
+      let clicks = 0;
+      for (const at of [0.32, 0.56, 0.8]) {
+        const u = t - at;
+        if (u >= 0 && u < 0.08) clicks += (Math.sin(TAU * 1900 * u) * 0.6 + noise() * 0.4) * env(u, 0.0005, 0.012);
+      }
+      return snap + thump + clicks * 0.8;
+    }),
+    0.6,
+  );
+};
+
+/** Poké Ball release: a bright pop and a rising chime as whoever was inside bursts out. */
+const release: Gen = (sr) => {
+  const h1 = hp(1500, sr);
+  let ph = 0, ph2 = 0;
+  return normalize(
+    buf(sr, 0.7, (t) => {
+      const pop = h1(noise()) * env(t, 0.0005, 0.02);
+      ph += (TAU * (520 + 1100 * Math.min(1, t / 0.35))) / sr;
+      ph2 += (TAU * (780 + 1650 * Math.min(1, t / 0.35))) / sr;
+      const chime = (Math.sin(ph) + 0.5 * Math.sin(ph2)) * env(t, 0.01, 0.22) * 0.6;
+      return pop + chime;
+    }),
+    0.55,
+  );
+};
+
+/** Breaking free of a Poké Ball: the shell bursting open with a falling wobble. */
+const escape: Gen = (sr) => {
+  const l1 = lp(2500, sr);
+  let ph = 0;
+  return normalize(
+    buf(sr, 0.55, (t) => {
+      const burst = l1(noise()) * env(t, 0.001, 0.05);
+      ph += (TAU * (900 - 600 * Math.min(1, t / 0.4)) * (1 + 0.05 * Math.sin(TAU * 18 * t))) / sr;
+      return burst + Math.sin(ph) * env(t, 0.005, 0.16) * 0.55;
+    }),
+    0.55,
+  );
+};
+
 /** A plasma grenade sticking: a wet electric thunk, then a rising fizz until it goes off. */
 const plasmaStick: Gen = (sr) => {
   const l1 = lp(500, sr), h1 = hp(1800, sr);
@@ -494,6 +547,10 @@ export const SFX = {
   toss,
   clink,
   plasmaStick,
+  invTick,
+  capture,
+  release,
+  escape,
 } satisfies Record<string, Gen>;
 
 export type SfxId = keyof typeof SFX;

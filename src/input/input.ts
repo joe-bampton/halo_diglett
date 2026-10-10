@@ -12,8 +12,13 @@ export interface InputState {
   respawns: number;
   /** cumulative Spring Jump launches (double-press Jump) */
   springs: number;
+  /** cumulative "use power-up" presses (counted by the game, which knows what's picked: see InvOp) */
+  uses: number;
   zoom: number;
 }
+
+/** Inventory actions, in the order they were pressed: pick the next/previous power-up, pick slot `i`, use the picked one. */
+export type InvOp = { k: 'cycle'; d: 1 | -1 } | { k: 'pick'; i: number } | { k: 'use' };
 
 /** Two presses within `windowMs` make a double-press (the next press starts over). */
 export class DoubleTap {
@@ -117,7 +122,7 @@ export interface InputHooks {
 
 /** Unified keyboard+mouse / gamepad / touch input. */
 export class InputManager {
-  readonly s: InputState = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, respawns: 0, springs: 0, zoom: 0 };
+  readonly s: InputState = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, respawns: 0, springs: 0, uses: 0, zoom: 0 };
   opts: Options = loadOptions();
   /** 'spectate' while dead: Jump asks for a respawn, aim drives the spectator camera */
   private _mode: 'play' | 'spectate' = 'play';
@@ -125,6 +130,11 @@ export class InputManager {
   readonly spec = { yaw: 0, pitch: -0.35, dist: 7 };
   private specCycle = 0;
   private specToggles = 0;
+  private invOps: InvOp[] = [];
+  /** mouse wheel: scrolled distance not yet turned into a step, and when the last step was */
+  private wheelAcc = 0;
+  private wheelAt = 0;
+  private useKey = '-';
   private pinchD = 0;
   private standTap = new DoubleTap(300);
   private touchSpringTap = false;
@@ -209,6 +219,25 @@ export class InputManager {
     return r;
   }
 
+  /** Inventory actions since the last call, in order (the game applies them to what's in the inventory). */
+  takeInvOps(): InvOp[] {
+    const r = this.invOps;
+    this.invOps = [];
+    return r;
+  }
+
+  invCycle(d: 1 | -1) {
+    if (this._mode === 'play') this.invOps.push({ k: 'cycle', d });
+  }
+
+  invPick(i: number) {
+    if (this._mode === 'play' && !this._suspended) this.invOps.push({ k: 'pick', i });
+  }
+
+  invUse() {
+    if (this._mode === 'play') this.invOps.push({ k: 'use' });
+  }
+
   /** A spectator action is waiting (lets the player skip the death cam). */
   specPending() {
     return this.specCycle !== 0 || this.specToggles !== 0;
@@ -241,14 +270,32 @@ export class InputManager {
         this.mouseFire = true;
         this.press();
       } else if (e.button === 2) this.cycleZoom();
+      else if (e.button === 1) {
+        // middle click: use the picked power-up (and no autoscroll)
+        e.preventDefault();
+        this.invUse();
+      }
     });
     this.on(
       this.canvas,
       'wheel',
       (e) => {
-        if (!this.enabled || this._suspended || this._mode !== 'spectate') return;
+        if (!this.enabled || this._suspended) return;
         e.preventDefault();
-        this.specZoom(Math.exp(clamp(e.deltaY, -300, 300) * 0.0015));
+        // lines or pages (Firefox) in pixels
+        const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+        if (this._mode === 'spectate') {
+          this.specZoom(Math.exp(clamp(dy, -300, 300) * 0.0015));
+          return;
+        }
+        // play: one notch steps through the inventory (a trackpad's stream of small deltas adds up, not too fast)
+        if (Math.sign(dy) !== Math.sign(this.wheelAcc)) this.wheelAcc = 0;
+        this.wheelAcc += dy;
+        if (Math.abs(this.wheelAcc) >= 50 && e.timeStamp - this.wheelAt > 140) {
+          this.invCycle(this.wheelAcc > 0 ? 1 : -1);
+          this.wheelAcc = 0;
+          this.wheelAt = e.timeStamp;
+        }
       },
       { passive: false },
     );
@@ -265,6 +312,10 @@ export class InputManager {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       this.setDevice('kbm');
+      if (/^Digit[1-9]$/.test(e.code)) {
+        if (!e.repeat) this.invPick(Number(e.code.slice(5)) - 1);
+        return;
+      }
       switch (e.code) {
         case 'Space':
         case 'ShiftLeft':
@@ -290,14 +341,21 @@ export class InputManager {
           if (!e.repeat && this._mode === 'play') this.reload();
           break;
         case 'KeyE':
-        case 'ArrowRight':
           if (e.repeat) break;
           if (this._mode === 'spectate') this.specCycle++;
-          else if (e.code === 'KeyE') this.cycleZoom();
+          else this.cycleZoom();
+          break;
+        case 'ArrowRight':
+        case 'ArrowLeft':
+          e.preventDefault();
+          if (e.repeat) break;
+          if (this._mode === 'spectate') this.specCycle += e.code === 'ArrowRight' ? 1 : -1;
+          else this.invCycle(e.code === 'ArrowRight' ? 1 : -1);
           break;
         case 'KeyQ':
-        case 'ArrowLeft':
-          if (!e.repeat && this._mode === 'spectate') this.specCycle--;
+          if (e.repeat) break;
+          if (this._mode === 'spectate') this.specCycle--;
+          else this.invUse();
           break;
         case 'KeyF':
           if (!e.repeat && this._mode === 'spectate') this.specToggles++;
@@ -537,6 +595,10 @@ export class InputManager {
       if (toggle && !launch) this.padStandToggle = !this.padStandToggle;
       if (edge(1)) this.padStandToggle = false;
       if (edge(2)) this.reload();
+      // RB uses the picked power-up, the D-pad picks another
+      if (edge(5)) this.invUse();
+      if (edge(14)) this.invCycle(-1);
+      if (edge(15)) this.invCycle(1);
     }
     if (edge(9)) this.hooks.onMenu();
     if (edge(8)) this.hooks.onScoreboard(true);
@@ -557,7 +619,7 @@ export class InputManager {
       <button class="tbtn tprev" data-act="prev" aria-label="Previous player">◀</button>
       <button class="tbtn tnext" data-act="next" aria-label="Next player">▶</button>
       <button class="tbtn tview" data-act="view" aria-label="First / third person">👁</button>
-      <button class="tbtn tspring" data-act="spring" aria-label="Spring Jump">⇈</button>`;
+      <button class="tbtn tuse" data-act="use" aria-label="Use power-up"><span class="ic"></span><span class="n"></span></button>`;
     root.classList.toggle('spec', this._mode === 'spectate');
     const btns = root.querySelectorAll<HTMLButtonElement>('.tbtn');
     btns.forEach((btn) => {
@@ -585,8 +647,8 @@ export class InputManager {
               this.touchSpringTap = this.standPress(e.timeStamp);
             }
             break;
-          case 'spring':
-            if (this.hooks.canSpring()) this.s.springs++;
+          case 'use':
+            this.invUse();
             break;
           case 'prev':
             this.specCycle--;
@@ -635,8 +697,21 @@ export class InputManager {
     });
   }
 
+  /** The touch USE button shows the picked power-up (and hides with nothing in the inventory). */
+  setUseButton(info: { icon: string; color: string; n: number } | null) {
+    const root = this.touchRoot;
+    const key = info ? `${info.icon}|${info.color}|${info.n}` : '';
+    if (!root || key === this.useKey) return;
+    this.useKey = key;
+    root.classList.toggle('hasinv', !!info);
+    const b = root.querySelector<HTMLElement>('.tuse');
+    if (!b || !info) return;
+    b.style.setProperty('--pc', info.color);
+    b.querySelector('.ic')!.textContent = info.icon;
+    b.querySelector('.n')!.textContent = info.n > 1 ? `×${info.n}` : '';
+  }
+
   updateTouchLabels() {
-    this.touchRoot?.classList.toggle('canspring', this._mode === 'play' && this.hooks.canSpring());
     const b = this.touchRoot?.querySelector<HTMLButtonElement>('.tstand');
     if (b) {
       const label = this._mode === 'spectate' ? 'RESPAWN' : this.s.stand ? 'DUCK' : 'STAND';

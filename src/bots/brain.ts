@@ -3,7 +3,9 @@ import { angleDiff, clamp, dirFromYawPitch, dist, sub, yawPitchOf, type V3 } fro
 import type { Arena } from '../sim/arena';
 import { DT, FIRE_EXPOSURE, LOWER_TIME, RISE_TIME, TICK_RATE, secToTicks } from '../sim/constants';
 import { eyePos, isExposed, rayHitbox } from '../sim/hitbox';
-import { clipSize, hasPowerup, isCamo, playerHitbox } from '../sim/match';
+import { invCount } from '../sim/inventory';
+import { clipSize, isCamo, onField, playerHitbox, seatOf } from '../sim/match';
+import { POWERUPS, type PowerUpId } from '../sim/powerups';
 import { sauceAimScale } from '../sim/sauce';
 import { inFlight, springLift } from '../sim/spring';
 import { orbPos } from '../sim/orbs';
@@ -93,7 +95,14 @@ export class BotBrain {
   private reloadedThisDuck = false;
   private spawnTick = -1;
   private springs = 0;
+  private uses = 0;
+  /** when to use each kind of power-up in the inventory (set when it first shows up there) */
+  private useAt = new Map<PowerUpId, number>();
   private springSeen = -1;
+  /** Poké Ball: whose throw (captive slot) is planned, when it goes, and into which hole (-1: the sky) */
+  private throwFor = -1;
+  private throwAt = 0;
+  private throwHole = -1;
   private springWait = 0;
   private lastTargetAt = 0;
   private skyYaw = 0;
@@ -131,14 +140,23 @@ export class BotBrain {
     const me = m.players[this.slot]!;
     const t = m.tick;
     const pr = this.profile;
-    const cmd: PlayerCommand = { yaw: this.yaw, pitch: this.pitch, stand: false, trigger: false, presses: this.presses, reloads: this.reloads, respawns: 0, springs: this.springs, zoom: 0, vt: t };
+    const cmd: PlayerCommand = { yaw: this.yaw, pitch: this.pitch, stand: false, trigger: false, presses: this.presses, reloads: this.reloads, respawns: 0, springs: this.springs, uses: this.uses, zoom: 0, vt: t };
     if (!me.alive) {
+      this.up = false;
+      this.target = -1;
+      this.useAt.clear();
+      return cmd;
+    }
+    // shut inside a Poké Ball: nothing to do but wait
+    if (me.capturedBy >= 0) {
       this.up = false;
       this.target = -1;
       return cmd;
     }
     this.maybeSpring(m, arena, me);
     cmd.springs = this.springs;
+    this.maybeUsePowerup(m, me, cmd);
+    if (me.captive >= 0 && me.weapon === 'pokeball') return this.throwCaptive(m, arena, me, cmd);
     if (WEAPONS[me.weapon].fireKind === 'spray') return this.useSoaker(me, cmd);
     if (me.spawnTick !== this.spawnTick) {
       // fresh life: face the middle of the field, stay down for a moment
@@ -183,7 +201,7 @@ export class BotBrain {
     // --- target selection ----------------------------------------------------------------
     // on a Spring Jump we can see (and shoot) down into ducked players' holes
     const flying = inFlight(me.springAt, t);
-    const eye = eyePos(arena.holes[me.hole]!, Math.max(me.exposure, FIRE_EXPOSURE), springLift(me.springAt, t));
+    const eye = eyePos(arena.holes[me.hole]!, Math.max(me.exposure, FIRE_EXPOSURE), springLift(me.springAt, t), seatOf(m, arena, me));
     if (t >= this.nextScan) {
       this.nextScan = t + 12 + this.rng.int(0, 6);
       this.pickTarget(m, arena, me, eye);
@@ -193,7 +211,7 @@ export class BotBrain {
     let aimPoint: V3 | null = null;
     let tolRad = 0;
     const tgt = this.target >= 0 ? m.players[this.target] : null;
-    if (tgt && tgt.alive) {
+    if (tgt && onField(tgt)) {
       this.lastTargetAt = t;
       const hb = playerHitbox(m, arena, tgt, flying ? tgt.exposure : Math.max(tgt.exposure, 0.3), me);
       if (w.splash) {
@@ -289,6 +307,52 @@ export class BotBrain {
     } else cmd.trigger = !(w.trigger === 'charge' && me.needRelease);
   }
 
+  /**
+   * Holding a Poké Ball with someone in it: pick a hole (our own, to finish them off point-blank, or another enemy's),
+   * stand up and lob it in there before they break free.
+   */
+  private throwCaptive(m: MatchState, arena: Arena, me: PlayerState, cmd: PlayerCommand): PlayerCommand {
+    const t = m.tick;
+    const pr = this.profile;
+    if (this.throwFor !== me.captive) {
+      this.throwFor = me.captive;
+      this.throwAt = t + secToTicks(this.rng.range(0.3, 1.2) * Math.max(0.4, pr.reaction * 2));
+      this.throwHole = this.pickThrowHole(m, me);
+    }
+    this.up = true;
+    let wantYaw = this.yaw;
+    let wantPitch = 1.2;
+    if (this.throwHole >= 0) {
+      const h = arena.holes[this.throwHole]!;
+      const eye = eyePos(arena.holes[me.hole]!, 1, 0, seatOf(m, arena, me));
+      const to = { x: h.x - eye.x, y: h.rim - eye.y, z: h.z - eye.z };
+      const proj = WEAPONS.pokeball.projectile!;
+      wantYaw = yawPitchOf(to).yaw;
+      const bp = ballisticPitch(Math.hypot(to.x, to.z), to.y, proj.speed, proj.gravity);
+      // (out of range: as long a lob as it goes)
+      wantPitch = bp !== null ? bp - (proj.loftDeg ?? 0) * D2R : 0.65;
+    }
+    const maxTurn = Math.max(200, pr.turnRate) * D2R * DT * sauceAimScale(me.saucedAt, me.saucedUntil, t);
+    this.yaw += clamp(angleDiff(wantYaw, this.yaw), -maxTurn, maxTurn);
+    this.pitch = clamp(this.pitch + clamp(wantPitch - this.pitch, -maxTurn, maxTurn), -pr.pitchMax, pr.pitchMax);
+    const settled = Math.abs(angleDiff(wantYaw, this.yaw)) < 0.03 && Math.abs(wantPitch - this.pitch) < 0.03;
+    if (t >= this.throwAt && settled && me.exposure >= FIRE_EXPOSURE) this.pull(cmd, me, t);
+    cmd.yaw = this.yaw;
+    cmd.pitch = this.pitch;
+    cmd.stand = true;
+    cmd.presses = this.presses;
+    cmd.reloads = this.reloads;
+    return cmd;
+  }
+
+  /** Where to throw a captive: our own hole (for the point-blank kill) or another enemy's (chaos); Jerry: the sky (-1). */
+  private pickThrowHole(m: MatchState, me: PlayerState): number {
+    if (this.profile.mode === 'jerry') return -1;
+    const others = m.players.filter((q): q is PlayerState => !!q && q !== me && q.slot !== me.captive && onField(q));
+    const ownHole = this.profile.springUse === 'smart' || !!this.profile.wallhack ? 0.6 : 0.4;
+    return others.length && !this.rng.chance(ownHole) ? this.rng.pick(others).hole : me.hole;
+  }
+
   /** Holding the Super Soaker: stand up and squirt (it drenches the whole field, no aiming needed). */
   private useSoaker(me: PlayerState, cmd: PlayerCommand): PlayerCommand {
     this.up = true;
@@ -357,13 +421,13 @@ export class BotBrain {
     // stay up unless reloading; reload the moment the clip runs dry
     this.up = !reloading && loaded;
     if (!loaded && !reloading) this.reloads++;
-    const eye = eyePos(arena.holes[me.hole]!, 1, springLift(me.springAt, t));
+    const eye = eyePos(arena.holes[me.hole]!, 1, springLift(me.springAt, t), seatOf(m, arena, me));
     if (t >= this.nextScan) {
       this.nextScan = t + 6;
       this.target = this.pickWallhack(m, arena, me, eye);
     }
     const q = this.target >= 0 ? m.players[this.target] : null;
-    if (q?.alive) {
+    if (q && onField(q)) {
       // stance updates before weapons fire, so aim at where they will be next tick
       const rising = q.wantStand || q.forcedStandUntil > t;
       const e1 = clamp(q.exposure + (rising ? DT / RISE_TIME : -DT / LOWER_TIME), 0, 1);
@@ -412,10 +476,41 @@ export class BotBrain {
     return cmd;
   }
 
-  /** Use a held Spring Jump (the sim only needs the launch counter; humans double-press Jump). */
+  /**
+   * Use what's in the inventory: the Super Soaker at once, buffs after a moment, power-up weapons once there's
+   * someone to use them on (or after a while anyway). Spring Jumps are maybeSpring's. One per tick at most.
+   */
+  private maybeUsePowerup(m: MatchState, me: PlayerState, cmd: PlayerCommand) {
+    const t = m.tick;
+    const jerry = this.profile.mode === 'jerry';
+    for (const id of this.useAt.keys()) if (!invCount(me, id)) this.useAt.delete(id);
+    for (const it of me.inv) {
+      const def = POWERUPS[it.id];
+      if (def.held) continue;
+      let at = this.useAt.get(it.id);
+      if (at === undefined) {
+        at = t + (jerry || it.id === 'sauce' ? 6 : secToTicks(this.rng.range(0.5, 3)));
+        this.useAt.set(it.id, at);
+      }
+      if (t < at) continue;
+      if (def.weapon) {
+        // one power-up weapon at a time; the others wait for a target (or a few seconds)
+        if (me.weaponUntil > t) continue;
+        if (it.id !== 'sauce' && !jerry && this.target < 0 && t < at + secToTicks(8)) continue;
+      }
+      this.uses++;
+      cmd.uses = this.uses;
+      cmd.useId = it.id;
+      // the next one of this kind (if any) after another pause
+      this.useAt.set(it.id, t + secToTicks(jerry ? 0.2 : this.rng.range(1, 4)));
+      return;
+    }
+  }
+
+  /** Use a Spring Jump from the inventory (the sim only needs the launch counter; humans press Use or double-press Jump). */
   private maybeSpring(m: MatchState, arena: Arena, me: PlayerState) {
     const t = m.tick;
-    if (!hasPowerup(me, 'spring', t) || inFlight(me.springAt, t)) {
+    if (invCount(me, 'spring') <= 0 || inFlight(me.springAt, t)) {
       this.springSeen = -1;
       return;
     }
@@ -432,7 +527,7 @@ export class BotBrain {
       const mine = arena.holes[me.hole]!;
       const idle = t - this.lastTargetAt > secToTicks(1.5);
       const ducked = m.players.some((q) => {
-        if (!q || q === me || !q.alive || isExposed(q.exposure)) return false;
+        if (!q || q === me || !onField(q) || isExposed(q.exposure)) return false;
         const h = arena.holes[q.hole]!;
         const d = Math.hypot(h.x - mine.x, h.z - mine.z);
         return d > 8 && d < 35;
@@ -447,7 +542,7 @@ export class BotBrain {
     let best = -1;
     let bestScore = Infinity;
     for (const q of m.players) {
-      if (!q || q === me || !q.alive) continue;
+      if (!q || q === me || !onField(q)) continue;
       const head = playerHitbox(m, arena, q, 1, me).head;
       if (!arena.lineClear(eye, head, 0.4)) continue;
       const rising = q.wantStand || q.forcedStandUntil > m.tick;
@@ -469,12 +564,12 @@ export class BotBrain {
     const t = m.tick;
     const cur = this.target >= 0 ? m.players[this.target] : null;
     // keep a live target that is still visible
-    if (cur && cur.alive && isExposed(cur.exposure) && arena.lineClear(eye, playerHitbox(m, arena, cur).head, 0.4)) return;
+    if (cur && onField(cur) && isExposed(cur.exposure) && arena.lineClear(eye, playerHitbox(m, arena, cur).head, 0.4)) return;
     let best = -1;
     let bestScore = Infinity;
     const flying = inFlight(me.springAt, t);
     for (const q of m.players) {
-      if (!q || q === me || !q.alive || (!isExposed(q.exposure) && !flying)) continue;
+      if (!q || q === me || !onField(q) || (!isExposed(q.exposure) && !flying)) continue;
       const head = playerHitbox(m, arena, q).head;
       const d = dist(eye, head);
       const ang = yawPitchOf({ x: head.x - eye.x, y: head.y - eye.y, z: head.z - eye.z });

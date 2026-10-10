@@ -25,7 +25,9 @@ Play with up to **7 friends online** (8 players), or on your own against up to *
 | Shoot | Left click | RT | FIRE |
 | Zoom (scope) | Right click (cycles zoom levels) | LT | ZOOM |
 | Reload | R | X | RELOAD |
-| Spring Jump (when you have one) | double-tap **Space** | double-tap **A** | double-tap **STAND**, or the ⇈ button |
+| Use a power-up (from your inventory) | **Q** or middle click | **RB** | **USE** |
+| Pick another power-up | **← / →**, mouse wheel, or **1–9** | D-pad ← / → | tap its icon |
+| Spring Jump (when you have one) | use it, or double-tap **Space** | use it, or double-tap **A** | use it, or double-tap **STAND** |
 | Scoreboard / menu | Tab / Esc | View / Menu | ≡ / ☰ |
 | Voice chat (online) | **M** mutes your mic, hold **V** for push-to-talk | — | 🎙️ button: tap = mute/unmute, hold = talk (push-to-talk) |
 
@@ -38,18 +40,27 @@ Play with up to **7 friends online** (8 players), or on your own against up to *
   | Look around (3rd person orbit) | mouse | right stick | drag |
   | Zoom in / out | mouse wheel | RT / LT | pinch |
 
-- **Ducking** makes you safe from bullets: once your head is under the rim, nobody on the ground can hit you, even if they aimed before you ducked. Only these get you in your hole: a shot fired down from a **Spring Jump**, **homing rounds** (they curve over the rim), a grenade that drops in, an orbital strike, or explosions if the host turns on *Explosions reach ducked players*.
+- **Ducking** makes you safe from bullets: once your head is under the rim, nobody on the ground can hit you, even if they aimed before you ducked. Only these get you in your hole: a shot fired down from a **Spring Jump**, **homing rounds** (they curve over the rim), a grenade that drops in, an orbital strike, a Poké Ball, or explosions if the host turns on *Explosions reach ducked players*.
+- **Shooting from a duck:** staying down, you can still fire a single-shot or burst gun (sniper, Battle Rifle, crossbow, rockets) steeply up out of your hole. Those shots only pop power-up bubbles: they go straight past players, and a rocket fizzles out without a blast. Aim too flat and you hit the side of the hole.
 - **Stay ducked too long** and the *anti-turtle* timer pops you up for 2 seconds.
 - **Headshots** do the most damage. With the sniper and crossbow, any headshot kills.
-- **Power-up bubbles** are capture-ball-style orbs that drift over the field. Shoot one to claim what's inside: flamethrower, minigun, overshield, invincibility, active camo, damage boost, homing rounds, X-ray vision, big heads, orbital strike, quick hands, and two new ones:
-  - **Spring Jump ⇈**: kept until you use it (or die). Double-tap Jump and a giant spring catapults you **20 m** straight up. You get a great view down into everyone's holes (you can shoot down into them), but you can't duck or hide up there, and you land back in your hole.
+- **Power-up bubbles** are capture-ball-style orbs that drift over the field. Shoot one and its power-up goes into your **inventory** at the bottom of the screen, to use when you choose:
+  - You can hold **2 of each** power-up, of as many kinds as you like. A third one of a kind you already have two of is lost.
+  - Pick one with **← / →**, the mouse wheel or **1–9** (D-pad on a controller, tap its icon on a phone) and **use** it with **Q** or middle click (**RB**, **USE**). Two of a kind go back to back: use the second while the first is still running and it lasts twice as long.
+  - **Dying empties your inventory**, so hoarding doesn't pay. Ducked in your hole, you can shoot the bubbles drifting overhead and stock up.
+- Inside the bubbles: flamethrower, minigun, overshield, invincibility, active camo, damage boost, homing rounds, X-ray vision, big heads, orbital strike, quick hands, and:
+  - **Spring Jump ⇈**: use it (or double-tap Jump) and a giant spring catapults you **20 m** straight up. You get a great view down into everyone's holes (you can shoot down into them), but you can't duck or hide up there, and you land back in your hole.
   - **Gerry Sauce 💦**: a one-shot **Super Soaker**. One squirt lobs light-white custard over the whole field. A second later everyone else is covered for 5 seconds: stuck standing up, visible (camo off) and slow to aim, speeding back up as the custard slides off their screen. Easy kills for whoever squirted it.
+  - **Poké Ball ◓**: thrown like a frag grenade. If it hits an opponent, or drops into the hole someone is hiding in, it catches them. Then you have **3 seconds** to throw them on: wherever the ball lands, they pop out of the nearest hole. That can be their own hole, an opponent's or yours. Too slow, and it's *"Opponent escaped!"*: they go back to their own hole. While caught you see the inside of the ball and can only look around.
+  - Thrown into a hole that's taken, a captive squeezes in beside whoever is there. They're stuck standing for a moment, and the two of them can shoot each other, ducked or not.
 - **Underdog camo** gives a struggling player active camo when they respawn: 5+ kills behind the leader, or 3 deaths in a row.
 
 ### Online play (peer-to-peer, no server)
 1. Click **Host online game**. You get a room code and an invite link, e.g. `https://…/#/join/K7Q2M`.
 2. Friends open the link, or click **Join game** and type the code.
-3. Add bots if you like, tweak the settings and press **Start match**.
+3. Add bots if you like, change the rules under **⚙ Settings** and press **Start match**.
+
+The lobby shows everyone as a Spartan card in their armour colour, holding the gun they'll start with. Friends' cards slide in as they join. Next to them are the map and a summary of the game.
 
 How it works:
 - The host's browser runs the match and the bots. Friends connect directly over WebRTC ([Trystero](https://github.com/dmotz/trystero)).
@@ -67,11 +78,11 @@ How it works:
 ### Voice chat
 Online games have party-style voice chat. Everyone in the room hears everyone at the same volume, in the lobby, in the match and on the results screen.
 
-- **Turn your mic on** with the 🎤 button next to your name in the lobby, or in **Options → Voice chat**. The browser asks for permission the first time. After that, the mic comes back on by itself in your next online game.
+- **Turn your mic on** with the 🎤 button on your card in the lobby, or in **Options → Voice chat**. The browser asks for permission the first time. After that, the mic comes back on by itself in your next online game.
 - **Mute yourself** with **M**, the button next to your name, or the 🎙️ icon on the in-match HUD.
 - **Push-to-talk:** switch *Mic mode* in Options, then hold **V** (or hold the 🎙️ icon on touch screens) to talk.
-- **Mute someone** with the 🔊 button next to their name in the lobby, or in **Options → Voice chat → Players**. That list also has a volume slider for each player. Mutes and volumes are remembered by player name.
-- A green dot in the lobby, and the name list on the HUD, show who is talking.
+- **Mute someone** with the 🔊 button on their card in the lobby, or in **Options → Voice chat → Players**. That list also has a volume slider for each player. Mutes and volumes are remembered by player name.
+- A green glow round their card in the lobby, and the name list on the HUD, show who is talking.
 
 How it works:
 - Voice goes straight from each player to every other player over WebRTC. The host doesn't relay it, and there's no server.
@@ -94,15 +105,17 @@ How it works:
 
 ## Host settings
 
-Every setting is in the lobby. The **presets** are Classic Diglett, Rocket Whack, Needler Party, Gun Game, Chaos Orbs, Pitre Party and First to 100.
+In the lobby, **⚙ Settings** opens the match settings. They're on five tabs:
+- Friends can look but not change anything.
+- A dot marks a tab with something changed from the default.
+- *Reset this tab* puts a tab back to the defaults.
+
+### 🎯 Game
+**Game type:** the presets are Classic Diglett, Rocket Whack, Needler Party, Gun Game, Chaos Orbs, Pitre Party and First to 100. The lobby's Game card shows which one you're playing (or *Standard*, or *Custom*).
 
 **Match**
 - Score limit (0 = unlimited, up to 200)
 - Time limit
-
-**Map**
-- Number of holes: *Auto* (today's field) or 4–32
-- Distance between holes (6–40 m, at least this far apart). The field grows to fit, up to 300 m across. The lobby shows a minimap of the result.
 
 **Weapons**
 - Weapon mode: everyone gets the same weapon, players choose, random every life, or **Gun Game** (each kill upgrades your weapon)
@@ -121,16 +134,17 @@ Every setting is in the lobby. The **presets** are Classic Diglett, Rocket Whack
 | Frag Grenade | thrown, two at a time; bounces off the ground and off players, goes off after 2 s. Roll one into a hole to get the player hiding in it |
 | Plasma Grenade | thrown, two at a time; sticks to the first player (or patch of ground) it touches and goes off a second later. Once you're stuck, ducking won't save you |
 
+**Ammo**
+- Reloading on/off (off = bottomless clip)
+- Clip size
+- Reload time
+
+### ⚖️ Rules
 **Damage**
 - Damage multiplier
 - Headshots only
 - Shields off / normal / double
 - Explosions reach ducked players
-
-**Ammo**
-- Reloading on/off (off = bottomless clip)
-- Clip size
-- Reload time
 
 **Respawn**
 - Respawn time
@@ -139,11 +153,16 @@ Every setting is in the lobby. The **presets** are Classic Diglett, Rocket Whack
 - Anti-turtle timer
 - Underdog camo, with its kills-behind and death-streak thresholds
 
-**Power-ups**
+### ✦ Power-ups
 - Bubble rate: off, rare, normal, lots or CHAOS
 - Which power-ups can appear (with **All / None** buttons; none = no bubbles). Power-ups added in an update start switched on, even in saved settings.
 - Duration multiplier
 
+### 🗺️ Map
+- Number of holes: *Auto* (today's field) or 4–32
+- Distance between holes (6–40 m, at least this far apart). The field grows to fit, up to 300 m across. The settings window and the lobby show a minimap of the result.
+
+### 🎩 Extras
 **Pitre Mode** (see below)
 
 **Skulls**
@@ -157,7 +176,7 @@ Every setting is in the lobby. The **presets** are Classic Diglett, Rocket Whack
 - Aim assist for controller/touch
 - Lag compensation window (default 250 ms, up to 400 ms)
 
-**Bots:** up to 6, with difficulty set per bot:
+**Bots:** up to 6, added with the **+** card in the lobby, with the difficulty set on each bot's card:
 
 | Tier | Plays like |
 |---|---|
@@ -167,7 +186,7 @@ Every setting is in the lobby. The **presets** are Classic Diglett, Rocket Whack
 
 ## 🎩 Pitre Mode
 
-Toggle it in the lobby. Each part can be switched on and off separately.
+Toggle it under **⚙ Settings → Extras** in the lobby. Each part can be switched on and off separately.
 - **The leader becomes the Cat in the Hat:** tall red-and-white striped hat, bow tie, cat ears and whiskers. When the leader gets a kill, they say **"prank 'em john"**.
 - **Voice lines:**
 
@@ -226,8 +245,8 @@ The detailed Spartan, energy can, Super Soaker and spring are made **from code w
 | 3D | Three.js: procedural low-poly world, instanced grass/rocks/trees. Low/Medium use plain Lambert shading, so they stay fast on phones. High/Ultra add bloom + tone mapping, PBR materials with sky reflections, and Blender-made glTF models, all loaded on demand |
 | Multiplayer | Trystero (WebRTC P2P). The host's browser runs the authoritative simulation; clients get 20 Hz snapshots over an unordered, never-resent data channel (events reliably beside it), with interpolation and lag compensation |
 | Audio | Web Audio: 3D positional panners, procedural sound effects (real recordings swap in when imported), MP3 voice lines |
-| UI | Plain DOM/CSS. The lobby settings form is generated from a settings schema |
-| Tests | Vitest (simulation, bots, netcode, Pitre logic, graphics settings, model files) + Playwright (offline match, 2-tab multiplayer, phone touch, spectating, power-ups, graphics options) |
+| UI | Plain DOM/CSS. The settings window is generated from a settings schema, a tab per group of settings; the lobby's Spartan portraits are rendered once per colour and gun |
+| Tests | Vitest (simulation, bots, netcode, Pitre logic, graphics settings, model files) + Playwright (offline match, 2-tab multiplayer, lobby and settings, phone touch, spectating, power-ups, graphics options) |
 | Hosting | Any static host; configured for **Vercel** (free Hobby plan) |
 
 ### Project layout
@@ -238,7 +257,7 @@ src/net/      host/client sessions, protocol, WebRTC + BroadcastChannel + loopba
 src/render/   Three.js world, Spartans, effects, first-person weapons, the Game loop
 src/input/    mouse/keyboard, gamepad and touch
 src/audio/    audio engine, synthesized SFX, Pitre Mode voice logic
-src/ui/       HUD, settings form, styles
+src/ui/       HUD, settings window and form, styles
 src/app/      screens (title, lobby, results, options) and session wiring
 public/audio/ voice lines, imported sound effects + manifest
 public/models/ detailed glTF models (High / Ultra)
@@ -265,6 +284,7 @@ Useful URL flags:
 - `&botdiff=jerry` or `&botdiff=jerry,topover`: bot tiers (cycled through the bots)
 - `&holes=8&spacing=20`: map size
 - `&respawn=auto`: respawn without pressing Jump
+- `&powerups=pokeball,spring`: only these power-ups come in bubbles
 - `?quality=low|medium|high|ultra`: force a graphics preset
 - `?perf`: FPS / draw-call overlay, plus the snapshot buffer and stalls (`st`: frames where other players briefly froze)
 - `?net=bc`: multiplayer between tabs of one browser, no internet needed

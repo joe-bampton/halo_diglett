@@ -1,7 +1,7 @@
 import { Rng } from '../shared/rng';
 import { angleBetween, clamp, dirFromYawPitch, dist, norm, spreadDir, sub, yawPitchOf, type V3 } from '../shared/vec';
 import type { Arena } from './arena';
-import { MOUTH_R } from './arena';
+import { MOUTH_R, wellWall } from './arena';
 import {
   DT,
   FIRE_EXPOSURE,
@@ -21,9 +21,11 @@ import {
 } from './constants';
 import { pointSegmentDist, raySphere } from './geom';
 import { eyePos, hitboxOf, isExposed, rayHitbox, type Hitbox } from './hitbox';
+import { invAdd, invCount, invTake } from './inventory';
 import { ORB_RATES, orbPos, orbRadius } from './orbs';
 import { POWERUPS, type PowerUpId } from './powerups';
-import { HELD_UNTIL, SPRING_COOLDOWN, SPRING_TICKS, inFlight, springLift } from './spring';
+import { seatOffset, type Seat } from './seats';
+import { SPRING_COOLDOWN, SPRING_TICKS, inFlight, springLift } from './spring';
 import type { Settings } from './settings';
 import type {
   HitKind,
@@ -35,9 +37,13 @@ import type {
   SimEvent,
   Vec3T,
 } from './types';
-import { WEAPONS, type WeaponDef, type WeaponId } from './weapons';
+import { WEAPONS, firesFromDuck, type WeaponDef, type WeaponId } from './weapons';
 
 const INTRO_SEC = 3;
+/** Poké Ball: seconds to throw a captive on before they break free */
+export const CAPTURE_SEC = 3;
+/** thrown into a hole, a captive pops out standing for this long (and can't shoot for the first half second) */
+export const RELEASE_STAND_SEC = 1.5;
 const V = (v: V3): Vec3T => [round2(v.x), round2(v.y), round2(v.z)];
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -137,11 +143,18 @@ function newPlayer(m: MatchState, r: RosterEntry, hole: number): PlayerState {
     respawns: 0,
     respawnRequested: false,
     springs: 0,
+    uses: 0,
+    inv: [],
+    capturedBy: -1,
+    captureUntil: 0,
+    inBall: -1,
+    captive: -1,
     springAt: -1,
     saucedAt: -1,
     saucedUntil: 0,
     nearAt: -999,
     pressAt: -1,
+    pressDucked: false,
     powerups: [],
     underdogUntil: 0,
     revealUntil: 0,
@@ -179,7 +192,14 @@ export function addPlayer(m: MatchState, r: RosterEntry, arena: Arena): PlayerSt
 
 export function removePlayer(m: MatchState, slot: number): void {
   m.players[slot] = null;
-  m.projectiles = m.projectiles.filter((pr) => pr.owner !== slot);
+  // their shots go, and so does a Poké Ball with them inside (the slot may be someone new's next)
+  m.projectiles = m.projectiles.filter((pr) => pr.owner !== slot && pr.cap !== slot);
+  for (const q of m.players) {
+    if (q?.captive !== slot) continue;
+    q.captive = -1;
+    if (q.weapon === 'pokeball') restoreWeapon(m, q);
+  }
+  // (anyone they had caught breaks free on the next tick: stepCaptures)
   if (m.leader === slot) m.leader = -1;
   recomputeLeader(m, []);
 }
@@ -226,14 +246,35 @@ function headScaleFor(m: MatchState, shooter: PlayerState | null): number {
   return s;
 }
 
-/** `tick`: when (lag compensation rewinds a Spring Jump's height too). */
-export function playerHitbox(m: MatchState, arena: Arena, p: PlayerState, exposure = p.exposure, shooter: PlayerState | null = null, tick = m.tick): Hitbox {
-  return hitboxOf(arena.holes[p.hole]!, exposure, headScaleFor(m, shooter), springLift(p.springAt, tick));
+/** On the field: alive and not shut inside a Poké Ball (nobody can hit, see or splash them in there). */
+export function onField(p: PlayerState): boolean {
+  return p.alive && p.capturedBy < 0;
 }
 
-/** Where a player's eyes (and gun) are right now, Spring Jump included. */
+const MIDDLE: Seat = { x: 0, z: 0 };
+
+/** Where in their hole a player stands: the middle, or off to one side when someone was thrown in with them. */
+export function seatOf(m: MatchState, arena: Arena, p: PlayerState): Seat {
+  let n = 0;
+  for (const q of m.players) if (q && q.hole === p.hole && onField(q)) n++;
+  if (n < 2 || !onField(p)) return MIDDLE;
+  const here = m.players.filter((q): q is PlayerState => !!q && q.hole === p.hole && onField(q)).map((q) => q.slot);
+  return seatOffset(arena.holes[p.hole]!, p.slot, here);
+}
+
+/** In the same hole, both down in it (not up on a Spring Jump): no wall between them. */
+function holeMates(m: MatchState, a: PlayerState, b: PlayerState): boolean {
+  return a.hole === b.hole && onField(a) && onField(b) && springLift(a.springAt, m.tick) === 0 && springLift(b.springAt, m.tick) === 0;
+}
+
+/** `tick`: when (lag compensation rewinds a Spring Jump's height too). */
+export function playerHitbox(m: MatchState, arena: Arena, p: PlayerState, exposure = p.exposure, shooter: PlayerState | null = null, tick = m.tick): Hitbox {
+  return hitboxOf(arena.holes[p.hole]!, exposure, headScaleFor(m, shooter), springLift(p.springAt, tick), seatOf(m, arena, p));
+}
+
+/** Where a player's eyes (and gun) are right now, Spring Jump and seat in a shared hole included. */
 export function playerEye(m: MatchState, arena: Arena, p: PlayerState): V3 {
-  return eyePos(arena.holes[p.hole]!, p.exposure, springLift(p.springAt, m.tick));
+  return eyePos(arena.holes[p.hole]!, p.exposure, springLift(p.springAt, m.tick), seatOf(m, arena, p));
 }
 
 function pickHole(m: MatchState, arena: Arena, rng: Rng, prefer: number): number {
@@ -350,7 +391,7 @@ export function stepMatch(m: MatchState, cmds: (PlayerCommand | undefined)[], ar
   for (const p of m.players) {
     if (!p) continue;
     const c = cmds[p.slot];
-    if (c) applyCommand(m, p, c, events);
+    if (c) applyCommand(m, p, c, ctx);
     if (!p.alive) {
       if (!frozen && t >= p.respawnAt && p.connected && (p.kind === 'bot' || m.settings.respawnMode === 'auto' || p.respawnRequested)) {
         const hole = pickHole(m, arena, rng, m.settings.respawnHole === 'same' ? p.hole : -1);
@@ -359,7 +400,7 @@ export function stepMatch(m: MatchState, cmds: (PlayerCommand | undefined)[], ar
         rng.state = m.rng;
       }
     }
-    if (p.alive) updateStance(m, p, events, frozen);
+    if (p.alive && p.capturedBy < 0) updateStance(m, p, events, frozen);
     m.history[p.slot * HISTORY + (t % HISTORY)] = p.alive ? Math.round(p.exposure * 255) : 0;
   }
 
@@ -367,9 +408,10 @@ export function stepMatch(m: MatchState, cmds: (PlayerCommand | undefined)[], ar
     // 2. vitals & timers
     for (const p of m.players) if (p?.alive) updateVitals(m, p, ctx);
     // 3. weapons
-    for (const p of m.players) if (p?.alive) updateWeapon(m, p, cmds[p.slot], ctx);
-    // 4. projectiles, strikes, orbs
+    for (const p of m.players) if (p?.alive && p.capturedBy < 0) updateWeapon(m, p, cmds[p.slot], ctx);
+    // 4. projectiles, Poké Ball captives, strikes, orbs
     stepProjectiles(m, ctx);
+    stepCaptures(m, ctx);
     stepStrikes(m, ctx);
     stepSauces(m, ctx);
     stepOrbs(m, ctx);
@@ -380,37 +422,49 @@ export function stepMatch(m: MatchState, cmds: (PlayerCommand | undefined)[], ar
   return events;
 }
 
-function applyCommand(m: MatchState, p: PlayerState, c: PlayerCommand, events: SimEvent[]) {
+function applyCommand(m: MatchState, p: PlayerState, c: PlayerCommand, ctx: StepContext) {
   if (Number.isFinite(c.yaw)) p.yaw = c.yaw;
   if (Number.isFinite(c.pitch)) p.pitch = clamp(c.pitch, -1.45, 1.45);
-  p.wantStand = !!c.stand;
+  // inside a Poké Ball you can only look around: presses still count (so none go off later), but do nothing
+  const caught = p.capturedBy >= 0;
+  p.wantStand = !!c.stand && !caught;
   p.zoom = clamp(c.zoom | 0, 0, 3);
   p.vt = Number.isFinite(c.vt) ? c.vt : m.tick;
   if (c.pick && WEAPONS[c.pick] && !WEAPONS[c.pick].powerupOnly) p.pick = c.pick;
   const newPresses = (c.presses | 0) - p.presses;
-  if (newPresses > 0 && newPresses < 1000) p.pressAt = m.tick;
+  if (newPresses > 0 && newPresses < 1000 && !caught) {
+    p.pressAt = m.tick;
+    p.pressDucked = !p.wantStand && p.exposure < FIRE_EXPOSURE;
+  }
   p.presses = c.presses | 0;
   const newReloads = (c.reloads | 0) - p.reloads;
   p.reloads = c.reloads | 0;
-  if (newReloads > 0 && newReloads < 1000 && p.alive) requestReload(m, p);
+  if (newReloads > 0 && newReloads < 1000 && p.alive && !caught) requestReload(m, p);
   const newRespawns = (c.respawns | 0) - p.respawns;
   p.respawns = c.respawns | 0;
   if (newRespawns > 0 && newRespawns < 1000 && !p.alive) p.respawnRequested = true;
   const newSprings = (c.springs | 0) - p.springs;
   p.springs = c.springs | 0;
-  if (newSprings > 0 && newSprings < 1000) launchSpring(m, p, events);
-  p.trigger = !!c.trigger;
+  if (newSprings > 0 && newSprings < 1000 && !caught) launchSpring(m, p, ctx.events);
+  // "use power-up": a quick double press uses two (two homing rounds back to back)
+  const newUses = (c.uses | 0) - p.uses;
+  p.uses = c.uses | 0;
+  if (newUses > 0 && newUses < 1000 && c.useId && Object.hasOwn(POWERUPS, c.useId) && !caught) {
+    for (let i = 0; i < Math.min(2, newUses); i++) usePowerup(m, ctx, p, c.useId);
+  }
+  p.trigger = !!c.trigger && !caught;
 }
 
-/** Spring Jump: one launch per pickup; must have landed (plus a short pause) first. */
-function launchSpring(m: MatchState, p: PlayerState, events: SimEvent[]) {
+/** Spring Jump: one launch per Spring Jump in the inventory; must have landed (plus a short pause) first. */
+function launchSpring(m: MatchState, p: PlayerState, events: SimEvent[]): boolean {
   const t = m.tick;
-  if (!p.alive || m.phase !== 'live' || !hasPowerup(p, 'spring', t)) return;
-  if (p.springAt >= 0 && t < p.springAt + SPRING_TICKS + SPRING_COOLDOWN) return;
+  if (!p.alive || m.phase !== 'live' || invCount(p, 'spring') <= 0) return false;
+  if (p.springAt >= 0 && t < p.springAt + SPRING_TICKS + SPRING_COOLDOWN) return false;
   p.springAt = t;
   p.exposure = 1;
-  p.powerups = p.powerups.filter((x) => x.id !== 'spring');
+  invTake(p, 'spring');
   events.push({ k: 'spring', t, p: p.slot });
+  return true;
 }
 
 function updateStance(m: MatchState, p: PlayerState, events: SimEvent[], frozen: boolean) {
@@ -512,7 +566,10 @@ function updateWeapon(m: MatchState, p: PlayerState, c: PlayerCommand | undefine
   const hasAmmo = infinite || p.clip > 0;
   if (!hasAmmo && !reloading && p.beamUntil <= t) requestReload(m, p);
   const up = p.exposure >= FIRE_EXPOSURE;
-  const canShoot = live && up && !reloading && hasAmmo;
+  // staying down (not on the way up: that press waits for you to be up), a single shot or burst goes up out of the
+  // hole and can only pop bubbles (see fire)
+  const fromDuck = !up && p.pressDucked && !p.wantStand && p.forcedStandUntil <= t && firesFromDuck(w);
+  const canShoot = live && (up || fromDuck) && !reloading && hasAmmo;
   const trigger = !!c?.trigger || p.trigger;
   const pressed = p.pressAt >= 0 && t - p.pressAt <= 12;
 
@@ -608,7 +665,7 @@ function findHomingTarget(m: MatchState, arena: Arena, p: PlayerState, origin: V
   let best: PlayerState | null = null;
   let bestAng = coneRad;
   for (const q of m.players) {
-    if (!q || q === p || !q.alive || !isExposed(q.exposure)) continue;
+    if (!q || q === p || !onField(q) || !isExposed(q.exposure)) continue;
     const hb = playerHitbox(m, arena, q, q.exposure, p);
     const to = sub(hb.head, origin);
     const d = Math.hypot(to.x, to.y, to.z);
@@ -630,7 +687,7 @@ function findHomingDive(m: MatchState, arena: Arena, p: PlayerState, origin: V3,
   let best: { q: PlayerState; via: V3 } | null = null;
   let bestAng = HOMING_CONE;
   for (const q of m.players) {
-    if (!q || q === p || !q.alive || isExposed(q.exposure)) continue;
+    if (!q || q === p || !onField(q) || isExposed(q.exposure)) continue;
     const hole = arena.holes[q.hole]!;
     const via = { x: hole.x, y: hole.rim + 0.4, z: hole.z };
     const to = sub(via, origin);
@@ -670,11 +727,14 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
     return;
   }
   let dir = aimDir(p);
+  // from a duck: straight up out of the hole, and it only pops bubbles (not counted as a shot at anyone)
+  const orbOnly = p.exposure < FIRE_EXPOSURE;
   consumeAmmo(m, p, w);
-  p.shots++;
+  // (a Poké Ball throw isn't a shot either)
+  if (!orbOnly && w.id !== 'pokeball') p.shots++;
   p.revealUntil = t + TICK_RATE;
   if (w.fireKind === 'hitscan') {
-    if (hasPowerup(p, 'homing', t)) {
+    if (hasPowerup(p, 'homing', t) && !orbOnly) {
       const q = findHomingTarget(m, arena, p, origin, dir, HOMING_CONE, w.range);
       if (q) dir = norm(sub(playerHitbox(m, arena, q, q.exposure, p).head, origin));
       else if (!w.strike) {
@@ -686,11 +746,19 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
     const pellets = w.pellets ?? 1;
     for (let i = 0; i < pellets; i++) {
       const d = spreadDir(dir, (w.spreadDeg * Math.PI) / 180, rng.next(), rng.next());
-      hitscan(m, p, w, origin, d, ctx);
+      hitscan(m, p, w, origin, d, ctx, orbOnly);
     }
   } else {
     const def = w.projectile!;
     const d = launchDir(spreadDir(dir, (w.spreadDeg * Math.PI) / 180, rng.next(), rng.next()), def);
+    if (orbOnly) {
+      // too shallow to get out of the hole: straight into its wall
+      const wall = wellWall(origin, d, arena.holes[p.hole]!);
+      if (wall < Infinity) {
+        ctx.events.push({ k: 'fire', t, p: p.slot, w: w.id, o: V(origin), e: V({ x: origin.x + d.x * wall, y: origin.y + d.y * wall, z: origin.z + d.z * wall }), hit: 'world' });
+        return;
+      }
+    }
     let target = -1;
     if (def.homing) {
       const q = findHomingTarget(m, arena, p, origin, d, (def.homing.coneDeg * Math.PI) / 180, def.homing.range);
@@ -712,8 +780,24 @@ function fire(m: MatchState, p: PlayerState, w: WeaponDef, ctx: StepContext) {
       fuseAt: def.fuse ? t + secToTicks(def.fuse) : 0,
       y0: origin.y,
     };
+    if (orbOnly) pr.orbOnly = true;
+    if (w.id === 'pokeball') {
+      // one throw, and your own gun is back while it flies
+      p.weaponUntil = t + 1;
+      const v = p.captive >= 0 ? m.players[p.captive] : null;
+      if (v && v.capturedBy === p.slot && v.inBall < 0) {
+        // the full ball: they come out in the hole nearest wherever it lands (no fuse: a long lob still lands)
+        pr.cap = v.slot;
+        pr.fuseAt = 0;
+        v.inBall = pr.id;
+        v.captureUntil = 0;
+      }
+      p.captive = -1;
+    }
     m.projectiles.push(pr);
-    ctx.events.push({ k: 'proj', t, id: pr.id, p: p.slot, w: w.id, pos: [pr.x, pr.y, pr.z].map(round2) as Vec3T, vel: [pr.vx, pr.vy, pr.vz].map(round2) as Vec3T, tgt: target });
+    const ev: SimEvent = { k: 'proj', t, id: pr.id, p: p.slot, w: w.id, pos: [pr.x, pr.y, pr.z].map(round2) as Vec3T, vel: [pr.vx, pr.vy, pr.vz].map(round2) as Vec3T, tgt: target };
+    if (pr.cap !== undefined) ev.cap = pr.cap;
+    ctx.events.push(ev);
   }
 }
 
@@ -725,17 +809,24 @@ interface TraceHit {
   orb?: number;
 }
 
-/** Trace a ray against players (rewound to the shooter's view tick), orbs and terrain. */
-export function traceRay(m: MatchState, arena: Arena, shooter: PlayerState | null, o: V3, d: V3, range: number, rewindTick: number): { hits: TraceHit[]; world: number } {
-  const world = Math.min(range, arena.raycast(o, d, range));
+/**
+ * Trace a ray against players (rewound to the shooter's view tick), orbs and terrain (the wall of the shooter's own
+ * hole too, for a shot from down in it). `orbsOnly`: a shot from a duck, which can only pop bubbles.
+ */
+export function traceRay(m: MatchState, arena: Arena, shooter: PlayerState | null, o: V3, d: V3, range: number, rewindTick: number, orbsOnly = false): { hits: TraceHit[]; world: number } {
+  const own = shooter ? arena.holes[shooter.hole] : undefined;
+  const world = Math.min(range, arena.raycast(o, d, range), own ? wellWall(o, d, own) : Infinity);
   const hits: TraceHit[] = [];
   for (const q of m.players) {
-    if (!q || q === shooter || !q.alive) continue;
+    if (!q || q === shooter || !onField(q)) continue;
+    // squeezed into the same hole: nothing between them, ducked or not (and that's all a shot from a duck can hit)
+    const mate = !!shooter && holeMates(m, shooter, q);
+    if (orbsOnly && !mate) continue;
     // ducked players are only reachable from high above, through the mouth (rayHitbox). Lag compensation favours the
     // ducker: someone who has ducked since the shooter's view can't be hit where they were.
     const e = Math.min(exposureAt(m, q.slot, rewindTick), q.exposure);
     const hb = playerHitbox(m, arena, q, e, shooter, rewindTick);
-    const h = rayHitbox(o, d, hb);
+    const h = rayHitbox(o, d, hb, 0, o.y, mate);
     if (h && h.t < world) hits.push({ t: h.t, kind: 'player', slot: q.slot, head: h.head });
   }
   for (const orb of m.orbs) {
@@ -753,10 +844,10 @@ function rewindTickFor(m: MatchState, p: PlayerState): number {
   return clamp(p.vt, m.tick - Math.min(maxBack, HISTORY - 2), m.tick);
 }
 
-function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx: StepContext) {
+function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx: StepContext, orbOnly = false) {
   const t = m.tick;
   const rewind = rewindTickFor(m, p);
-  const { hits, world } = traceRay(m, ctx.arena, p, o, d, w.range, rewind);
+  const { hits, world } = traceRay(m, ctx.arena, p, o, d, w.range, rewind, orbOnly);
   let pierceLeft = w.pierce ?? 1;
   let end = world;
   let hitKind: HitKind = world < w.range ? 'world' : 'none';
@@ -774,6 +865,8 @@ function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx:
     struck.add(q.slot);
     if (!w.strike) {
       if (!anyHit) p.hits++;
+      // (a shot from a duck at a hole-mate counts after all)
+      if (!anyHit && orbOnly) p.shots++;
       anyHit = true;
       damagePlayer(m, ctx, p.slot, q, w.damage, { head: !!h.head, weapon: w.id, kind: 'direct', headshotKills: w.headshotKills, headMult: w.headMult });
     }
@@ -782,7 +875,7 @@ function hitscan(m: MatchState, p: PlayerState, w: WeaponDef, o: V3, d: V3, ctx:
     if (--pierceLeft <= 0) break;
   }
   if (w.pierce && pierceLeft > 0) end = world;
-  if (wantNearMisses(m, w)) nearMisses(m, ctx, p, w, o, d, end, struck, rewind);
+  if (wantNearMisses(m, w) && !orbOnly) nearMisses(m, ctx, p, w, o, d, end, struck, rewind);
   const endPt = { x: o.x + d.x * end, y: o.y + d.y * end, z: o.z + d.z * end };
   if (w.strike) {
     // orbital designator: strike the aimed point
@@ -802,7 +895,7 @@ const NEAR_GAP = TICK_RATE / 2;
 /** ducking under a shot this soon before it arrives still counts as a near miss */
 const DUCK_GRACE = Math.round(0.6 * TICK_RATE);
 /** sprays, beams and strikes don't whizz past anyone */
-const NO_NEAR_MISS = new Set<WeaponId>(['flamethrower', 'needler', 'hyperbeam', 'orbital', 'soaker']);
+const NO_NEAR_MISS = new Set<WeaponId>(['flamethrower', 'needler', 'hyperbeam', 'orbital', 'soaker', 'pokeball']);
 
 function wantNearMisses(m: MatchState, w: WeaponDef): boolean {
   return m.settings.pitre && m.settings.pitreVoices && !NO_NEAR_MISS.has(w.id);
@@ -822,7 +915,7 @@ function justDucked(m: MatchState, slot: number, tick: number): boolean {
 function nearMisses(m: MatchState, ctx: StepContext, p: PlayerState, w: WeaponDef, o: V3, d: V3, end: number, struck: Set<number>, rewind: number) {
   const t = m.tick;
   for (const q of m.players) {
-    if (!q || q === p || !q.alive || struck.has(q.slot) || t - q.nearAt < NEAR_GAP) continue;
+    if (!q || q === p || !onField(q) || struck.has(q.slot) || t - q.nearAt < NEAR_GAP) continue;
     const e = exposureAt(m, q.slot, rewind);
     let near = rayHitbox(o, d, playerHitbox(m, ctx.arena, q, e, p, rewind), NEAR_R);
     if (!near && e < 1 && justDucked(m, q.slot, rewind)) near = rayHitbox(o, d, playerHitbox(m, ctx.arena, q, 1, p, rewind), NEAR_R);
@@ -941,7 +1034,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
       let inHole = -1;
       if (pr.stuck >= 0) {
         const q = m.players[pr.stuck];
-        if (q?.alive) {
+        if (q && onField(q)) {
           const a = stickAnchor(playerHitbox(m, arena, q));
           pr.x = a.x + pr.off!.x;
           pr.y = a.y + pr.off!.y;
@@ -952,15 +1045,28 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
         const hole = arena.nearestHole(pr.x, pr.z);
         if (hole && Math.hypot(hole.x - pr.x, hole.z - pr.z) < MOUTH_R && pr.y < hole.rim) inHole = hole.id;
       }
+      // a Poké Ball that rolled to a stop in a hole catches whoever is in there (or pops open empty)
+      if (def.contact === 'capture' && inHole >= 0) {
+        catchInHole(m, ctx, pr, owner, inHole, { x: pr.x, y: pr.y, z: pr.z });
+        continue;
+      }
       if (pr.fuseAt && t >= pr.fuseAt) endProjectile(m, ctx, pr, { x: pr.x, y: pr.y, z: pr.z }, w, inHole);
       else keep.push(pr);
+      continue;
+    }
+    if (pr.orbOnly) {
+      if (stepOrbOnly(m, ctx, pr, def, owner)) keep.push(pr);
+      continue;
+    }
+    if (pr.cap !== undefined) {
+      if (stepFullBall(m, ctx, pr, def, owner)) keep.push(pr);
       continue;
     }
     const prev = { x: pr.x, y: pr.y, z: pr.z };
     let targetPos: V3 | null = null;
     if (pr.target >= 0) {
       const q = m.players[pr.target];
-      if (q?.alive && isExposed(q.exposure)) targetPos = playerHitbox(m, arena, q).head;
+      if (q && onField(q) && isExposed(q.exposure)) targetPos = playerHitbox(m, arena, q).head;
     }
     integrateProjectile(pr, def, targetPos);
     const seg = { x: pr.x - prev.x, y: pr.y - prev.y, z: pr.z - prev.z };
@@ -972,10 +1078,10 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     let hitPlayer: { slot: number; head: boolean; inHole: boolean } | null = null;
     let hitOrb = -1;
     for (const q of m.players) {
-      if (!q || !q.alive) continue;
+      if (!q || !onField(q)) continue;
       if (q.slot === pr.owner && t - pr.born < 20) continue;
       const hb = playerHitbox(m, arena, q, q.exposure, owner ?? null);
-      const h = rayHitbox(prev, d, hb, def.radius, pr.y0);
+      const h = rayHitbox(prev, d, hb, def.radius, pr.y0, !!owner && holeMates(m, owner, q));
       if (h && h.t < bestT) {
         bestT = h.t;
         // came down through the mouth: it's in their hole (grenades must still kill ducked players)
@@ -1000,7 +1106,7 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
     const at = { x: prev.x + d.x * bestT, y: prev.y + d.y * bestT, z: prev.z + d.z * bestT };
     if (owner && wantNearMisses(m, w)) {
       for (const q of m.players) {
-        if (!q || q === owner || !q.alive || q.slot === hitPlayer?.slot || ((pr.near ?? 0) & (1 << q.slot)) !== 0 || t - q.nearAt < NEAR_GAP) continue;
+        if (!q || q === owner || !onField(q) || q.slot === hitPlayer?.slot || ((pr.near ?? 0) & (1 << q.slot)) !== 0 || t - q.nearAt < NEAR_GAP) continue;
         const h = rayHitbox(prev, d, playerHitbox(m, arena, q, q.exposure, owner), def.radius + NEAR_R, pr.y0);
         if (h && h.t <= bestT) {
           pr.near = (pr.near ?? 0) | (1 << q.slot);
@@ -1027,7 +1133,16 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
       keep.push(pr);
       continue;
     }
-    if (hitPlayer && def.contact === 'bounce') {
+    if (hitPlayer && def.contact === 'capture') {
+      // a Poké Ball shuts whoever it hits inside it (it bounces off the invincible, and off its thrower)
+      const q = m.players[hitPlayer.slot]!;
+      if (canCatch(m, owner, q)) {
+        capture(m, ctx, owner!, q, at);
+        ctx.events.push({ k: 'pend', t, id: pr.id, pos: V(at), gone: true });
+        continue;
+      }
+    }
+    if (hitPlayer && (def.contact === 'bounce' || def.contact === 'capture')) {
       // a frag glances off whoever it hits
       const q = m.players[hitPlayer.slot]!;
       const hb = playerHitbox(m, arena, q, q.exposure, owner ?? null);
@@ -1069,6 +1184,10 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
       endProjectile(m, ctx, pr, at, w, hitPlayer.inHole ? q.hole : -1, w.damage > 0);
       continue;
     }
+    if (inMouth && def.contact === 'capture') {
+      catchInHole(m, ctx, pr, owner, hole!.id, at);
+      continue;
+    }
     if (inMouth && (def.bounce || def.sticky)) {
       // it fell into someone's hole — detonate at the bottom
       const bottom = { x: hole!.x, y: hole!.ground - 1.2, z: hole!.z };
@@ -1108,6 +1227,193 @@ function stepProjectiles(m: MatchState, ctx: StepContext) {
   m.projectiles = keep;
 }
 
+/** Can `owner`'s Poké Ball catch `q`? Not themselves, not the invincible, and only one captive in hand at a time. */
+function canCatch(m: MatchState, owner: PlayerState | null, q: PlayerState): owner is PlayerState {
+  return !!owner && onField(owner) && owner.captive < 0 && q !== owner && onField(q) && !hasPowerup(q, 'invincible', m.tick);
+}
+
+/** A Poké Ball dropped into (or rolled to a stop in) a hole: it catches whoever is in there, nearest first, or pops open empty. */
+function catchInHole(m: MatchState, ctx: StepContext, pr: Projectile, owner: PlayerState | null, hole: number, at: V3) {
+  let best: PlayerState | null = null;
+  let bd = Infinity;
+  for (const q of m.players) {
+    if (!q || q.hole !== hole || !canCatch(m, owner, q)) continue;
+    const e = playerEye(m, ctx.arena, q);
+    const d = Math.hypot(e.x - at.x, e.z - at.z);
+    if (d < bd) {
+      bd = d;
+      best = q;
+    }
+  }
+  if (best) capture(m, ctx, owner!, best, at);
+  ctx.events.push(best ? { k: 'pend', t: m.tick, id: pr.id, pos: V(at), gone: true } : { k: 'pend', t: m.tick, id: pr.id, pos: V(at) });
+}
+
+/**
+ * `owner` caught `v`: they're off the field (can't be seen, hit or splashed; they can only look around inside the ball)
+ * and the ball, with them in it, is back in `owner`'s hand for CAPTURE_SEC to throw on.
+ */
+function capture(m: MatchState, ctx: StepContext, owner: PlayerState, v: PlayerState, at: V3) {
+  const t = m.tick;
+  v.capturedBy = owner.slot;
+  v.captureUntil = t + secToTicks(CAPTURE_SEC);
+  v.inBall = -1;
+  v.springAt = -1;
+  v.exposure = 0;
+  v.wantStand = false;
+  v.trigger = false;
+  v.reloadUntil = 0;
+  v.chargeStart = -1;
+  v.beamUntil = 0;
+  v.beamLen = 0;
+  v.burstLeft = 0;
+  v.burn = null;
+  v.duckedSince = -1;
+  v.exposedSince = -1;
+  // a plasma grenade stuck to them falls to the ground
+  for (const pr of m.projectiles) {
+    if (pr.stuck !== v.slot) continue;
+    pr.stuck = -1;
+    pr.off = undefined;
+    ctx.events.push({ k: 'pmove', t, id: pr.id, pos: V(pr), vel: [0, 0, 0], on: -1 });
+  }
+  // the ball goes back to the thrower's hand (straight in: not a power-up switching on, no announcer)
+  if (!owner.weaponUntil) owner.baseClip = owner.clip;
+  owner.powerups = owner.powerups.filter((x) => !POWERUPS[x.id].weapon);
+  owner.weapon = 'pokeball';
+  owner.weaponUntil = v.captureUntil;
+  owner.captive = v.slot;
+  owner.clip = 0;
+  owner.reloadUntil = 0;
+  owner.chargeStart = -1;
+  owner.beamUntil = 0;
+  owner.burstLeft = 0;
+  owner.spin = 0;
+  // a fresh press throws it (not one made before the catch)
+  owner.pressAt = -1;
+  owner.nextFireAt = t + 8;
+  ctx.events.push({ k: 'capture', t, p: owner.slot, v: v.slot, pos: V(at), hole: v.hole });
+  bumpMedal(m, ctx, owner, 'gotcha');
+}
+
+/** Out of the ball (thrown on, broken free, or let go). */
+function freeCaptive(v: PlayerState) {
+  v.capturedBy = -1;
+  v.captureUntil = 0;
+  v.inBall = -1;
+}
+
+/** Not thrown on in time (or the thrower is gone): back in their own hole, ducked. */
+function escape(m: MatchState, ctx: StepContext, v: PlayerState) {
+  const t = m.tick;
+  const by = v.capturedBy;
+  const thrower = m.players[by];
+  freeCaptive(v);
+  v.exposure = 0;
+  v.wantStand = false;
+  v.duckedSince = t;
+  v.exposedSince = -1;
+  if (thrower && thrower.captive === v.slot) {
+    thrower.captive = -1;
+    if (thrower.alive && thrower.weapon === 'pokeball') restoreWeapon(m, thrower);
+  }
+  ctx.events.push({ k: 'escape', t, p: by, v: v.slot, hole: v.hole });
+}
+
+/** Captives in a thrower's hand break free when time is up, or when the thrower is gone, dead or caught themselves. */
+function stepCaptures(m: MatchState, ctx: StepContext) {
+  for (const v of m.players) {
+    if (!v || v.capturedBy < 0) continue;
+    if (v.inBall >= 0) {
+      // in the air: they come out where the ball lands (if the ball is gone some other way, they're home)
+      if (!m.projectiles.some((pr) => pr.id === v.inBall)) escape(m, ctx, v);
+      continue;
+    }
+    const by = m.players[v.capturedBy];
+    if (!by || !onField(by) || by.captive !== v.slot || m.tick >= v.captureUntil) escape(m, ctx, v);
+  }
+}
+
+/**
+ * A thrown Poké Ball with someone inside: it lets them out at its first touch of anything (a player, the ground, a
+ * hole's mouth), into the hole nearest that spot — whoever is already in it. Returns whether it's still flying.
+ */
+function stepFullBall(m: MatchState, ctx: StepContext, pr: Projectile, def: NonNullable<WeaponDef['projectile']>, owner: PlayerState | null): boolean {
+  const { arena } = ctx;
+  const t = m.tick;
+  const prev = { x: pr.x, y: pr.y, z: pr.z };
+  integrateProjectile(pr, def, null);
+  const seg = { x: pr.x - prev.x, y: pr.y - prev.y, z: pr.z - prev.z };
+  const L = Math.hypot(seg.x, seg.y, seg.z) || 1e-9;
+  const d = { x: seg.x / L, y: seg.y / L, z: seg.z / L };
+  let bestT = L;
+  for (const q of m.players) {
+    if (!q || !onField(q) || (q.slot === pr.owner && t - pr.born < 20)) continue;
+    const h = rayHitbox(prev, d, playerHitbox(m, arena, q, q.exposure, owner), def.radius, pr.y0);
+    if (h && h.t < bestT) bestT = h.t;
+  }
+  bestT = Math.min(bestT, arena.raycast(prev, d, bestT));
+  const at = { x: prev.x + d.x * bestT, y: prev.y + d.y * bestT, z: prev.z + d.z * bestT };
+  const hole = arena.nearestHole(at.x, at.z);
+  const inMouth = !!hole && Math.hypot(hole.x - at.x, hole.z - at.z) < MOUTH_R && at.y < hole.rim;
+  if (bestT >= L && !inMouth && t - pr.born < secToTicks(def.life) && pr.y >= -20) return true;
+  release(m, ctx, pr, at);
+  return false;
+}
+
+/** The full ball landed at `at`: out they come, standing (stuck there for a moment), in the hole nearest it. */
+function release(m: MatchState, ctx: StepContext, pr: Projectile, at: V3) {
+  const t = m.tick;
+  ctx.events.push({ k: 'pend', t, id: pr.id, pos: V(at), gone: true });
+  const v = pr.cap !== undefined ? m.players[pr.cap] : null;
+  if (!v || !v.alive || v.capturedBy < 0 || v.inBall !== pr.id) return;
+  const dest = ctx.arena.closestHole(at.x, at.z);
+  freeCaptive(v);
+  v.hole = dest.id;
+  v.exposure = 1;
+  v.wantStand = false;
+  v.forcedStandUntil = t + secToTicks(RELEASE_STAND_SEC);
+  v.nextFireAt = Math.max(v.nextFireAt, t + secToTicks(0.5));
+  v.exposedSince = t;
+  v.duckedSince = -1;
+  ctx.events.push({ k: 'release', t, p: pr.owner, v: v.slot, hole: dest.id, pos: V(at) });
+}
+
+/**
+ * A shot fired up out of a hole from a duck: it can only pop a power-up bubble, and fizzles out (no blast) on anything
+ * else. Returns whether it's still flying.
+ */
+function stepOrbOnly(m: MatchState, ctx: StepContext, pr: Projectile, def: NonNullable<WeaponDef['projectile']>, owner: PlayerState | null): boolean {
+  const { arena } = ctx;
+  const t = m.tick;
+  const prev = { x: pr.x, y: pr.y, z: pr.z };
+  integrateProjectile(pr, def, null);
+  const seg = { x: pr.x - prev.x, y: pr.y - prev.y, z: pr.z - prev.z };
+  const L = Math.hypot(seg.x, seg.y, seg.z) || 1e-9;
+  const d = { x: seg.x / L, y: seg.y / L, z: seg.z / L };
+  let bestT = L;
+  let hitOrb = -1;
+  for (const orb of m.orbs) {
+    const to = raySphere(prev, d, orbPos(orb, t, arena), orbRadius(m.settings) + def.radius);
+    if (to >= 0 && to < bestT) {
+      bestT = to;
+      hitOrb = orb.id;
+    }
+  }
+  const tw = arena.raycast(prev, d, bestT);
+  if (tw < bestT) {
+    bestT = tw;
+    hitOrb = -1;
+  }
+  const at = { x: prev.x + d.x * bestT, y: prev.y + d.y * bestT, z: prev.z + d.z * bestT };
+  if (hitOrb >= 0 && owner) claimOrb(m, ctx, hitOrb, owner);
+  if (hitOrb >= 0 || tw < L || t - pr.born >= secToTicks(def.life) || pr.y < -20) {
+    ctx.events.push({ k: 'pend', t, id: pr.id, pos: V(at), gone: true });
+    return false;
+  }
+  return true;
+}
+
 function endProjectile(m: MatchState, ctx: StepContext, pr: Projectile, at: V3, w: WeaponDef, inHole: number, counted = false, gone = false) {
   ctx.events.push(gone ? { k: 'pend', t: m.tick, id: pr.id, pos: V(at), gone } : { k: 'pend', t: m.tick, id: pr.id, pos: V(at) });
   if (w.splash && explode(m, ctx, pr.owner, w.id, at, w.splash, inHole) && !counted) {
@@ -1134,7 +1440,7 @@ function explode(m: MatchState, ctx: StepContext, owner: number, weapon: WeaponI
   let hitEnemy = false;
   ctx.events.push({ k: 'boom', t: m.tick, p: owner, w: weapon, pos: V(pos), r: sp.radius });
   for (const q of m.players) {
-    if (!q || !q.alive) continue;
+    if (!q || !onField(q)) continue;
     const hb = playerHitbox(m, arena, q);
     const dHead = dist(pos, hb.head) - hb.headR;
     const dBody = pointSegmentDist(pos, hb.torsoA, hb.torsoB) - hb.torsoR;
@@ -1162,7 +1468,8 @@ function explode(m: MatchState, ctx: StepContext, owner: number, weapon: WeaponI
 }
 
 export function damagePlayer(m: MatchState, ctx: StepContext, attacker: number, v: PlayerState, amount: number, o: DamageOpts) {
-  if (!v.alive || m.phase !== 'live') return;
+  // (nothing reaches someone shut in a Poké Ball)
+  if (!onField(v) || m.phase !== 'live') return;
   const t = m.tick;
   const a = attacker >= 0 ? m.players[attacker] : null;
   if (hasPowerup(v, 'invincible', t)) {
@@ -1221,6 +1528,8 @@ function killPlayer(m: MatchState, ctx: StepContext, attacker: number, v: Player
   v.needles = [];
   v.beamUntil = 0;
   v.chargeStart = -1;
+  // whatever was in the inventory is lost
+  v.inv = [];
   v.respawnAt = t + Math.max(secToTicks(0.4), secToTicks(s.respawnSec));
   const medals: string[] = [];
   if (a && a !== v) {
@@ -1256,8 +1565,15 @@ function killPlayer(m: MatchState, ctx: StepContext, attacker: number, v: Player
     if (s.weaponMode === 'gunGame') {
       a.gunLevel++;
       if (a.gunLevel < s.gunGameOrder.length && a.alive) {
-        a.powerups = a.powerups.filter((x) => !POWERUPS[x.id].weapon);
-        equip(m, a, s.gunGameOrder[a.gunLevel]!);
+        const next = s.gunGameOrder[a.gunLevel]!;
+        if (a.captive >= 0) {
+          // a Poké Ball with someone in it in their hand: the new gun comes back after the throw
+          a.baseWeapon = next;
+          a.baseClip = clipSize(m, WEAPONS[next]);
+        } else {
+          a.powerups = a.powerups.filter((x) => !POWERUPS[x.id].weapon);
+          equip(m, a, next);
+        }
         ctx.events.push({ k: 'ann', t, key: 'ann.gungame_level', p: a.slot });
       }
     }
@@ -1309,7 +1625,7 @@ function stepSauces(m: MatchState, ctx: StepContext) {
   const dur = secToTicks(WEAPONS.soaker.sauce!.duration);
   for (const s of due) {
     for (const q of m.players) {
-      if (!q || !q.alive || q.slot === s.owner || hasPowerup(q, 'invincible', t)) continue;
+      if (!q || !onField(q) || q.slot === s.owner || hasPowerup(q, 'invincible', t)) continue;
       q.saucedAt = t;
       q.saucedUntil = t + dur;
       q.forcedStandUntil = Math.max(q.forcedStandUntil, q.saucedUntil);
@@ -1342,25 +1658,62 @@ function claimOrb(m: MatchState, ctx: StepContext, id: number, p: PlayerState) {
   m.orbs = m.orbs.filter((o) => o.id !== id);
   ctx.events.push({ k: 'orbPop', t: m.tick, id, p: p.slot });
   bumpMedal(m, ctx, p, 'orb');
-  if (p.alive) grantPowerup(m, ctx, p, orb.type);
+  if (p.alive) collectPowerup(m, ctx, p, orb.type);
 }
 
+/** A popped bubble's power-up goes into the inventory (two of each kind at most: a third is lost). */
+export function collectPowerup(m: MatchState, ctx: StepContext, p: PlayerState, id: PowerUpId) {
+  const added = invAdd(p, id);
+  ctx.events.push(added ? { k: 'got', t: m.tick, p: p.slot, id, n: invCount(p, id) } : { k: 'got', t: m.tick, p: p.slot, id, n: invCount(p, id), full: true });
+}
+
+/**
+ * Use one of a power-up from the inventory. Returns false (and keeps it) if it can't be used right now: none left, a
+ * Spring Jump still in the air, or the same one-shot weapon still in your hands.
+ */
+export function usePowerup(m: MatchState, ctx: StepContext, p: PlayerState, id: PowerUpId): boolean {
+  const t = m.tick;
+  const def = POWERUPS[id];
+  // (not from inside a Poké Ball, nor with someone in one in your hand)
+  if (!def || !onField(p) || p.captive >= 0 || m.phase !== 'live' || invCount(p, id) <= 0) return false;
+  if (def.held) return launchSpring(m, p, ctx.events);
+  if (def.oneShot && p.weapon === def.weapon && p.weaponUntil > t) return false;
+  invTake(p, id);
+  grantPowerup(m, ctx, p, id);
+  return true;
+}
+
+/**
+ * Switch a power-up on (a used one, or the test hooks). One that's already running lasts a full duration longer
+ * (use two in a row: twice as long); a weapon one replaces any other power-up weapon. Spring Jump launches.
+ */
 export function grantPowerup(m: MatchState, ctx: StepContext, p: PlayerState, id: PowerUpId) {
   const t = m.tick;
   const def = POWERUPS[id];
-  const until = def.held ? HELD_UNTIL : t + secToTicks(def.duration * m.settings.powerupDurationMult);
+  if (def.held) {
+    if (!invCount(p, id)) invAdd(p, id);
+    launchSpring(m, p, ctx.events);
+    return;
+  }
+  const dur = secToTicks(def.duration * m.settings.powerupDurationMult);
+  const cur = p.powerups.find((x) => x.id === id && x.until > t);
+  let until = cur ? cur.until + dur : t + dur;
   if (def.weapon) {
-    if (!p.weaponUntil) p.baseClip = p.clip;
-    p.powerups = p.powerups.filter((x) => !POWERUPS[x.id].weapon);
-    p.weapon = def.weapon;
-    p.weaponUntil = until;
-    p.clip = 0;
-    p.reloadUntil = 0;
-    p.chargeStart = -1;
-    p.beamUntil = 0;
-    p.burstLeft = 0;
-    p.spin = 0;
-    p.nextFireAt = t + 6;
+    if (cur && p.weapon === def.weapon && p.weaponUntil > t) p.weaponUntil = until;
+    else {
+      until = t + dur;
+      if (!p.weaponUntil) p.baseClip = p.clip;
+      p.powerups = p.powerups.filter((x) => !POWERUPS[x.id].weapon);
+      p.weapon = def.weapon;
+      p.weaponUntil = until;
+      p.clip = 0;
+      p.reloadUntil = 0;
+      p.chargeStart = -1;
+      p.beamUntil = 0;
+      p.burstLeft = 0;
+      p.spin = 0;
+      p.nextFireAt = t + 6;
+    }
   }
   if (id === 'overshield') p.overshield = 70;
   p.powerups = p.powerups.filter((x) => x.id !== id);
@@ -1412,6 +1765,8 @@ function checkEnd(m: MatchState, ctx: StepContext) {
     }
   }
   if (ended) {
+    // nobody is left inside a Poké Ball (nothing runs once the match is over)
+    for (const q of players) if (q.capturedBy >= 0) escape(m, ctx, q);
     m.phase = 'ended';
     m.endAt = t;
     m.winner = winner ? winner.slot : -1;

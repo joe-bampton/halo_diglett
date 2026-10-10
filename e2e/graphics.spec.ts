@@ -5,6 +5,8 @@ type HD = { state(): { phase: string; render: Render } };
 const render = (page: Page) => page.evaluate(() => (window as unknown as { __hd: HD }).__hd.state().render);
 
 test('graphics settings apply mid-match from the pause menu (Ultra preset, Advanced, FPS counter)', async ({ page }) => {
+  // every switch recompiles shaders, which a software renderer takes its time over
+  test.setTimeout(150_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/?test=1&autostart=offline&bots=1&botdiff=jerry&quality=medium&respawn=auto');
@@ -35,7 +37,7 @@ test('graphics settings apply mid-match from the pause menu (Ultra preset, Advan
   await page.waitForFunction(() => (window as unknown as { __hd: HD }).__hd.state().render.particles === 180, null, { timeout: 10_000 });
   await page.locator('input[data-fps]').check();
   await page.locator('.back').click();
-  await expect(page.locator('.fps')).toContainText('fps', { timeout: 10_000 });
+  await expect(page.locator('.fps')).toContainText('fps', { timeout: 20_000 });
 
   // the choices are remembered for the next match
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('hd.options') ?? '{}'));

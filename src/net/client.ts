@@ -1,6 +1,7 @@
 import { angleDiff, clamp } from '../shared/vec';
 import { LOWER_TIME, MAX_HUMANS, RISE_TIME, TICK_RATE } from '../sim/constants';
 import { inFlight } from '../sim/spring';
+import type { PowerUpId } from '../sim/powerups';
 import type { MatchPhase, PlayerCommand, RosterEntry, SimEvent } from '../sim/types';
 import { weaponByIndex, type WeaponId } from '../sim/weapons';
 import {
@@ -63,6 +64,9 @@ export interface LocalInput {
   reloads: number;
   respawns: number;
   springs: number;
+  /** cumulative "use power-up" presses, and what was picked in the inventory at the last one */
+  uses: number;
+  useId?: PowerUpId;
   zoom: number;
   pick?: WeaponId;
 }
@@ -96,10 +100,12 @@ export class ClientSession {
   leader = -1;
   orbs = new Map<number, ViewOrb>();
   homing = new Map<number, { x: number; y: number; z: number }>();
+  /** thrown Poké Balls with someone inside, as of the latest snapshot */
+  fullBalls = new Map<number, { x: number; y: number; z: number; cap: number }>();
   events: SimEvent[] = [];
   latestTick = 0;
 
-  input: LocalInput = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, respawns: 0, springs: 0, zoom: 0 };
+  input: LocalInput = { yaw: 0, pitch: 0, stand: false, trigger: false, presses: 0, reloads: 0, respawns: 0, springs: 0, uses: 0, zoom: 0 };
   myExposure = 0;
   /** host tick currently displayed for remote players */
   renderTick = 0;
@@ -286,6 +292,8 @@ export class ClientSession {
       this.homing.clear();
       for (const [id, x, y, z] of s.h) this.homing.set(id, { x, y, z });
     } else this.homing.clear();
+    this.fullBalls.clear();
+    if (s.fb) for (const [id, x, y, z, cap] of s.fb) this.fullBalls.set(id, { x, y, z, cap });
     // players present in the snapshot but not in roster (late joiners)
     for (const pp of s.p) {
       if (!this.players[pp[0]]) {
@@ -318,6 +326,9 @@ export class ClientSession {
       if (e.k === 'orb') this.orbs.set(e.id, { id: e.id, type: e.type, seed: e.seed, spawn: e.spawn, expire: e.expire });
       else if (e.k === 'orbPop') this.orbs.delete(e.id);
       else if (e.k === 'spawn' && e.p === this.slot) this.myExposure = 0;
+      // thrown out of a Poké Ball: up and standing at once; broken free: down in my hole
+      else if (e.k === 'release' && e.v === this.slot) this.myExposure = 1;
+      else if (e.k === 'escape' && e.v === this.slot) this.myExposure = 0;
       this.events.push(e);
     }
   }
@@ -345,7 +356,10 @@ export class ClientSession {
     // own stance prediction
     const me = this.me;
     const mine = this.players[this.slot];
-    if (me && me.al) {
+    if (me && me.al && me.cb >= 0) {
+      // inside a Poké Ball: nothing to stand up in
+      this.myExposure = 0;
+    } else if (me && me.al) {
       const forced = me.fs > this.hostTick;
       const want = (this.input.stand || forced) && this.phase !== 'ended';
       this.myExposure = want ? Math.min(1, this.myExposure + dt / RISE_TIME) : Math.max(0, this.myExposure - dt / LOWER_TIME);
@@ -410,7 +424,7 @@ export class ClientSession {
   private maybeSendInput(now: number) {
     if (this.state !== 'match') return;
     const i = this.input;
-    const key = `${i.stand}|${i.trigger}|${i.presses}|${i.reloads}|${i.respawns}|${i.springs}|${i.zoom}|${i.pick ?? ''}`;
+    const key = `${i.stand}|${i.trigger}|${i.presses}|${i.reloads}|${i.respawns}|${i.springs}|${i.uses}|${i.useId ?? ''}|${i.zoom}|${i.pick ?? ''}`;
     const edge = key !== this.lastKey;
     const interval = this.local ? 0 : 1000 / 30;
     if (!edge && now - this.lastSend < interval) return;
@@ -425,6 +439,8 @@ export class ClientSession {
       reloads: i.reloads,
       respawns: i.respawns,
       springs: i.springs,
+      uses: i.uses,
+      useId: i.useId,
       zoom: i.zoom,
       vt: Math.round(this.renderTick * 100) / 100,
       pick: i.pick,

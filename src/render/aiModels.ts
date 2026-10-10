@@ -46,7 +46,7 @@ export interface AiConfig {
 /** Weapon lengths (m), about the built-in models' (the viewmodel shows them at 0.6×). */
 export const WEAPON_SIZE: Record<WeaponId, number> = {
   sniper: 1.6, br: 0.85, crossbow: 0.85, rpg: 1.25, grenade: 0.7, railgun: 1.05, hyperbeam: 1.0, needler: 0.65,
-  flamethrower: 1.0, minigun: 1.1, orbital: 0.55, soaker: 0.85, frag: 0.16, plasma: 0.16,
+  flamethrower: 1.0, minigun: 1.1, orbital: 0.55, soaker: 0.85, frag: 0.16, plasma: 0.16, pokeball: 0.16,
 };
 
 /** Feet to top of head for a character (m): the top of the head sits just above the head hitbox. */

@@ -1,6 +1,10 @@
 import { expect, test } from '@playwright/test';
 
-type HD = { state(): { phase: string; frames: number }; game: { input: { s: { yaw: number; presses: number; stand: boolean }; device: string } } | null };
+type HD = {
+  state(): { phase: string; frames: number; me: { pu: [string, number][]; inv: [string, number][] } | null };
+  game: { input: { s: { yaw: number; presses: number; stand: boolean }; device: string } } | null;
+  grant(id: string): void;
+};
 
 test('controller: right stick aims, A stands, RT fires', async ({ page }) => {
   await page.addInitScript(() => {
@@ -42,4 +46,30 @@ test('controller: right stick aims, A stands, RT fires', async ({ page }) => {
   await page.waitForTimeout(800);
   const after = await read();
   expect(after.presses).toBeGreaterThan(before.presses);
+  // D-pad right picks the next power-up, RB uses it
+  await page.evaluate(() => {
+    const h = (window as unknown as { __hd: HD }).__hd;
+    h.grant('xray');
+    h.grant('quickhands');
+  });
+  await expect(page.locator('.hud .inv .it')).toHaveCount(2);
+  await expect(page.locator('.hud .inv .cap')).toHaveText('X-Ray Vision');
+  await expect(page.locator('.hud .inv kbd')).toHaveText('RB');
+  // press and release a button, each held for a few frames (a software renderer can be slow)
+  const frames = () => page.evaluate(() => (window as unknown as { __hd: HD }).__hd.state().frames);
+  const tap = async (i: number) => {
+    for (const down of [true, false]) {
+      await page.evaluate(([b, d]) => {
+        const p = (window as unknown as { __pad: { buttons: { pressed: boolean; value: number }[] } }).__pad;
+        p.buttons[b as number]!.pressed = d as boolean;
+        p.buttons[b as number]!.value = d ? 1 : 0;
+      }, [i, down]);
+      const f0 = await frames();
+      await page.waitForFunction((f) => (window as unknown as { __hd: HD }).__hd.state().frames >= f + 3, f0, { timeout: 10_000 });
+    }
+  };
+  await tap(15);
+  await expect(page.locator('.hud .inv .cap')).toHaveText('Quick Hands');
+  await tap(5);
+  await page.waitForFunction(() => ((window as unknown as { __hd: HD }).__hd.state().me?.pu ?? []).some(([id]) => id === 'quickhands'), null, { timeout: 5000 });
 });

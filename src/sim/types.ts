@@ -1,3 +1,4 @@
+import type { InvItem } from './inventory';
 import type { PowerUpId } from './powerups';
 import type { Settings } from './settings';
 import type { WeaponId } from './weapons';
@@ -26,6 +27,10 @@ export interface PlayerCommand {
   respawns: number;
   /** cumulative Spring Jump launches (double-press Jump) */
   springs: number;
+  /** cumulative "use power-up" presses… */
+  uses: number;
+  /** …of this one (what was picked in the inventory at the press) */
+  useId?: PowerUpId;
   zoom: number;
   /** host tick the client was rendering when it sampled this (lag compensation) */
   vt: number;
@@ -84,6 +89,16 @@ export interface PlayerState {
   /** pressed Jump while dead (manual respawn) */
   respawnRequested: boolean;
   springs: number;
+  uses: number;
+  /** power-ups collected and not used yet (lost on death) */
+  inv: InvItem[];
+  /** Poké Ball: shut inside one thrown by this slot (-1: free), until this tick unless thrown on (0 while flying)… */
+  capturedBy: number;
+  captureUntil: number;
+  /** …in the ball with this projectile id (thrown on: it lands in a hole), or -1 (still in the thrower's hand) */
+  inBall: number;
+  /** the slot of whoever is shut in the ball in this player's hand (-1 none) */
+  captive: number;
   /** tick of the current / last Spring Jump launch (-1 none) */
   springAt: number;
   /** Gerry Sauce: when it hit (-1 never) and when it's gone */
@@ -92,6 +107,8 @@ export interface PlayerState {
   /** last time a shot whizzed past them (Pitre "Bitch please"; host only) */
   nearAt: number;
   pressAt: number;
+  /** that press was made staying down in the hole (only such a press fires from a duck) */
+  pressDucked: boolean;
   powerups: ActivePowerup[];
   underdogUntil: number;
   revealUntil: number;
@@ -137,6 +154,10 @@ export interface Projectile {
   off?: { x: number; y: number; z: number };
   /** players it has already whizzed past (bitmask by slot; Pitre near misses) */
   near?: number;
+  /** shot up out of a hole from a duck: it only pops power-up bubbles, and fizzles out on anything else */
+  orbOnly?: boolean;
+  /** a Poké Ball with this player inside (they come out in the hole nearest where it lands) */
+  cap?: number;
 }
 
 export interface Orb {
@@ -187,7 +208,8 @@ export type HitKind = 'head' | 'body' | 'orb' | 'world' | 'none';
 export type SimEvent =
   /** `v`: homing rounds that curved down into a hole went over this point */
   | { k: 'fire'; t: number; p: number; w: WeaponId; o: Vec3T; e: Vec3T; hit: HitKind; v?: Vec3T }
-  | { k: 'proj'; t: number; id: number; p: number; w: WeaponId; pos: Vec3T; vel: Vec3T; tgt: number }
+  /** `cap`: a Poké Ball with that player inside */
+  | { k: 'proj'; t: number; id: number; p: number; w: WeaponId; pos: Vec3T; vel: Vec3T; tgt: number; cap?: number }
   /** a grenade changed course: glanced off a player (new `vel`), or stopped (`on`: stuck to that player's slot with
    * offset `off` from their upper torso, or -1 on the ground) */
   | { k: 'pmove'; t: number; id: number; pos: Vec3T; vel: Vec3T; on?: number; off?: Vec3T }
@@ -200,6 +222,9 @@ export type SimEvent =
   | { k: 'reload'; t: number; p: number }
   | { k: 'orb'; t: number; id: number; type: string; seed: number; spawn: number; expire: number }
   | { k: 'orbPop'; t: number; id: number; p: number }
+  /** a power-up went into `p`'s inventory (`n` of it now), or didn't fit (`full`: two already) */
+  | { k: 'got'; t: number; p: number; id: string; n: number; full?: boolean }
+  /** `p` used a power-up: its effect (or weapon) lasts until `until` */
   | { k: 'pu'; t: number; p: number; id: string; until: number }
   | { k: 'strike'; t: number; id: number; p: number; pos: Vec3T; at: number }
   | { k: 'lead'; t: number; p: number; prev: number }
@@ -216,4 +241,10 @@ export type SimEvent =
   /** someone got covered in Gerry Sauce until `until` */
   | { k: 'sauced'; t: number; v: number; a: number; until: number }
   /** a shot whizzed past `v` without hitting them (Pitre Mode voices only) */
-  | { k: 'near'; t: number; a: number; v: number; w: WeaponId };
+  | { k: 'near'; t: number; a: number; v: number; w: WeaponId }
+  /** Poké Ball: `p` caught `v` (they have a few seconds to throw them on); `hole`: the one `v` was in */
+  | { k: 'capture'; t: number; p: number; v: number; pos: Vec3T; hole: number }
+  /** …and threw them into hole `hole` (the ball landed at `pos`) */
+  | { k: 'release'; t: number; p: number; v: number; hole: number; pos: Vec3T }
+  /** …or didn't in time (or got killed): `v` broke free, back in their own hole */
+  | { k: 'escape'; t: number; p: number; v: number; hole: number };
